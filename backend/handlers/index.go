@@ -2,6 +2,7 @@ package handlers
 
 import "net/http"
 
+// IndexHandler 返回一个简单的状态页面，方便直接在浏览器里查看后端和 WebSocket 入口。
 func IndexHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(`
