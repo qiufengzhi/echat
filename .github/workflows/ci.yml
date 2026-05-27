@@ -176,10 +176,10 @@ jobs:
 
             echo "${{ secrets.GHCR_DEPLOY_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_DEPLOY_USERNAME }}" --password-stdin # 登录 GHCR，供服务器拉取私有镜像。
 
-            if docker compose version >/dev/null 2>&1; then # 优先使用新版 docker compose 插件。
-              docker compose --env-file .env -f docker-compose.prod.yml pull # 先拉取前后端最新镜像。
-              docker compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans # 后台重建并清理无用容器。
-            else
-              docker-compose --env-file .env -f docker-compose.prod.yml pull # 兼容旧版 docker-compose 命令。
+            if docker-compose version >/dev/null 2>&1; then # 优先使用旧版 docker-compose（已配置镜像加速器）。
+              docker-compose --env-file .env -f docker-compose.prod.yml pull # 先拉取前后端最新镜像。
               docker-compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans # 后台重建并清理无用容器。
+            else
+              docker compose --env-file .env -f docker-compose.prod.yml pull # 回退到新版 docker compose 插件。
+              docker compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans # 后台重建并清理无用容器。
             fi
