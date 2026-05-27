@@ -1,0 +1,30 @@
+services:
+  gateway: # 最外层 HTTPS 入口，负责 TLS 终止并把请求转发给前端容器。
+    image: nginx:1.27-alpine # 直接使用官方 Nginx 镜像，避免额外维护自定义网关镜像。
+    restart: unless-stopped # 网关异常退出后自动重启，保证外部入口尽量持续可用。
+    depends_on:
+      - frontend # 先启动前端容器，再启动 HTTPS 网关。
+    ports:
+      - "80:80" # 对外开放 HTTP，用于跳转到 HTTPS。
+      - "443:443" # 对外开放 HTTPS，浏览器最终通过这个端口访问。
+    volumes:
+      - ./nginx/gateway.prod.conf:/etc/nginx/conf.d/default.conf:ro # 挂载生产网关配置。
+      - /etc/letsencrypt/live/echat.qxbnx.cn/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro # 挂载 Let's Encrypt 证书公钥链文件。
+      - /etc/letsencrypt/live/echat.qxbnx.cn/privkey.pem:/etc/nginx/ssl/privkey.pem:ro # 挂载 Let's Encrypt 证书私钥文件。
+
+  backend: # 后端信令服务，供前端通过容器网络访问。
+    image: ${BACKEND_IMAGE}:${IMAGE_TAG} # 本次部署的后端镜像名和 tag，由 CI 写入 .env。
+    restart: unless-stopped # 容器异常退出后自动重启，手动停止时不强制拉起。
+    environment:
+      SERVER_ADDR: ":8080" # 后端在容器内部监听 8080 端口。
+      HTTPS_ENABLED: "false" # 生产环境默认由前置网关或前端容器处理 HTTP 入口，这里先关闭后端自带 HTTPS。
+    expose:
+      - "8080" # 只暴露给 compose 内部网络，不直接映射到宿主机。
+
+  frontend: # 前端静态站点和 Nginx 反向代理入口。
+    image: ${FRONTEND_IMAGE}:${IMAGE_TAG} # 本次部署的前端镜像名和 tag，由 CI 写入 .env。
+    restart: unless-stopped # 容器异常退出后自动重启。
+    depends_on:
+      - backend # 先启动后端，再启动前端代理层。
+    expose:
+      - "80" # 只在 Compose 内部网络暴露，外部流量统一经 gateway 进入。
