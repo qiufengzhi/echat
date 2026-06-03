@@ -10,7 +10,7 @@ on:
       - "backend/**" # 后端代码变化时触发。
       - "frontend/**" # 前端代码变化时触发。
       - "deploy/**" # 部署配置变化时触发。
-      - "docker-compose.yml" # 根目录 compose 变化时触发。
+
   workflow_dispatch: # 支持在 GitHub 页面上手动点击执行。
 
 permissions:
