@@ -3,55 +3,11 @@ package room
 import (
 	"encoding/json"
 	"log"
-	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-)
-
-// Client 表示一个已连接的浏览器客户端，以及它的发送队列。
-type Client struct {
-	ID        string
-	RoomID    string
-	Username  string
-	Conn      *websocket.Conn
-	Send      chan []byte
-	closeOnce sync.Once
-}
-
-// Room 表示一个信令房间，里面维护当前在线的客户端。
-type Room struct {
-	ID      string
-	Clients map[string]*Client
-	Lock    sync.RWMutex
-}
-
-// Message 是前后端之间约定的信令消息结构。
-type Message struct {
-	Type    string          `json:"type"`
-	RoomID  string          `json:"room_id"`
-	UserID  string          `json:"user_id"`
-	Payload json.RawMessage `json:"payload,omitempty"`
-}
-
-var (
-	rooms      = make(map[string]*Room)
-	clients    = make(map[string]*Client)
-	roomLock   sync.RWMutex
-	clientLock sync.RWMutex
-
-	// 本地开发阶段允许任意来源建立 WebSocket 连接，线上环境应收紧来源校验。
-	Upgrader = websocket.Upgrader{
-		// CheckOrigin 决定是否允许当前来源发起 WebSocket 升级。
-		CheckOrigin: func(r *http.Request) bool {
-			return true
-		},
-		ReadBufferSize:  1024,
-		WriteBufferSize: 1024,
-	}
 )
 
 // StartCleanupLoop 启动一个后台协程，定时清理已经没有成员的房间。
@@ -64,7 +20,7 @@ func createRoom(roomID string) *Room {
 	roomLock.Lock()
 	defer roomLock.Unlock()
 
-	if existing, ok := rooms[roomID]; ok {
+	if existing, ok := allActiveRooms[roomID]; ok {
 		return existing
 	}
 
@@ -72,7 +28,7 @@ func createRoom(roomID string) *Room {
 		ID:      roomID,
 		Clients: make(map[string]*Client),
 	}
-	rooms[roomID] = r
+	allActiveRooms[roomID] = r
 	log.Printf("room created: %s", roomID)
 	return r
 }
@@ -80,7 +36,7 @@ func createRoom(roomID string) *Room {
 // getOrCreateRoom 先查找房间，不存在时再创建，避免调用方重复写判断逻辑。
 func getOrCreateRoom(roomID string) *Room {
 	roomLock.RLock()
-	r, exists := rooms[roomID]
+	r, exists := allActiveRooms[roomID]
 	roomLock.RUnlock()
 	if exists {
 		return r
@@ -100,13 +56,13 @@ func HandleConnection(conn *websocket.Conn) {
 	}
 
 	clientLock.Lock()
-	clients[userID] = client
+	allConnectedClients[userID] = client
 	clientLock.Unlock()
 
 	log.Printf("client connected: %s", userID)
 
-	go writePump(client)
-	readPump(client)
+	go writePump(client) // 统一消息发送
+	readPump(client)     // 统一消息读取
 	disconnect(client)
 }
 
@@ -155,18 +111,18 @@ func writePump(client *Client) {
 // handleMessage 根据消息类型把请求分发到加入房间、转发信令或离开房间等处理逻辑。
 func handleMessage(client *Client, msg *Message) {
 	switch msg.Type {
-	case "join":
+	case MsgTypeJoin: // 加入房间
 		handleJoin(client, msg)
-	case "offer":
-		handleRelay(client, "offer", msg.Payload)
-	case "answer":
-		handleRelay(client, "answer", msg.Payload)
-	case "ice":
-		handleRelay(client, "ice", msg.Payload)
-	case "leave":
+	case MsgTypeOffer: // 转发 WebRTC Offer
+		handleRelay(client, MsgTypeOffer, msg.Payload)
+	case MsgTypeAnswer: // 转发 WebRTC Answer
+		handleRelay(client, MsgTypeAnswer, msg.Payload)
+	case MsgTypeICE: // 转发 ICE 候选
+		handleRelay(client, MsgTypeICE, msg.Payload)
+	case MsgTypeLeave: // 离开房间
 		handleLeave(client)
-	case "ping":
-		sendToClient(client, "pong", nil, client.RoomID)
+	case MsgTypePing: // 心跳响应 pong
+		sendToClient(client, MsgTypePong, nil, client.RoomID)
 	}
 }
 
@@ -183,28 +139,31 @@ func handleJoin(client *Client, msg *Message) {
 		username = "用户" + client.ID[:8]
 	}
 
+	// 根据房间id获取房间对象
 	r := getOrCreateRoom(roomID)
 	r.Lock.Lock()
 	client.RoomID = roomID
 	client.Username = username
 	r.Clients[client.ID] = client
-	userCount := len(r.Clients)
+	userCount := len(r.Clients) // 当前房间内的用户数量
 	r.Lock.Unlock()
 
 	log.Printf("user %s joined room %s (count=%d)", username, roomID, userCount)
 
 	if userCount == 1 {
 		// 第一个进入房间的用户先等待，直到有第二个人加入。
-		sendToClient(client, "waiting", nil, roomID)
+		sendToClient(client, MsgTypeWaiting, nil, roomID)
 		return
 	}
 
 	// 房间中已有其他人时，通知房间成员并允许当前用户开始信令协商。
-	broadcastToRoom(roomID, client.ID, "user_joined", map[string]string{
+	broadcastToRoom(roomID, client.ID, MsgTypeUserJoined, map[string]string{
 		"user_id":  client.ID,
 		"username": username,
 	})
-	sendToClient(client, "room_ready", map[string]interface{}{
+
+	// 通知客户端房间已有其他人。前端随后创建 RTCPeerConnection 并发送 Offer，两边开始 WebRTC 信令交换
+	sendToClient(client, MsgTypeRoomReady, map[string]interface{}{
 		"users":     getRoomUsers(roomID),
 		"can_start": true,
 	}, roomID)
@@ -232,11 +191,13 @@ func handleLeave(client *Client) {
 func disconnect(client *Client) {
 	client.closeOnce.Do(func() {
 		roomID := client.RoomID
+
+		// 如果客户端已加入房间，则从房间中移除并通知其他成员
 		if roomID != "" {
 			var shouldDeleteRoom bool
 
 			roomLock.RLock()
-			r, ok := rooms[roomID]
+			r, ok := allActiveRooms[roomID]
 			roomLock.RUnlock()
 			if ok {
 				r.Lock.Lock()
@@ -246,7 +207,7 @@ func disconnect(client *Client) {
 
 				if remaining > 0 {
 					// 房间里还有其他人时，通知他们当前用户已经离开。
-					broadcastToRoom(roomID, client.ID, "user_left", map[string]string{
+					broadcastToRoom(roomID, client.ID, MsgTypeUserLeft, map[string]string{
 						"user_id": client.ID,
 					})
 				} else {
@@ -256,12 +217,12 @@ func disconnect(client *Client) {
 
 			if shouldDeleteRoom {
 				roomLock.Lock()
-				if r, ok := rooms[roomID]; ok {
+				if r, ok := allActiveRooms[roomID]; ok {
 					r.Lock.Lock()
 					empty := len(r.Clients) == 0
 					r.Lock.Unlock()
 					if empty {
-						delete(rooms, roomID)
+						delete(allActiveRooms, roomID)
 						log.Printf("room removed: %s", roomID)
 					}
 				}
@@ -269,11 +230,14 @@ func disconnect(client *Client) {
 			}
 		}
 
+		// 从客户端列表中移除客户端
 		clientLock.Lock()
-		delete(clients, client.ID)
+		delete(allConnectedClients, client.ID)
 		clientLock.Unlock()
 
+		// 关闭客户端的写协程
 		close(client.Send)
+		// 关闭客户端的连接
 		_ = client.Conn.Close()
 		log.Printf("client disconnected: %s", client.ID[:8])
 	})
@@ -301,7 +265,7 @@ func sendToClient(client *Client, msgType string, payload interface{}, roomID st
 
 // sendError 向客户端发送统一格式的错误消息。
 func sendError(client *Client, message string) {
-	sendToClient(client, "error", map[string]string{"message": message}, client.RoomID)
+	sendToClient(client, MsgTypeError, map[string]string{"message": message}, client.RoomID)
 }
 
 // sendRaw 把已经组装好的消息放入客户端发送队列，必要时丢弃慢客户端消息。
@@ -338,7 +302,7 @@ func broadcastToRoom(roomID, senderID, msgType string, payload interface{}) {
 // broadcastRawToRoom 把原始信令消息广播给房间内除发送者外的所有成员。
 func broadcastRawToRoom(roomID, senderID, msgType string, payload json.RawMessage) {
 	roomLock.RLock()
-	r, ok := rooms[roomID]
+	r, ok := allActiveRooms[roomID]
 	roomLock.RUnlock()
 	if !ok {
 		return
@@ -380,7 +344,7 @@ func broadcastRawToRoom(roomID, senderID, msgType string, payload json.RawMessag
 // getRoomUsers 返回房间内当前所有用户的简要信息列表。
 func getRoomUsers(roomID string) []map[string]string {
 	roomLock.RLock()
-	r, ok := rooms[roomID]
+	r, ok := allActiveRooms[roomID]
 	roomLock.RUnlock()
 	if !ok {
 		return nil
@@ -418,12 +382,12 @@ func cleanupIdleRooms() {
 	for range ticker.C {
 		// 正常断开时也会删房间，这里主要兜底清理异常情况下残留的空房间。
 		roomLock.Lock()
-		for id, r := range rooms {
+		for id, r := range allActiveRooms {
 			r.Lock.RLock()
 			empty := len(r.Clients) == 0
 			r.Lock.RUnlock()
 			if empty {
-				delete(rooms, id)
+				delete(allActiveRooms, id)
 				log.Printf("idle room cleaned: %s", id)
 			}
 		}
