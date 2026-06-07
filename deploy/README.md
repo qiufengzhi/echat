@@ -22,7 +22,7 @@
 部署机至少需要提前安装以下组件：
 
 - Docker
-- Docker Compose 插件，或者旧版 `docker-compose`
+- Docker Compose v2 插件；如果服务器只有旧版 `docker-compose`，部署脚本会用先停旧容器再新建的方式兼容。
 - 一个可以通过 SSH 登录的用户
 
 建议服务器目录结构如下：
@@ -142,4 +142,4 @@ docker compose --env-file .env -f docker-compose.prod.yml ps
 docker compose --env-file .env -f docker-compose.prod.yml logs -f
 ```
 
-如果服务器使用的是旧版 `docker-compose`，把上面的 `docker compose` 改成 `docker-compose` 即可。
+如果服务器只有旧版 `docker-compose`，排查命令可以把上面的 `docker compose` 改成 `docker-compose`。部署时不要直接执行 `docker-compose up -d` 重建旧容器；旧版工具可能读取不到新版镜像元数据里的 `ContainerConfig`，更稳妥的顺序是先 `pull`，再 `down --remove-orphans`，最后 `up -d`。

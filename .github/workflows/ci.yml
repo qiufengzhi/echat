@@ -176,10 +176,14 @@ jobs:
 
             echo "${{ secrets.GHCR_DEPLOY_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_DEPLOY_USERNAME }}" --password-stdin # 登录 GHCR，供服务器拉取私有镜像。
 
-            if docker-compose version >/dev/null 2>&1; then # 优先使用旧版 docker-compose（已配置镜像加速器）。
-              docker-compose --env-file .env -f docker-compose.prod.yml pull # 先拉取前后端最新镜像。
-              docker-compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans # 后台重建并清理无用容器。
-            else
-              docker compose --env-file .env -f docker-compose.prod.yml pull # 回退到新版 docker compose 插件。
+            if docker compose version >/dev/null 2>&1; then # 优先使用 Compose v2，避免旧版 docker-compose 的 ContainerConfig 兼容性问题。
+              docker compose --env-file .env -f docker-compose.prod.yml pull # 先拉取前后端最新镜像。
               docker compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans # 后台重建并清理无用容器。
+            elif docker-compose version >/dev/null 2>&1; then # 兼容只安装旧版 docker-compose v1 的服务器。
+              docker-compose --env-file .env -f docker-compose.prod.yml pull # 先拉取前后端最新镜像，拉取失败时保留旧容器继续运行。
+              docker-compose --env-file .env -f docker-compose.prod.yml down --remove-orphans # v1 重建旧容器时可能读取缺失的 ContainerConfig，先移除旧容器再新建。
+              docker-compose --env-file .env -f docker-compose.prod.yml up -d # 使用新镜像重新创建网关、前端和后端容器。
+            else
+              echo "Docker Compose is not installed. Please install docker compose v2 or docker-compose v1." # 明确提示服务器缺少部署所需的 Compose 命令。
+              exit 1
             fi
