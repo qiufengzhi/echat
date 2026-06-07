@@ -1,5 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 
+import { SignalingClient } from '../services/signalingClient'
+import { handleWebRTCSignaling } from '../services/webrtcSignalingHandler'
+import type { SignalingMessage } from '../types/signaling'
+
 // WebRTC 需要借助 STUN 服务器发现双方可用于直连的公网/局域网候选地址。
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [ // WebRTC 建连时使用的 STUN 服务器列表。
@@ -94,11 +98,9 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
   })
 
   // 这些 ref 保存不会直接触发页面刷新的底层连接对象，避免每次事件回调都拿到过期值。
-  const wsRef = useRef<WebSocket | null>(null)
+  const signalingClientRef = useRef<SignalingClient | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
   const localStreamRef = useRef<MediaStream | null>(null)
-  const currentRoomIdRef = useRef<string>('')
-  const currentUsernameRef = useRef<string>('')
 
   // 初始化本地麦克风。成功后把 MediaStream 同时放进 ref 和 state：
   // ref 供 WebRTC 添加音轨使用，state 供页面展示“本地音频已连接”。
@@ -168,12 +170,8 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
 
     // ICE candidate 是浏览器发现的可连接地址，需要通过信令服务器转发给房间里的另一端。
     pc.onicecandidate = event => {
-      if (event.candidate && wsRef.current) {
-        wsRef.current.send(JSON.stringify({
-          type: 'ice',
-          room_id: currentRoomIdRef.current,
-          payload: event.candidate,
-        }))
+      if (event.candidate) {
+        signalingClientRef.current?.sendIce(event.candidate)
       }
     }
 
@@ -190,134 +188,45 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
   }, [])
 
   // 处理后端转发来的信令消息。Offer/Answer/ICE 三类消息共同完成 WebRTC 协商。
-  const handleSignaling = useCallback(async (data: any) => {
-    const pc = pcRef.current
-    if (!pc) return
-
-    switch (data.type) {
-      case 'waiting':
-        console.log('Waiting for another user to join...')
-        setState(prev => ({ ...prev, isConnected: false }))
-        break
-
-      case 'room_ready': {
-        console.log('Room is ready, creating offer...')
-        // 后进入房间的一方收到 room_ready 后主动创建 offer，作为本次协商的发起方。
-        const offer = await pc.createOffer()
-        await pc.setLocalDescription(offer)
-        wsRef.current?.send(JSON.stringify({
-          type: 'offer',
-          room_id: currentRoomIdRef.current,
-          payload: offer,
-        }))
-        break
-      }
-
-      case 'offer': {
-        console.log('Received offer, creating answer...')
-        // 先保存对端 offer，再创建自己的 answer 回传，双方的媒体参数才能对齐。
-        await pc.setRemoteDescription(new RTCSessionDescription(data.payload))
-        const answer = await pc.createAnswer()
-        await pc.setLocalDescription(answer)
-        wsRef.current?.send(JSON.stringify({
-          type: 'answer',
-          room_id: currentRoomIdRef.current,
-          payload: answer,
-        }))
-        break
-      }
-
-      case 'answer':
-        console.log('Received answer, completing connection...')
-        // 发起方收到 answer 后保存远端描述，至此 SDP 协商完成，随后等待 ICE 连通。
-        await pc.setRemoteDescription(new RTCSessionDescription(data.payload))
-        break
-
-      case 'ice':
-        console.log('Received ICE candidate')
-        // 收到对端候选地址后交给 RTCPeerConnection，浏览器会自动尝试建立可用链路。
-        await pc.addIceCandidate(new RTCIceCandidate(data.payload))
-        break
-
-      case 'user_left':
-        console.log('Remote user left room')
-        // 对方离开后清空远端音频，并重建一个新的 PeerConnection 等待下一位用户加入。
-        setState(prev => ({
-          ...prev,
-          isConnected: false,
-          remoteStream: null,
-        }))
-        pc.close()
+  const handleSignaling = useCallback(async (data: SignalingMessage) => {
+    await handleWebRTCSignaling(data, {
+      getPeerConnection: () => pcRef.current,
+      clearPeerConnection: () => {
         pcRef.current = null
-        createPeerConnection()
-        break
-
-      case 'error':
-        setState(prev => ({
-          ...prev,
-          error: data?.payload?.message || MICROPHONE_ERROR_MESSAGES.server,
-        }))
-        break
-    }
+      },
+      createPeerConnection,
+      sendOffer: offer => signalingClientRef.current?.sendOffer(offer),
+      sendAnswer: answer => signalingClientRef.current?.sendAnswer(answer),
+      setConnected: connected => setState(prev => ({ ...prev, isConnected: connected })),
+      clearRemoteStream: () => setState(prev => ({ ...prev, remoteStream: null })),
+      setError: message => setState(prev => ({ ...prev, error: message })),
+      serverErrorMessage: MICROPHONE_ERROR_MESSAGES.server,
+    })
   }, [createPeerConnection])
 
   // 加入房间的完整流程：先拿麦克风，再连 WebSocket，最后创建 WebRTC 连接等待信令。
   const joinRoom = useCallback(async (roomId: string, username: string) => {
-    currentRoomIdRef.current = roomId
-    currentUsernameRef.current = username
-
     const stream = await initLocalStream()
     if (!stream) return false
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    // 信令服务器 WebSocket 使用当前页面同源地址，开发环境由 Vite 代理，生产环境由 Nginx 转发。
-    const wsUrl = `${protocol}//${window.location.host}/ws`
-
-    console.log('Connecting signaling WebSocket:', { wsUrl, roomId, username })
-    const ws = new WebSocket(wsUrl)
-    wsRef.current = ws
-
-    ws.onopen = () => {
-      console.log('Signaling WebSocket connected:', { wsUrl, roomId, username })
-      // 信令 WebSocket 建立后把房间号和用户名发给后端，后端会返回 waiting 或 room_ready。
-      ws.send(JSON.stringify({
-        type: 'join',
-        room_id: roomId,
-        payload: username,
-      }))
-    }
-
-    ws.onmessage = event => {
-      console.log('Received signaling WebSocket message:', { wsUrl, data: event.data })
-      // 信令服务器消息统一交给 handleSignaling，这样 WebSocket 只负责收包，协商逻辑集中在一处。
-      const data = JSON.parse(event.data)
-      handleSignaling(data)
-    }
-
-    ws.onerror = error => {
-      // onerror 不会暴露太多底层原因，因此把信令服务器地址和当前房间一起打出来方便和后端/Nginx 日志对齐。
-      console.error('Signaling WebSocket connection failed:', {
-        wsUrl,
-        roomId: currentRoomIdRef.current,
-        readyState: ws.readyState,
-        time: new Date().toISOString(),
-        error,
-      })
-      setState(prev => ({ ...prev, error: MICROPHONE_ERROR_MESSAGES.signaling }))
-    }
-
-    ws.onclose = event => {
-      // 记录浏览器能拿到的关闭细节，排查代理超时或异常断开时重点看 code 和 wasClean。
-      console.log('Signaling WebSocket closed:', {
-        wsUrl,
-        code: event.code,
-        reason: event.reason || '(empty)',
-        wasClean: event.wasClean,
-        readyState: ws.readyState,
-        roomId: currentRoomIdRef.current,
-        time: new Date().toISOString(),
-      })
-    }
+    // SignalingClient 只负责连接信令服务器，收到的信令再交回 hook 驱动 WebRTC 协商。
+    const signalingClient = new SignalingClient({
+      roomId,
+      username,
+      handlers: {
+        onOpen: () => {
+          signalingClient.sendJoin()
+        },
+        onMessage: message => {
+          void handleSignaling(message)
+        },
+        onError: () => {
+          setState(prev => ({ ...prev, error: MICROPHONE_ERROR_MESSAGES.signaling }))
+        },
+      },
+    })
+    signalingClientRef.current = signalingClient
+    signalingClient.connect()
 
     createPeerConnection()
     return true
@@ -335,9 +244,9 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
       localStreamRef.current = null
     }
 
-    if (wsRef.current) {
-      wsRef.current.close()
-      wsRef.current = null
+    if (signalingClientRef.current) {
+      signalingClientRef.current.close()
+      signalingClientRef.current = null
     }
 
     setState({
