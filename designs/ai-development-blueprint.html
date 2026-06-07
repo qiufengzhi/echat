@@ -1,0 +1,926 @@
+<!doctype html>
+<!--
+  AI 独立开发协作蓝图：
+  这个设计板用于把 AGENTS.md 里的项目背景可视化，帮助后续 AI 和项目作者快速理解
+  eChat 为什么存在、AI 应该如何介入、产物应该如何被记录和继续利用。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>eChat AI 独立开发协作蓝图</title>
+  <style>
+    /* 这套变量让蓝图保持轻产品感：清爽、现代，但不做企业级流程图的沉重视觉。 */
+    :root {
+      --bg: #f5f7fb;
+      --ink: #162033;
+      --muted: #647085;
+      --soft: #eef3f8;
+      --card: rgba(255, 255, 255, 0.88);
+      --line: rgba(124, 139, 163, 0.22);
+      --cyan: #16b7ff;
+      --cyan-soft: rgba(22, 183, 255, 0.12);
+      --green: #23c978;
+      --green-soft: rgba(35, 201, 120, 0.12);
+      --coral: #ff6575;
+      --coral-soft: rgba(255, 101, 117, 0.12);
+      --violet: #7b61ff;
+      --violet-soft: rgba(123, 97, 255, 0.12);
+      --amber: #f2b84b;
+      --amber-soft: rgba(242, 184, 75, 0.16);
+      --shadow: 0 24px 70px rgba(24, 36, 56, 0.12);
+      --small-shadow: 0 10px 28px rgba(24, 36, 56, 0.08);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(135deg, rgba(22, 183, 255, 0.08), transparent 34%),
+        linear-gradient(225deg, rgba(35, 201, 120, 0.08), transparent 28%),
+        var(--bg);
+    }
+
+    .blueprint {
+      width: min(1440px, 100%);
+      margin: 0 auto;
+      padding: 34px 28px 56px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+      gap: 22px;
+      align-items: stretch;
+      margin-bottom: 24px;
+    }
+
+    .hero-main,
+    .hero-side,
+    .panel,
+    .node,
+    .memory-item,
+    .step,
+    .rule-card,
+    .quality-card {
+      border: 1px solid var(--line);
+      background: var(--card);
+      box-shadow: var(--small-shadow);
+      backdrop-filter: blur(18px);
+    }
+
+    .hero-main {
+      min-height: 280px;
+      border-radius: 28px;
+      padding: 30px;
+    }
+
+    .hero-side {
+      border-radius: 28px;
+      padding: 24px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 32px;
+      padding: 7px 11px;
+      border-radius: 999px;
+      background: var(--cyan-soft);
+      color: #075985;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .eyebrow-mark {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 14px rgba(35, 201, 120, 0.7);
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1 {
+      max-width: 780px;
+      margin-bottom: 14px;
+      font-size: clamp(34px, 5vw, 62px);
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+
+    .hero-copy {
+      max-width: 820px;
+      margin-bottom: 22px;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.75;
+    }
+
+    .principles {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .principle {
+      display: inline-flex;
+      align-items: center;
+      min-height: 38px;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.62);
+      color: #344054;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .hero-side h2 {
+      margin-bottom: 12px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    .target-meter {
+      display: grid;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .meter-row {
+      display: grid;
+      grid-template-columns: 86px 1fr;
+      gap: 10px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .meter-track {
+      height: 10px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #e6edf5;
+    }
+
+    .meter-fill {
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--cyan), var(--green));
+    }
+
+    .meter-fill.low {
+      width: 34%;
+      background: linear-gradient(90deg, #cbd5e1, #94a3b8);
+    }
+
+    .meter-fill.target {
+      width: 72%;
+    }
+
+    .meter-fill.high {
+      width: 48%;
+      background: linear-gradient(90deg, var(--amber), var(--coral));
+    }
+
+    .section {
+      margin-top: 24px;
+    }
+
+    .section-heading {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 14px;
+    }
+
+    .section-heading h2 {
+      margin-bottom: 0;
+      font-size: 24px;
+      letter-spacing: 0;
+    }
+
+    .section-heading p {
+      max-width: 620px;
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+      text-align: right;
+    }
+
+    .map {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-rows: auto auto auto;
+      gap: 14px;
+    }
+
+    .core {
+      display: grid;
+      min-height: 280px;
+      place-items: center;
+      border: 1px solid rgba(22, 183, 255, 0.28);
+      border-radius: 28px;
+      background:
+        linear-gradient(135deg, rgba(22, 183, 255, 0.16), rgba(35, 201, 120, 0.12)),
+        rgba(255, 255, 255, 0.84);
+      box-shadow: var(--shadow);
+      text-align: center;
+    }
+
+    .core-logo {
+      display: grid;
+      width: 86px;
+      height: 86px;
+      margin: 0 auto 16px;
+      place-items: center;
+      border-radius: 26px;
+      background: linear-gradient(135deg, var(--cyan), var(--green));
+      color: #061522;
+      font-size: 34px;
+      font-weight: 950;
+      box-shadow: 0 20px 42px rgba(22, 183, 255, 0.22);
+    }
+
+    .core h2 {
+      margin-bottom: 8px;
+      font-size: 28px;
+      letter-spacing: 0;
+    }
+
+    .core p {
+      max-width: 360px;
+      margin-bottom: 0;
+      color: #4d5c71;
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .node {
+      min-height: 184px;
+      border-radius: 22px;
+      padding: 18px;
+    }
+
+    .node.product {
+      border-color: rgba(22, 183, 255, 0.26);
+      background: linear-gradient(180deg, rgba(22, 183, 255, 0.1), rgba(255, 255, 255, 0.9));
+    }
+
+    .node.design {
+      border-color: rgba(123, 97, 255, 0.24);
+      background: linear-gradient(180deg, rgba(123, 97, 255, 0.1), rgba(255, 255, 255, 0.9));
+    }
+
+    .node.frontend {
+      border-color: rgba(35, 201, 120, 0.24);
+      background: linear-gradient(180deg, rgba(35, 201, 120, 0.1), rgba(255, 255, 255, 0.9));
+    }
+
+    .node.backend {
+      border-color: rgba(242, 184, 75, 0.34);
+      background: linear-gradient(180deg, rgba(242, 184, 75, 0.12), rgba(255, 255, 255, 0.9));
+    }
+
+    .node.ops {
+      border-color: rgba(255, 101, 117, 0.26);
+      background: linear-gradient(180deg, rgba(255, 101, 117, 0.1), rgba(255, 255, 255, 0.9));
+    }
+
+    .node.ai {
+      border-color: rgba(22, 183, 255, 0.24);
+      background: linear-gradient(180deg, rgba(22, 183, 255, 0.08), rgba(123, 97, 255, 0.08), rgba(255, 255, 255, 0.9));
+    }
+
+    .node-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .node h3 {
+      margin-bottom: 0;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+
+    .node-tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      padding: 5px 8px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.7);
+      color: #475467;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .node ul {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.62;
+    }
+
+    .memory-layer {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .memory-item {
+      min-height: 136px;
+      border-radius: 18px;
+      padding: 16px;
+    }
+
+    .memory-item h3 {
+      margin-bottom: 8px;
+      font-size: 15px;
+    }
+
+    .memory-item p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.65;
+    }
+
+    .loop {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .step {
+      position: relative;
+      min-height: 156px;
+      border-radius: 20px;
+      padding: 16px;
+    }
+
+    .step-number {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      margin-bottom: 12px;
+      place-items: center;
+      border-radius: 12px;
+      background: var(--ink);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 900;
+    }
+
+    .step h3 {
+      margin-bottom: 8px;
+      font-size: 15px;
+    }
+
+    .step p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.62;
+    }
+
+    .rules {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .rule-card {
+      border-radius: 22px;
+      padding: 18px;
+    }
+
+    .rule-card h3 {
+      margin-bottom: 12px;
+      font-size: 17px;
+    }
+
+    .rule-list {
+      display: grid;
+      gap: 10px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .rule-list li {
+      display: grid;
+      grid-template-columns: 82px 1fr;
+      gap: 10px;
+      align-items: start;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .rule-label {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 28px;
+      border-radius: 999px;
+      background: var(--soft);
+      color: #344054;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .quality {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .quality-card {
+      border-radius: 22px;
+      padding: 18px;
+    }
+
+    .quality-card.target {
+      border-color: rgba(35, 201, 120, 0.3);
+      background: linear-gradient(180deg, var(--green-soft), rgba(255, 255, 255, 0.9));
+    }
+
+    .quality-card h3 {
+      margin-bottom: 10px;
+      font-size: 17px;
+    }
+
+    .quality-card p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .handoff {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 14px;
+    }
+
+    .panel {
+      border-radius: 24px;
+      padding: 20px;
+    }
+
+    .panel h3 {
+      margin-bottom: 12px;
+      font-size: 18px;
+    }
+
+    .panel ul {
+      display: grid;
+      gap: 9px;
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .footer-note {
+      margin-top: 24px;
+      padding: 18px 20px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.72);
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .footer-note a {
+      color: #0369a1;
+      font-weight: 800;
+      text-decoration: none;
+    }
+
+    @media (max-width: 1180px) {
+      .map {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .core {
+        grid-column: 1 / -1;
+      }
+
+      .memory-layer {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .quality {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .loop {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 780px) {
+      .blueprint {
+        padding: 22px 16px 42px;
+      }
+
+      .hero,
+      .rules,
+      .quality,
+      .handoff {
+        grid-template-columns: 1fr;
+      }
+
+      .section-heading {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .section-heading p {
+        text-align: left;
+      }
+
+      .map,
+      .memory-layer,
+      .loop {
+        grid-template-columns: 1fr;
+      }
+
+      .rule-list li {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="blueprint">
+    <section class="hero" aria-label="项目协作蓝图标题">
+      <div class="hero-main">
+        <div class="eyebrow"><span class="eyebrow-mark"></span>AI 深度参与个人独立开发</div>
+        <h1>把 eChat 做成技术探索型、轻量完整、可接手的小产品</h1>
+        <p class="hero-copy">
+          这张蓝图把产品、设计、前端、后端、部署、算法和大模型探索放在同一张图里。
+          目标是让每次 AI 介入都能留下上下文，既方便项目作者理解，也方便下一个 AI 继续推进。
+        </p>
+        <div class="principles" aria-label="核心原则">
+          <span class="principle">不是粗糙 demo</span>
+          <span class="principle">不过早企业级</span>
+          <span class="principle">技术探索型轻量完整产品级</span>
+          <span class="principle">AI 能继续接手</span>
+          <span class="principle">文档就是项目记忆</span>
+        </div>
+      </div>
+
+      <aside class="hero-side" aria-label="项目质量目标">
+        <h2>质量目标</h2>
+        <p class="hero-copy">
+          项目定位在“技术探索型轻量完整产品级”：产品表面轻量、完整、好看、可用，
+          技术实现允许为了探索引入受控复杂度。
+        </p>
+        <div class="target-meter" aria-label="复杂度和完成度目标">
+          <div class="meter-row">
+            <span>随手 demo</span>
+            <div class="meter-track"><div class="meter-fill low"></div></div>
+          </div>
+          <div class="meter-row">
+            <span>目标状态</span>
+            <div class="meter-track"><div class="meter-fill target"></div></div>
+          </div>
+          <div class="meter-row">
+            <span>企业系统</span>
+            <div class="meter-track"><div class="meter-fill high"></div></div>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="section" aria-label="项目能力地图">
+      <div class="section-heading">
+        <h2>1. 项目能力地图</h2>
+        <p>中心是 eChat 的轻量产品内核，周围是 AI 可以介入的能力域。每个能力域都要产出可理解、可验证、可继续利用的结果。</p>
+      </div>
+
+      <div class="map">
+        <article class="node product">
+          <div class="node-top">
+            <h3>产品</h3>
+            <span class="node-tag">为什么做</span>
+          </div>
+          <ul>
+            <li>明确用户场景和核心路径。</li>
+            <li>核心页面优先 2 到 4 个，后续保持 3 到 6 个以内。</li>
+            <li>把探索目标转成可交付需求。</li>
+          </ul>
+        </article>
+
+        <article class="node design">
+          <div class="node-top">
+            <h3>设计</h3>
+            <span class="node-tag">怎么让人愿意用</span>
+          </div>
+          <ul>
+            <li>产出桌面端和手机端视觉稿。</li>
+            <li>记录板块、按钮和状态含义。</li>
+            <li>用户文案和技术映射分开。</li>
+          </ul>
+        </article>
+
+        <article class="node frontend">
+          <div class="node-top">
+            <h3>前端</h3>
+            <span class="node-tag">用户怎样操作</span>
+          </div>
+          <ul>
+            <li>实现真实可用的页面和组件。</li>
+            <li>管理状态、错误、重连和响应式。</li>
+            <li>让 UI 接近设计稿，而不是临时拼凑。</li>
+          </ul>
+        </article>
+
+        <article class="node backend">
+          <div class="node-top">
+            <h3>后端</h3>
+            <span class="node-tag">服务如何支撑</span>
+          </div>
+          <ul>
+            <li>维护房间、成员和信令生命周期。</li>
+            <li>提供日志，帮助定位真实运行问题。</li>
+            <li>让协议和状态字段可追踪。</li>
+          </ul>
+        </article>
+
+        <article class="core">
+          <div>
+            <div class="core-logo">e</div>
+            <h2>eChat</h2>
+            <p>一个用于探索 AI 独立开发、实时通信、网页产品体验、算法和大模型能力的轻量完整产品。</p>
+          </div>
+        </article>
+
+        <article class="node ops">
+          <div class="node-top">
+            <h3>部署</h3>
+            <span class="node-tag">如何上线</span>
+          </div>
+          <ul>
+            <li>维护 Docker、Nginx、CI/CD 和证书。</li>
+            <li>记录排查方式和运行日志含义。</li>
+            <li>部署链路要适合个人开发者维护。</li>
+          </ul>
+        </article>
+
+        <article class="node ai">
+          <div class="node-top">
+            <h3>大模型与算法</h3>
+            <span class="node-tag">探索入口</span>
+          </div>
+          <ul>
+            <li>允许探索 LLM、音频算法或智能辅助。</li>
+            <li>实验能力要收进清晰模块。</li>
+            <li>不要把实验噪声直接暴露给用户。</li>
+          </ul>
+        </article>
+
+        <article class="node product">
+          <div class="node-top">
+            <h3>真实用户</h3>
+            <span class="node-tag">最终检验</span>
+          </div>
+          <ul>
+            <li>页面文字要让普通人看懂。</li>
+            <li>流程要自然，按钮要知道点了会怎样。</li>
+            <li>可用性优先于炫技。</li>
+          </ul>
+        </article>
+
+        <article class="node design">
+          <div class="node-top">
+            <h3>项目作者</h3>
+            <span class="node-tag">决策中心</span>
+          </div>
+          <ul>
+            <li>选择探索方向和复杂度边界。</li>
+            <li>审查 AI 产物是否符合目标。</li>
+            <li>用文档理解并继续介入项目。</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" aria-label="项目记忆层">
+      <div class="section-heading">
+        <h2>2. 项目记忆层</h2>
+        <p>文档、注释、设计稿和日志是 AI 的长期记忆。它们让项目不会在每次对话里重新开始。</p>
+      </div>
+
+      <div class="memory-layer">
+        <article class="memory-item">
+          <h3>AGENTS.md</h3>
+          <p>记录项目背景、AI 介入准则、复杂度边界和交付标准，是后续 AI 的第一入口。</p>
+        </article>
+        <article class="memory-item">
+          <h3>设计稿</h3>
+          <p>记录页面布局、视觉风格、按钮作用、用户文案和技术状态映射。</p>
+        </article>
+        <article class="memory-item">
+          <h3>代码注释</h3>
+          <p>解释状态、协议、生命周期和非显然逻辑，让人和 AI 都能接手。</p>
+        </article>
+        <article class="memory-item">
+          <h3>技术文档</h3>
+          <p>沉淀架构、接口、部署、排查方式和关键决策，减少重复解释。</p>
+        </article>
+        <article class="memory-item">
+          <h3>运行日志</h3>
+          <p>帮助判断线上问题来自前端、后端、代理、网络还是业务逻辑。</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" aria-label="AI 工作循环">
+      <div class="section-heading">
+        <h2>3. AI 工作循环</h2>
+        <p>每次 AI 介入都应该形成闭环：先读上下文，再判断，再产出，再验证，最后把新上下文写回项目。</p>
+      </div>
+
+      <div class="loop">
+        <article class="step">
+          <div class="step-number">01</div>
+          <h3>读背景</h3>
+          <p>先看 AGENTS.md、现有设计稿、相关代码和用户最新目标。</p>
+        </article>
+        <article class="step">
+          <div class="step-number">02</div>
+          <h3>定边界</h3>
+          <p>判断这次是产品、设计、前端、后端、部署还是算法探索。</p>
+        </article>
+        <article class="step">
+          <div class="step-number">03</div>
+          <h3>出方案</h3>
+          <p>把目标拆成可执行方案，避免过早做复杂系统。</p>
+        </article>
+        <article class="step">
+          <div class="step-number">04</div>
+          <h3>做产物</h3>
+          <p>实现设计稿、代码、文档或部署配置，并保持项目风格一致。</p>
+        </article>
+        <article class="step">
+          <div class="step-number">05</div>
+          <h3>做验证</h3>
+          <p>能构建就构建，能测试就测试，不能验证时说明风险。</p>
+        </article>
+        <article class="step">
+          <div class="step-number">06</div>
+          <h3>写回记忆</h3>
+          <p>补注释、补文档、补设计说明，让下一次介入更轻松。</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" aria-label="用户界面和开发信息边界">
+      <div class="section-heading">
+        <h2>4. 用户界面和开发信息边界</h2>
+        <p>真实用户看到产品语言，开发和 AI 看到技术映射。两者分开，页面才不像调试工具。</p>
+      </div>
+
+      <div class="rules">
+        <article class="rule-card">
+          <h3>用户可见</h3>
+          <ul class="rule-list">
+            <li><span class="rule-label">连接</span><span>连接成功、声音流畅、正在重新连接、房间连接正常。</span></li>
+            <li><span class="rule-label">操作</span><span>静音、扬声器、邀请、成员、设置、离开房间。</span></li>
+            <li><span class="rule-label">状态</span><span>正在说话、已静音、房主、在线、刚刚加入。</span></li>
+          </ul>
+        </article>
+
+        <article class="rule-card">
+          <h3>开发映射</h3>
+          <ul class="rule-list">
+            <li><span class="rule-label">连接</span><span>WebSocket、WebRTC、ICE、SDP、peer connection 状态。</span></li>
+            <li><span class="rule-label">保活</span><span>业务 ping/pong、代理超时、心跳间隔、关闭码。</span></li>
+            <li><span class="rule-label">诊断</span><span>浏览器控制台、后端 ReadMessage 日志、Nginx access/error 日志。</span></li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" aria-label="复杂度准绳">
+      <div class="section-heading">
+        <h2>5. 复杂度准绳</h2>
+        <p>AI 每次做东西都要在这三个层级之间判断，当前目标是“技术探索型轻量完整产品级”。</p>
+      </div>
+
+      <div class="quality">
+        <article class="quality-card">
+          <h3>过低：粗糙 demo</h3>
+          <p>只证明技术能跑，页面难看，文案像调试信息，缺少错误处理和文档。这个方向要避免。</p>
+        </article>
+        <article class="quality-card target">
+          <h3>目标：技术探索型轻量完整产品级</h3>
+          <p>核心路径可用，页面观感舒服，操作清楚；代码轻量可维护，同时允许为了学习、验证、扩展或前瞻性引入受控复杂度。</p>
+        </article>
+        <article class="quality-card">
+          <h3>过高：过早企业级</h3>
+          <p>大量后台、权限、报表、复杂配置和抽象层会拖慢探索。除非目标明确，否则暂不追求。</p>
+        </article>
+        <article class="quality-card">
+          <h3>允许：受控复杂度</h3>
+          <p>可以为了探索引入更完整的状态模型、协议类型、日志观测、模块边界或新技术栈，但必须有理由、有边界、有文档、有验证方式。</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" aria-label="产品和代码定位">
+      <div class="section-heading">
+        <h2>6. 产品和代码定位</h2>
+        <p>页面数量要克制，技术实现可以适度前瞻：产品轻量完整，代码轻量可维护，复杂度要有探索价值。</p>
+      </div>
+
+      <div class="handoff">
+        <article class="panel">
+          <h3>产品定位</h3>
+          <ul>
+            <li>页面复杂度定位为“技术探索型轻量完整产品级”。</li>
+            <li>第一阶段建议 2 个主页面：进入页和语音房页。</li>
+            <li>设置、邀请、帮助优先做弹窗或抽屉。</li>
+            <li>后续扩展尽量保持 3 到 6 个页面以内。</li>
+            <li>页面要符合年轻人审美，不能多看几眼就像 demo。</li>
+          </ul>
+        </article>
+
+        <article class="panel">
+          <h3>代码定位</h3>
+          <ul>
+            <li>代码复杂度定位为“轻量可维护 + 受控探索复杂度”。</li>
+            <li>不要写成一次性 demo，也不要过早企业级分层。</li>
+            <li>核心路径认真实现，探索能力模块化收纳。</li>
+            <li>允许尝试主流或前瞻技术，但要说明目的、边界和维护方式。</li>
+            <li>关键类型、字段、状态、协议和生命周期要有必要注释。</li>
+            <li>每次改动尽量能运行、能验证、能被下一个 AI 接手。</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" aria-label="交接清单">
+      <div class="section-heading">
+        <h2>7. 交接清单</h2>
+        <p>这是后续 AI 接手任务时的快速判断表，也适合项目作者用来验收 AI 产物。</p>
+      </div>
+
+      <div class="handoff">
+        <article class="panel">
+          <h3>开始前先确认</h3>
+          <ul>
+            <li>这次改动服务于哪个探索目标。</li>
+            <li>它是用户可见功能，还是内部技术实验。</li>
+            <li>是否已有设计稿、文档或代码上下文可复用。</li>
+            <li>是否会把技术细节暴露给普通用户。</li>
+          </ul>
+        </article>
+
+        <article class="panel">
+          <h3>结束前要留下</h3>
+          <ul>
+            <li>关键设计和实现原因。</li>
+            <li>必要的字段、状态、协议和生命周期注释。</li>
+            <li>验证结果或无法验证的风险。</li>
+            <li>下一步可以继续做什么。</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <p class="footer-note">
+      这张蓝图对应项目根目录的 <a href="../AGENTS.md">AGENTS.md</a>。
+      多人语音房页面设计可参考 <a href="./multi-voice-room-design.html">multi-voice-room-design.html</a>。
+      后续新增产品或技术探索时，建议同步补一张类似的设计板或说明文档。
+    </p>
+  </main>
+</body>
+</html>
