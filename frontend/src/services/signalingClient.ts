@@ -1,5 +1,8 @@
 import type { OutgoingSignalingMessage, SignalingMessage } from '../types/signaling'
 
+// 信令心跳间隔要短于常见代理 60 秒空闲超时，避免 WebSocket 长时间无数据被中间层关闭。
+const SIGNALING_HEARTBEAT_INTERVAL_MS = 25_000
+
 // SignalingClientHandlers 是信令 WebSocket 生命周期事件的回调集合。
 export interface SignalingClientHandlers {
   onOpen?: () => void // 信令服务器连接成功后的回调。
@@ -29,6 +32,7 @@ export class SignalingClient {
   private readonly wsUrl: string // 实际连接的信令服务器 WebSocket 地址。
   private readonly handlers: SignalingClientHandlers // 上层传入的事件处理函数。
   private ws: WebSocket | null = null // 当前 WebSocket 实例，未连接或已关闭时为 null。
+  private heartbeatTimerId: number | null = null // 浏览器定时发送业务 ping 的计时器 ID。
 
   constructor(options: SignalingClientOptions) {
     this.roomId = options.roomId
@@ -54,6 +58,7 @@ export class SignalingClient {
         roomId: this.roomId,
         username: this.username,
       })
+      this.startHeartbeat()
       this.handlers.onOpen?.()
     }
 
@@ -62,7 +67,16 @@ export class SignalingClient {
         wsUrl: this.wsUrl,
         data: event.data,
       })
-      this.handlers.onMessage(JSON.parse(event.data) as SignalingMessage)
+      const message = JSON.parse(event.data) as SignalingMessage
+      if (message.type === 'pong') {
+        console.log('Received signaling WebSocket pong:', {
+          wsUrl: this.wsUrl,
+          roomId: this.roomId,
+          time: new Date().toISOString(),
+        })
+        return
+      }
+      this.handlers.onMessage(message)
     }
 
     ws.onerror = error => {
@@ -74,6 +88,7 @@ export class SignalingClient {
         time: new Date().toISOString(),
         error,
       })
+      this.stopHeartbeat()
       this.handlers.onError?.(error)
     }
 
@@ -88,6 +103,7 @@ export class SignalingClient {
         roomId: this.roomId,
         time: new Date().toISOString(),
       })
+      this.stopHeartbeat()
       if (this.ws === ws) {
         this.ws = null
       }
@@ -121,6 +137,14 @@ export class SignalingClient {
     })
   }
 
+  // sendPing 发送业务层心跳，保活信令 WebSocket。
+  sendPing(): void {
+    this.send({
+      type: 'ping',
+      room_id: this.roomId,
+    })
+  }
+
   // sendOffer 把本端创建的 SDP offer 转发给房间内对端。
   sendOffer(offer: RTCSessionDescriptionInit): void {
     this.send({
@@ -150,7 +174,24 @@ export class SignalingClient {
 
   // close 主动关闭信令 WebSocket，通常在用户离开房间或组件卸载时调用。
   close(): void {
+    this.stopHeartbeat()
     this.ws?.close()
     this.ws = null
+  }
+
+  // startHeartbeat 在信令连接成功后定时发送业务 ping，避免代理层认为连接空闲。
+  private startHeartbeat(): void {
+    this.stopHeartbeat()
+    this.heartbeatTimerId = window.setInterval(() => {
+      this.sendPing()
+    }, SIGNALING_HEARTBEAT_INTERVAL_MS)
+  }
+
+  // stopHeartbeat 停止业务心跳，避免连接关闭后计时器继续运行。
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimerId === null) return
+
+    window.clearInterval(this.heartbeatTimerId)
+    this.heartbeatTimerId = null
   }
 }
