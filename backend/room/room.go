@@ -77,9 +77,23 @@ func readPump(client *Client) {
 	for {
 		_, message, err := client.Conn.ReadMessage()
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("read message failed for %s: %v", client.ID, err)
+			closeCode := 0
+			closeText := ""
+			if closeErr, ok := err.(*websocket.CloseError); ok {
+				closeCode = closeErr.Code
+				closeText = closeErr.Text
 			}
+			// 这里记录所有读循环结束原因，用来区分代理/网络断开和客户端主动 leave。
+			log.Printf(
+				"websocket read ended: client_id=%s room_id=%s username=%q close_code=%d close_text=%q err=%v time=%s",
+				client.ID,
+				client.RoomID,
+				client.Username,
+				closeCode,
+				closeText,
+				err,
+				time.Now().Format(time.RFC3339),
+			)
 			return
 		}
 
@@ -183,7 +197,13 @@ func handleRelay(client *Client, msgType string, payload json.RawMessage) {
 
 // handleLeave 处理客户端主动离开房间的请求，并复用统一的断连清理逻辑。
 func handleLeave(client *Client) {
-	log.Printf("user requested leave: %s", client.Username)
+	log.Printf(
+		"user requested leave: client_id=%s room_id=%s username=%q time=%s",
+		client.ID,
+		client.RoomID,
+		client.Username,
+		time.Now().Format(time.RFC3339),
+	)
 	disconnect(client)
 }
 
