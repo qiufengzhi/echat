@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 
+import HostTransferModal from './components/modals/HostTransferModal'
 import InviteModal from './components/modals/InviteModal'
 import SettingsModal from './components/modals/SettingsModal'
 import { useVoiceRoom } from './hooks/useVoiceRoom'
@@ -8,19 +9,16 @@ import LeavePage from './pages/LeavePage'
 import VoiceRoomPage from './pages/VoiceRoomPage'
 import type { AppView, JoinRoomInput, LeaveRoomSummary } from './types/voiceRoomUi'
 
-// getInitialRoomId 从邀请链接里读取房间号，让朋友打开链接后可以直接看到预填房间。
 function getInitialRoomId() {
   if (typeof window === 'undefined') return ''
 
   return new URLSearchParams(window.location.search).get('room')?.toUpperCase() || ''
 }
 
-// createRoomId 在没有输入房间号时生成一个短房间号，便于口头分享。
 function createRoomId() {
   return Math.random().toString(36).slice(2, 8).toUpperCase()
 }
 
-// formatDuration 把毫秒转换成用户容易理解的停留时长。
 function formatDuration(durationMs: number) {
   const totalSeconds = Math.max(1, Math.floor(durationMs / 1000))
   const minutes = Math.floor(totalSeconds / 60)
@@ -31,17 +29,16 @@ function formatDuration(durationMs: number) {
   return `${minutes} 分 ${seconds} 秒`
 }
 
-// App 负责页面级状态和弹窗开关，真实语音连接仍交给 useVoiceRoom 管理。
 function App() {
   const [view, setView] = useState<AppView>('home')
   const [roomId, setRoomId] = useState(getInitialRoomId)
   const [username, setUsername] = useState('')
-  const [isHost, setIsHost] = useState(false)
   const [isJoining, setIsJoining] = useState(false)
   const [joinedAt, setJoinedAt] = useState<number | null>(null)
   const [isInviteOpen, setIsInviteOpen] = useState(false)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [isMembersOpen, setIsMembersOpen] = useState(false)
+  const [isHostTransferOpen, setIsHostTransferOpen] = useState(false)
   const [lastSummary, setLastSummary] = useState<LeaveRoomSummary | null>(null)
 
   const voiceRoom = useVoiceRoom()
@@ -50,8 +47,21 @@ function App() {
     return Math.max(1, voiceRoom.users.length)
   }, [voiceRoom.users.length])
 
+  const hostName = useMemo(() => {
+    return voiceRoom.users.find(user => user.id === voiceRoom.hostId)?.username || (voiceRoom.isHost ? username : '')
+  }, [voiceRoom.hostId, voiceRoom.isHost, voiceRoom.users, username])
+
+  const hostTransferCandidates = useMemo(() => {
+    return voiceRoom.users
+      .filter(user => user.id !== voiceRoom.hostId)
+      .map(user => ({
+        id: user.id,
+        name: user.username,
+      }))
+  }, [voiceRoom.hostId, voiceRoom.users])
+
   const enterRoom = useCallback(
-    async ({ roomId: inputRoomId, username: inputUsername }: JoinRoomInput, nextIsHost: boolean) => {
+    async ({ roomId: inputRoomId, username: inputUsername }: JoinRoomInput) => {
       const nextRoomId = inputRoomId || createRoomId()
 
       setIsJoining(true)
@@ -62,7 +72,6 @@ function App() {
 
       setRoomId(nextRoomId)
       setUsername(inputUsername)
-      setIsHost(nextIsHost)
       setJoinedAt(Date.now())
       setView('room')
     },
@@ -71,53 +80,63 @@ function App() {
 
   const handleCreateRoom = useCallback(
     (input: JoinRoomInput) => {
-      void enterRoom(input, true)
+      void enterRoom(input)
     },
     [enterRoom],
   )
 
   const handleJoinRoom = useCallback(
     (input: JoinRoomInput) => {
-      void enterRoom(input, false)
+      void enterRoom(input)
     },
     [enterRoom],
   )
 
+  const finalizeLeave = useCallback(
+    (nextHostId?: string) => {
+      const durationText = joinedAt ? formatDuration(Date.now() - joinedAt) : '刚刚'
+
+      setLastSummary({
+        roomId,
+        username,
+        durationText,
+        memberCount: onlineMemberCount,
+      })
+
+      voiceRoom.leaveRoom(nextHostId)
+      setIsInviteOpen(false)
+      setIsSettingsOpen(false)
+      setIsMembersOpen(false)
+      setIsHostTransferOpen(false)
+      setJoinedAt(null)
+      setView('left')
+    },
+    [joinedAt, onlineMemberCount, roomId, username, voiceRoom],
+  )
+
   const handleLeave = useCallback(() => {
-    const durationText = joinedAt ? formatDuration(Date.now() - joinedAt) : '刚刚'
+    if (voiceRoom.isHost && hostTransferCandidates.length > 0) {
+      setIsHostTransferOpen(true)
+      return
+    }
 
-    setLastSummary({
-      roomId,
-      username,
-      durationText,
-      memberCount: onlineMemberCount,
-    })
-
-    voiceRoom.leaveRoom()
-    setIsInviteOpen(false)
-    setIsSettingsOpen(false)
-    setIsMembersOpen(false)
-    setJoinedAt(null)
-    setView('left')
-  }, [joinedAt, onlineMemberCount, roomId, username, voiceRoom])
+    finalizeLeave()
+  }, [finalizeLeave, hostTransferCandidates.length, voiceRoom.isHost])
 
   const handleRejoin = useCallback(() => {
     if (!lastSummary) return
 
-    void enterRoom(
-      {
-        roomId: lastSummary.roomId,
-        username: lastSummary.username,
-      },
-      isHost,
-    )
-  }, [enterRoom, isHost, lastSummary])
+    void enterRoom({
+      roomId: lastSummary.roomId,
+      username: lastSummary.username,
+    })
+  }, [enterRoom, lastSummary])
 
   const handleGoHome = useCallback(() => {
     setRoomId('')
     setUsername('')
-    setIsHost(false)
     setLastSummary(null)
+    setIsHostTransferOpen(false)
     setView('home')
   }, [])
 
@@ -139,7 +158,8 @@ function App() {
         <VoiceRoomPage
           roomId={roomId}
           username={username}
-          isHost={isHost}
+          hostId={voiceRoom.hostId}
+          isHost={voiceRoom.isHost}
           users={voiceRoom.users}
           localStream={voiceRoom.localStream}
           remoteStream={voiceRoom.remoteStream}
@@ -163,7 +183,7 @@ function App() {
       <InviteModal
         isOpen={isInviteOpen}
         roomId={roomId}
-        hostName={username}
+        hostName={hostName}
         memberCount={onlineMemberCount}
         onClose={() => setIsInviteOpen(false)}
       />
@@ -176,6 +196,14 @@ function App() {
         onToggleMute={voiceRoom.toggleMute}
         onToggleSpeaker={voiceRoom.toggleSpeaker}
         onClose={() => setIsSettingsOpen(false)}
+      />
+
+      <HostTransferModal
+        isOpen={isHostTransferOpen}
+        candidates={hostTransferCandidates}
+        onClose={() => setIsHostTransferOpen(false)}
+        onConfirm={nextHostId => finalizeLeave(nextHostId)}
+        onRandom={() => finalizeLeave()}
       />
     </div>
   )

@@ -55,7 +55,7 @@ export default function InviteModal({ isOpen, roomId, hostName, memberCount, onC
         </div>
         <div className="invite-option">
           <strong>房主</strong>
-          <span>{hostName || '我'}</span>
+          <span>{hostName || '待确认'}</span>
         </div>
         <div className="invite-option">
           <strong>当前人数</strong>

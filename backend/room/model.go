@@ -3,31 +3,73 @@ package room
 import (
 	"encoding/json"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-// Client 表示一个已连接的浏览器客户端，以及它的发送队列。
+// Client tracks one connected browser and the room membership metadata
+// needed to keep host ownership stable.
 type Client struct {
-	ID        string          // 客户端唯一标识，由服务端在连接建立时生成（UUID）。
-	RoomID    string          // 客户端当前所在的房间 ID，未加入房间时为空串。
-	Username  string          // 客户端显示名称，由用户加入房间时自定义或自动生成。
-	Conn      *websocket.Conn // 与客户端的 WebSocket 连接实例。
-	Send      chan []byte     // 发送缓冲通道，写协程从该通道读取消息并写入 WebSocket。
-	closeOnce sync.Once       // 确保断连清理逻辑只执行一次，防止重复关闭。
+	ID        string
+	RoomID    string
+	Username  string
+	JoinedAt  time.Time
+	Conn      *websocket.Conn
+	Send      chan []byte
+	closeOnce sync.Once
 }
 
-// Room 表示一个信令房间，里面维护当前在线的客户端。
+// Room keeps the current host as authoritative backend state.
 type Room struct {
-	ID      string             // 房间唯一标识，由客户端在加入时指定。
-	Clients map[string]*Client // 房间内当前在线的所有客户端，以用户 ID 为键。  client.ID
-	Lock    sync.RWMutex       // 读写锁，保护 Clients 的并发读写安全。
+	ID      string
+	HostID  string
+	Clients map[string]*Client
+	Lock    sync.RWMutex
 }
 
-// Message 是前后端之间约定的信令消息结构。
+// RoomUser is the room member summary returned to the frontend.
+type RoomUser struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+}
+
+// WaitingPayload is sent to the first member so the client can mark the host
+// before anyone else joins.
+type WaitingPayload struct {
+	HostID string `json:"host_id"`
+}
+
+// RoomReadyPayload is sent to later joiners with the full room snapshot.
+type RoomReadyPayload struct {
+	Users    []RoomUser `json:"users"`
+	HostID   string     `json:"host_id"`
+	CanStart bool       `json:"can_start"`
+}
+
+// UserJoinedPayload notifies existing members about the newcomer and host.
+type UserJoinedPayload struct {
+	UserID   string `json:"user_id"`
+	Username string `json:"username"`
+	HostID   string `json:"host_id"`
+}
+
+// UserLeftPayload notifies remaining members after someone leaves and any
+// host reassignment has completed.
+type UserLeftPayload struct {
+	UserID string `json:"user_id"`
+	HostID string `json:"host_id,omitempty"`
+}
+
+// LeavePayload lets the current host nominate a successor before leaving.
+type LeavePayload struct {
+	NextHostID string `json:"next_host_id,omitempty"`
+}
+
+// Message is the shared websocket envelope between frontend and backend.
 type Message struct {
-	Type    string          `json:"type"`              // 消息类型，如 join / offer / answer / ice / leave / ping / pong / error 等。
-	RoomID  string          `json:"room_id"`           // 目标房间 ID，用于标识消息所属房间。
-	UserID  string          `json:"user_id"`           // 发送者用户 ID，用于接收方区分消息来源。
-	Payload json.RawMessage `json:"payload,omitempty"` // 消息负载，JSON 原始字节，具体结构由 Type 决定。
+	Type    string          `json:"type"`
+	RoomID  string          `json:"room_id"`
+	UserID  string          `json:"user_id"`
+	Payload json.RawMessage `json:"payload,omitempty"`
 }

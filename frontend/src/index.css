@@ -708,6 +708,31 @@ button:disabled {
   margin-top: 1rem;
 }
 
+.host-transfer-options {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.host-transfer-option {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border-radius: 0.5rem;
+  padding: 0.85rem;
+  background: #eef4fa;
+}
+
+.host-transfer-option input {
+  accent-color: #14b8a6;
+}
+
+.host-transfer-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
 .invite-option,
 .toggle-row {
   display: flex;
@@ -853,8 +878,13 @@ button:disabled {
   }
 
   .invite-option,
-  .toggle-row {
+  .toggle-row,
+  .host-transfer-option {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .host-transfer-actions {
+    grid-template-columns: 1fr;
   }
 }

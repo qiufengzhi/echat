@@ -1,4 +1,4 @@
-import type { OutgoingSignalingMessage, SignalingMessage } from '../types/signaling'
+import type { LeavePayload, OutgoingSignalingMessage, SignalingMessage } from '../types/signaling'
 
 // 信令心跳间隔要短于常见代理 60 秒空闲超时，避免 WebSocket 长时间无数据被中间层关闭。
 const SIGNALING_HEARTBEAT_INTERVAL_MS = 25_000
@@ -169,6 +169,14 @@ export class SignalingClient {
       type: 'ice',
       room_id: this.roomId,
       payload: candidate,
+    })
+  }
+
+  sendLeave(payload?: LeavePayload): void {
+    this.send({
+      type: 'leave',
+      room_id: this.roomId,
+      payload,
     })
   }
 
