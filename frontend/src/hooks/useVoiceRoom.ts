@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 
 import { SignalingClient } from '../services/signalingClient'
 import { handleWebRTCSignaling } from '../services/webrtcSignalingHandler'
-import type { SignalingMessage } from '../types/signaling'
+import type { RoomReadyPayload, SignalingMessage, UserJoinedPayload, UserLeftPayload } from '../types/signaling'
 
 // WebRTC 需要借助 STUN 服务器发现双方可用于直连的公网/局域网候选地址。
 const ICE_SERVERS: RTCConfiguration = {
@@ -22,13 +22,13 @@ const MICROPHONE_ERROR_MESSAGES = {
   inUse: '\u9ea6\u514b\u98ce\u53ef\u80fd\u88ab\u5176\u4ed6\u5e94\u7528\u5360\u7528\uff0c\u8bf7\u5173\u95ed\u5360\u7528\u540e\u91cd\u8bd5', // 麦克风被占用时的提示。
   constrained: '\u5f53\u524d\u97f3\u9891\u8bbe\u5907\u4e0d\u6ee1\u8db3\u91c7\u96c6\u6761\u4ef6\uff0c\u8bf7\u66f4\u6362\u9ea6\u514b\u98ce\u540e\u91cd\u8bd5', // 音频约束不满足时的提示。
   unsupported: '\u5f53\u524d\u9875\u9762\u73af\u5883\u4e0d\u652f\u6301\u9ea6\u514b\u98ce\u91c7\u96c6\uff0c\u8bf7\u4f7f\u7528\u6700\u65b0\u7248\u6d4f\u89c8\u5668', // 浏览器不支持采集时的提示。
-  insecureContext: '\u5f53\u524d\u9875\u9762\u4e0d\u662f\u5b89\u5168\u4e0a\u4e0b\u6587\uff0c\u624b\u673a\u8bbf\u95ee\u65f6\u8bf7\u4f7f\u7528 HTTPS\uff1b\u672c\u673a\u8c03\u8bd5\u53ef\u4f7f\u7528 localhost', // 非安全上下文时的提示。
-  signaling: '\u8fde\u63a5\u4fe1\u4ee4\u670d\u52a1\u5668\u5931\u8d25', // WebSocket 信令连接失败提示。
-  server: '\u4fe1\u4ee4\u670d\u52a1\u8fd4\u56de\u9519\u8bef', // 后端返回错误消息时的兜底提示。
+  insecureContext: '当前页面暂时无法使用麦克风，请检查浏览器访问环境和麦克风权限', // 非安全上下文时的用户提示。
+  signaling: '房间连接失败，请稍后重试', // 房间连接失败时给用户看的提示。
+  server: '房间服务返回错误', // 后端返回错误消息时的兜底提示。
 } as const
 
-// 房间成员在前端展示时需要的基础状态；当前 UI 暂未消费 users，仅作为后续成员列表/说话状态的预留类型。
-interface User {
+// 房间成员在前端展示时需要的基础状态，页面会用它渲染成员席位和成员列表。
+export interface User {
   id: string // 后端生成的用户唯一标识。
   username: string // 用户进入房间时填写的显示名称。
   isMuted: boolean // 当前用户是否处于静音状态。
@@ -39,7 +39,7 @@ interface User {
 interface VoiceRoomState {
   localStream: MediaStream | null // 本地麦克风采集到的音频流，null 表示尚未接入。
   remoteStream: MediaStream | null // 对端传来的音频流，null 表示暂无远端音频。
-  users: User[] // 房间成员列表预留字段，当前组件没有读取它。
+  users: User[] // 房间成员列表，由信令消息同步，供多人席位和成员列表展示。
   isConnected: boolean // WebRTC 是否已经成功建立音频连接。
   isMuted: boolean // 本地麦克风是否被静音。
   isSpeakerOn: boolean // 页面扬声器播放开关的 UI 状态。
@@ -84,13 +84,31 @@ function getMicrophoneErrorMessage(error: Error): string {
   return MICROPHONE_ERROR_MESSAGES.default
 }
 
+// createRoomUser 把后端成员摘要转换成页面需要的成员状态。
+function createRoomUser(id: string, username: string, isMuted = false): User {
+  return {
+    id,
+    username,
+    isMuted,
+    isSpeaking: false,
+  }
+}
+
+// upsertRoomUser 按 ID 合并成员，避免同一个成员重复出现在列表里。
+function upsertRoomUser(users: User[], nextUser: User): User[] {
+  const existingIndex = users.findIndex(user => user.id === nextUser.id)
+  if (existingIndex === -1) return [...users, nextUser]
+
+  return users.map(user => (user.id === nextUser.id ? { ...user, ...nextUser } : user))
+}
+
 // useVoiceRoom 负责串起三个环节：采集本地麦克风、通过 WebSocket 交换信令、用 WebRTC 播放远端音频。
 export function useVoiceRoom(): UseVoiceRoomReturn {
   // state 会驱动 React 页面刷新，例如显示本地音频、远程音频和连接状态。
   const [state, setState] = useState<VoiceRoomState>({
     localStream: null,
     remoteStream: null,
-    users: [], // 当前未被 UI 消费，保留为空数组作为后续成员列表扩展入口。
+    users: [], // 成员列表会在收到信令消息后逐步同步。
     isConnected: false,
     isMuted: false,
     isSpeakerOn: true,
@@ -101,6 +119,8 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
   const signalingClientRef = useRef<SignalingClient | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
   const localStreamRef = useRef<MediaStream | null>(null)
+  const currentUserIdRef = useRef<string | null>(null)
+  const currentUsernameRef = useRef('')
 
   // 初始化本地麦克风。成功后把 MediaStream 同时放进 ref 和 state：
   // ref 供 WebRTC 添加音轨使用，state 供页面展示“本地音频已连接”。
@@ -187,8 +207,60 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
     return pc
   }, [])
 
+  // syncUsersFromSignaling 只同步页面成员列表，不处理 Offer/Answer/ICE 协商。
+  const syncUsersFromSignaling = useCallback((data: SignalingMessage) => {
+    if (data.user_id && (data.type === 'waiting' || data.type === 'room_ready')) {
+      currentUserIdRef.current = data.user_id
+    }
+
+    if (data.type === 'waiting' && data.user_id) {
+      const currentUser = createRoomUser(data.user_id, currentUsernameRef.current, state.isMuted)
+      setState(prev => ({
+        ...prev,
+        users: upsertRoomUser(prev.users, currentUser),
+      }))
+      return
+    }
+
+    if (data.type === 'room_ready') {
+      const payload = data.payload as RoomReadyPayload | undefined
+      if (!payload?.users) return
+
+      setState(prev => ({
+        ...prev,
+        users: payload.users.map(user =>
+          createRoomUser(user.id, user.username, user.id === currentUserIdRef.current ? prev.isMuted : false),
+        ),
+      }))
+      return
+    }
+
+    if (data.type === 'user_joined') {
+      const payload = data.payload as UserJoinedPayload | undefined
+      if (!payload?.user_id || !payload.username) return
+
+      setState(prev => ({
+        ...prev,
+        users: upsertRoomUser(prev.users, createRoomUser(payload.user_id, payload.username)),
+      }))
+      return
+    }
+
+    if (data.type === 'user_left') {
+      const payload = data.payload as UserLeftPayload | undefined
+      if (!payload?.user_id) return
+
+      setState(prev => ({
+        ...prev,
+        users: prev.users.filter(user => user.id !== payload.user_id),
+      }))
+    }
+  }, [state.isMuted])
+
   // 处理后端转发来的信令消息。Offer/Answer/ICE 三类消息共同完成 WebRTC 协商。
   const handleSignaling = useCallback(async (data: SignalingMessage) => {
+    syncUsersFromSignaling(data)
+
     await handleWebRTCSignaling(data, {
       getPeerConnection: () => pcRef.current,
       clearPeerConnection: () => {
@@ -202,12 +274,21 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
       setError: message => setState(prev => ({ ...prev, error: message })),
       serverErrorMessage: MICROPHONE_ERROR_MESSAGES.server,
     })
-  }, [createPeerConnection])
+  }, [createPeerConnection, syncUsersFromSignaling])
 
   // 加入房间的完整流程：先拿麦克风，再连 WebSocket，最后创建 WebRTC 连接等待信令。
   const joinRoom = useCallback(async (roomId: string, username: string) => {
+    currentUsernameRef.current = username
+
     const stream = await initLocalStream()
     if (!stream) return false
+
+    setState(prev => ({
+      ...prev,
+      // 成员列表只保存后端确认过的真实成员；确认前的“我”由房间页兜底展示。
+      users: [],
+      error: null,
+    }))
 
     // SignalingClient 只负责连接信令服务器，收到的信令再交回 hook 驱动 WebRTC 协商。
     const signalingClient = new SignalingClient({
@@ -249,10 +330,13 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
       signalingClientRef.current = null
     }
 
+    currentUserIdRef.current = null
+    currentUsernameRef.current = ''
+
     setState({
       localStream: null,
       remoteStream: null,
-      users: [], // 重置预留成员列表；当前页面不会读取该字段。
+      users: [], // 离开后清空成员列表，避免旧成员残留到下一次进入。
       isConnected: false,
       isMuted: false,
       isSpeakerOn: true,
@@ -266,12 +350,22 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
       const audioTrack = localStreamRef.current.getAudioTracks()[0]
       if (audioTrack) {
         audioTrack.enabled = state.isMuted
-        setState(prev => ({ ...prev, isMuted: !prev.isMuted }))
+        setState(prev => {
+          const nextMuted = !prev.isMuted
+          return {
+            ...prev,
+            isMuted: nextMuted,
+            users: prev.users.map(user => {
+              const isCurrentUser = user.id === currentUserIdRef.current || user.username === currentUsernameRef.current
+              return isCurrentUser ? { ...user, isMuted: nextMuted } : user
+            }),
+          }
+        })
       }
     }
   }, [state.isMuted])
 
-  // 扬声器开关目前只更新 UI 状态，真正控制远端 audio 播放可在 Room 组件里继续接入。
+  // 扬声器开关控制页面是否播放远端 audio，不影响自己是否把声音发给别人。
   const toggleSpeaker = useCallback(() => {
     setState(prev => ({ ...prev, isSpeakerOn: !prev.isSpeakerOn }))
   }, [])
