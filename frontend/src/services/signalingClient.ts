@@ -172,6 +172,8 @@ export class SignalingClient {
     })
   }
 
+  // sendLeave 告诉服务端当前用户要离开房间。
+  // 房主离开时 payload 可携带 next_host_id；普通成员离开时不需要 payload。
   sendLeave(payload?: LeavePayload): void {
     this.send({
       type: 'leave',

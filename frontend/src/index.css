@@ -708,6 +708,7 @@ button:disabled {
   margin-top: 1rem;
 }
 
+/* 房主交接弹窗的候选列表使用单选项，确保“指定后离开”只会携带一个 next_host_id。 */
 .host-transfer-options {
   display: grid;
   gap: 0.75rem;
@@ -726,6 +727,7 @@ button:disabled {
   accent-color: #14b8a6;
 }
 
+/* 两个操作分别对应“服务端自动选择”和“指定成员后离开”，桌面端并排便于比较。 */
 .host-transfer-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -880,6 +882,7 @@ button:disabled {
   .invite-option,
   .toggle-row,
   .host-transfer-option {
+    /* 手机端让标签和控件上下排列，避免长昵称或长文案挤压按钮宽度。 */
     align-items: flex-start;
     flex-direction: column;
   }
