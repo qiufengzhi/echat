@@ -66,7 +66,7 @@ export default function HostTransferModal({
       {/* 两个离开按钮分别对应“服务端自动选择”和“携带 next_host_id 指定交接”。 */}
       <div className="host-transfer-actions">
         <button className="secondary-button" type="button" onClick={onRandom}>
-          直接离开，自动选择
+          直接离开
         </button>
         <button
           className="primary-button"
@@ -74,7 +74,7 @@ export default function HostTransferModal({
           disabled={!selectedId}
           onClick={() => onConfirm(selectedId)}
         >
-          指定后离开
+          指定房主
         </button>
       </div>
     </BaseModal>

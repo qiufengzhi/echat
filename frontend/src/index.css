@@ -735,6 +735,13 @@ button:disabled {
   margin-top: 1rem;
 }
 
+/* 房主交接弹窗的 secondary-button 在深色遮罩上需要更高的背景不透明度才能看清。 */
+.host-transfer-actions .secondary-button {
+  color: #172033;
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(185, 199, 216, 0.6);
+}
+
 .invite-option,
 .toggle-row {
   display: flex;
