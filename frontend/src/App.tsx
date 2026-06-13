@@ -218,8 +218,13 @@ function App() {
         hasMicrophone={Boolean(voiceRoom.localStream)}
         isMuted={voiceRoom.isMuted}
         isSpeakerOn={voiceRoom.isSpeakerOn}
+        availableMicrophones={voiceRoom.availableMicrophones}
+        availableSpeakers={voiceRoom.availableSpeakers}
+        currentMicrophoneId={voiceRoom.currentMicrophoneId}
         onToggleMute={voiceRoom.toggleMute}
         onToggleSpeaker={voiceRoom.toggleSpeaker}
+        onRefreshDevices={voiceRoom.refreshAudioDevices}
+        onSwitchMicrophone={voiceRoom.switchMicrophone}
         onClose={() => setIsSettingsOpen(false)}
       />
 

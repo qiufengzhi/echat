@@ -38,6 +38,12 @@ const MICROPHONE_ERROR_MESSAGES = {
   server: '房间服务返回错误', // 后端返回错误消息时的兜底提示。
 } as const
 
+// 音频设备类型，用于 SettingsModal 中的设备选择下拉框。
+export interface AudioDevice {
+  deviceId: string
+  label: string
+}
+
 // 房间成员在前端展示时需要的基础状态，页面会用它渲染成员席位和成员列表。
 export interface User {
   id: string // 后端生成的用户唯一标识。
@@ -57,6 +63,9 @@ interface VoiceRoomState {
   isMuted: boolean // 本地麦克风是否被静音。
   isSpeakerOn: boolean // 页面扬声器播放开关的 UI 状态。
   error: string | null // 当前要展示给用户的错误提示，null 表示没有错误。
+  availableMicrophones: AudioDevice[] // 可用的麦克风设备列表。
+  availableSpeakers: AudioDevice[] // 可用的扬声器设备列表。
+  currentMicrophoneId: string | null // 当前选中的麦克风设备 ID。
 }
 
 // 对外暴露给页面组件的状态和操作方法，隐藏 WebSocket 与 WebRTC 的底层细节。
@@ -65,6 +74,8 @@ interface UseVoiceRoomReturn extends VoiceRoomState {
   leaveRoom: (nextHostId?: string) => void // 离开房间并释放资源，房主可传下一任房主 ID。
   toggleMute: () => void // 切换本地麦克风静音状态。
   toggleSpeaker: () => void // 切换扬声器播放开关状态。
+  refreshAudioDevices: () => Promise<void> // 刷新可用音频设备列表，供 SettingsModal 设备下拉框使用。
+  switchMicrophone: (deviceId: string) => Promise<void> // 切换到指定麦克风设备。
 }
 
 // createEmptyVoiceRoomState 返回初始状态，也用于离开房间后重置页面。
@@ -79,6 +90,9 @@ function createEmptyVoiceRoomState(): VoiceRoomState {
     isMuted: false,
     isSpeakerOn: true,
     error: null,
+    availableMicrophones: [],
+    availableSpeakers: [],
+    currentMicrophoneId: null,
   }
 }
 
@@ -157,9 +171,10 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
 
   // 初始化本地麦克风。成功后把 MediaStream 同时放进 ref 和 state：
   // ref 供 WebRTC 添加音轨使用，state 供页面展示“本地音频已连接”。
-  const initLocalStream = useCallback(async () => {
+  // deviceId 可选，不传时使用浏览器默认麦克风。
+  const initLocalStream = useCallback(async (deviceId?: string) => {
     try {
-      console.log('Requesting microphone access...')
+      console.log('Requesting microphone access...', deviceId ? `deviceId: ${deviceId}` : '(default)')
 
       const isLocalhost = LOCALHOST_HOSTNAMES.has(window.location.hostname)
       // 非 localhost 页面必须是安全上下文，否则浏览器会阻止麦克风采集。
@@ -171,13 +186,15 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
         throw new Error('MEDIA_DEVICES_UNAVAILABLE')
       }
 
-      // 这里只采集音频，并启用浏览器内置的回声消除、降噪和自动增益控制。
+      // 音频配置：启用回声消除、降噪和自动增益控制。
+      // 如果指定了 deviceId，则使用指定设备；否则使用默认设备。
+      const audioConfig: MediaStreamConstraints['audio'] = deviceId
+        ? { deviceId: { exact: deviceId }, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+        : { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+
+      // 这里只采集音频。
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
+        audio: audioConfig,
         video: false,
       })
 
@@ -188,7 +205,12 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
       }
 
       localStreamRef.current = stream
-      setState(prev => ({ ...prev, localStream: stream, error: null }))
+      setState(prev => ({
+        ...prev,
+        localStream: stream,
+        error: null,
+        currentMicrophoneId: deviceId || null,
+      }))
       return stream
     } catch (err) {
       console.error('Failed to get microphone stream:', err)
@@ -202,6 +224,60 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
       return null
     }
   }, [])
+
+  // refreshAudioDevices 枚举当前可用的音频输入/输出设备，供 SettingsModal 设备下拉框展示。
+  // 设备标签可能为空（浏览器隐私策略限制），此时用 "麦克风 1"、"麦克风 2" 等序号兜底。
+  const refreshAudioDevices = useCallback(async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      const microphones = devices
+        .filter(device => device.kind === 'audioinput')
+        .map((device, index) => ({
+          deviceId: device.deviceId,
+          label: device.label || `麦克风 ${index + 1}`,
+        }))
+      const speakers = devices
+        .filter(device => device.kind === 'audiooutput')
+        .map((device, index) => ({
+          deviceId: device.deviceId,
+          label: device.label || `扬声器 ${index + 1}`,
+        }))
+
+      setState(prev => ({
+        ...prev,
+        availableMicrophones: microphones,
+        availableSpeakers: speakers,
+      }))
+    } catch (err) {
+      console.error('Failed to enumerate devices:', err)
+    }
+  }, [])
+
+  // switchMicrophone 停止当前麦克风并切换到指定设备，同时更新 PeerConnection 的音轨。
+  const switchMicrophone = useCallback(
+    async (deviceId: string) => {
+      // 先停止旧音轨。
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => track.stop())
+      }
+
+      // 请求新设备。
+      const stream = await initLocalStream(deviceId)
+      if (!stream) return
+
+      // 如果存在活跃的 WebRTC 连接，需要用新音轨替换旧音轨。
+      if (pcRef.current) {
+        const senders = pcRef.current.getSenders()
+        const audioSender = senders.find(sender => sender.track?.kind === 'audio')
+        if (audioSender) {
+          await audioSender.replaceTrack(stream.getAudioTracks()[0])
+        }
+      }
+
+      console.log('Microphone switched to deviceId:', deviceId)
+    },
+    [initLocalStream],
+  )
 
   // createPeerConnection 创建 WebRTC 连接，并绑定音轨、ICE 和连接状态事件。
   const createPeerConnection = useCallback(() => {
@@ -340,9 +416,12 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
     const stream = await initLocalStream()
     if (!stream) return false
 
+    // 加入房间时刷新设备列表，供 SettingsModal 展示下拉选项。
+    await refreshAudioDevices()
+
     setState(prev => ({
       ...prev,
-      // 成员列表只保存后端确认过的真实成员；确认前的“我”由房间页兜底展示。
+      // 成员列表只保存后端确认过的真实成员；确认前的"我"由房间页兜底展示。
       users: [],
       hostId: null,
       isHost: false,
@@ -457,5 +536,7 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
     leaveRoom,
     toggleMute,
     toggleSpeaker,
+    refreshAudioDevices,
+    switchMicrophone,
   }
 }
