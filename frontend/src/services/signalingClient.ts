@@ -171,6 +171,15 @@ export class SignalingClient {
     })
   }
 
+  // sendRenegotiationAnswer 把客户端对 renegotiation Offer 的 Answer 发给 SFU 服务端。
+  sendRenegotiationAnswer(answer: RTCSessionDescriptionInit): void {
+    this.send({
+      type: 'sfu_renegotiation_answer',
+      room_id: this.roomId,
+      payload: answer,
+    })
+  }
+
   // sendLeave 告诉服务端当前用户要离开房间。
   // 房主离开时 payload 可携带 next_host_id；普通成员离开时不需要 payload。
   sendLeave(payload?: LeavePayload): void {

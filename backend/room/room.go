@@ -151,6 +151,8 @@ func handleMessage(client *Client, msg *Message) {
 		handleSFUOffer(client, msg.Payload)
 	case MsgTypeSFUICE: // 客户端的 ICE Candidate
 		handleSFUICE(client, msg.Payload)
+	case MsgTypeRenegotiationAnswer: // 客户端对 renegotiation Offer 的 Answer
+		handleRenegotiationAnswer(client, msg.Payload)
 	case MsgTypeLeave: // 用户主动离开，可能携带房主交接目标
 		handleLeave(client, msg.Payload)
 	case MsgTypePing: // 心跳响应
@@ -217,6 +219,23 @@ func handleJoin(client *Client, msg *Message) {
 		sendToClient(targetClient, MsgTypeSFUICE, payload, roomID)
 	})
 
+	// 注册 renegotiation 回调：当 SFU 向订阅者添加中继音轨后，需要向该客户端发送 renegotiation Offer。
+	sfuRoom.SetOnRenegotiation(func(clientID string, offerSDP string) {
+		roomLock.RLock()
+		r, ok := allActiveRooms[roomID]
+		roomLock.RUnlock()
+		if !ok {
+			return
+		}
+		r.Lock.RLock()
+		targetClient, ok := r.Clients[clientID]
+		r.Lock.RUnlock()
+		if !ok {
+			return
+		}
+		sendToClient(targetClient, MsgTypeRenegotiationOffer, RenegotiationOfferPayload{SDP: offerSDP}, roomID)
+	})
+
 	// 让 SFU 引擎为该客户端创建 PeerConnection（不生成 Offer）。
 	if err := sfuRoom.Join(client.ID); err != nil {
 		log.Printf("[sfu] 加入失败: %s %v", client.ID[:8], err)
@@ -275,6 +294,31 @@ func handleSFUOffer(client *Client, payload json.RawMessage) {
 
 	// 将 Answer SDP 通过 sfu_answer 发回客户端。
 	sendToClient(client, MsgTypeSFUAnswer, SFUAnswerPayload{SDP: answerSDP}, client.RoomID)
+}
+
+// handleRenegotiationAnswer 处理客户端对 renegotiation Offer 的 Answer，交回 SFU 引擎处理。
+func handleRenegotiationAnswer(client *Client, payload json.RawMessage) {
+	if client.RoomID == "" {
+		sendError(client, "join a room before signaling")
+		return
+	}
+
+	var answer RenegotiationAnswerPayload
+	if err := json.Unmarshal(payload, &answer); err != nil {
+		log.Printf("renegotiation answer 内容无效: %s %v", client.ID[:8], err)
+		return
+	}
+
+	sfuRoom := sfuServer.GetRoom(client.RoomID)
+	if sfuRoom == nil {
+		log.Printf("SFU 房间未找到: %s", client.RoomID)
+		return
+	}
+
+	if err := sfuRoom.AcceptRenegotiationAnswer(client.ID, answer.SDP); err != nil {
+		log.Printf("renegotiation answer 处理失败: %s %v", client.ID[:8], err)
+		return
+	}
 }
 
 // handleSFUICE 处理客户端发来的 ICE Candidate，传递给 SFU 引擎。

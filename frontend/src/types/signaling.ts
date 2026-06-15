@@ -9,6 +9,7 @@ export type SignalingClientMessageType =
   | 'leave'     // 前端主动离开房间，可携带 next_host_id 指定下一任房主。
   | 'sfu_offer' // SFU：前端发起 SDP Offer 给服务端。
   | 'sfu_ice'    // SFU：前端转发 ICE Candidate 给服务端。
+  | 'sfu_renegotiation_answer' // SFU：前端回复 renegotiation Answer 给服务端。
 
 // SignalingServerMessageType 描述服务端发给前端的房间状态和 SFU 信令消息类型。
 export type SignalingServerMessageType =
@@ -21,6 +22,7 @@ export type SignalingServerMessageType =
   | 'pong'        // 服务端回复前端的心跳响应消息。
   | 'sfu_answer'  // SFU：服务端回复 SDP Answer，前端设为远端描述完成协商。
   | 'sfu_ice'     // SFU：服务端转发 ICE Candidate 给前端。
+  | 'sfu_renegotiation_offer' // SFU：服务端在 AddTrack 后发送的 renegotiation Offer。
 
 // SignalingMessageType 是前后端 WebSocket 共用的完整消息类型集合。
 export type SignalingMessageType = SignalingClientMessageType | SignalingServerMessageType
@@ -92,6 +94,16 @@ export interface SFUICEPayload {
   sdpMLineIndex: number    // 该 candidate 对应的 media 行索引。
   sdpMid: string           // 该 candidate 对应的 media 标识符。
   usernameFragment: string // ICE 用户名片段（用于 ICE 一致性检查）。
+}
+
+// RenegotiationOfferPayload 是服务端在 AddTrack 后发送的 renegotiation Offer。
+export interface RenegotiationOfferPayload {
+  sdp: string   // renegotiation SDP Offer。
+}
+
+// RenegotiationAnswerPayload 是前端回复 renegotiation Offer 的 Answer。
+export interface RenegotiationAnswerPayload {
+  sdp: string   // renegotiation SDP Answer。
 }
 
 // ─── 通用消息结构 ───

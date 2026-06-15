@@ -30,5 +30,10 @@ const (
 	// SFU 引擎收集到的 ICE Candidate 通过 sfu_ice 发送给客户端。
 	MsgTypeSFUICEServer = "sfu_ice" // SFU 引擎的 ICE Candidate
 
+	// SFU renegotiation（重新协商）：当 AddTrack 后触发，由 SFU 向订阅者客户端发送新 Offer。
+	MsgTypeRenegotiationOffer = "sfu_renegotiation_offer" // SFU 向客户端发送的新 Offer（服务端 -> 客户端）
+	// 客户端收到 renegotiation Offer 后回复 Answer。
+	MsgTypeRenegotiationAnswer = "sfu_renegotiation_answer" // 客户端回复的 Answer（客户端 -> 服务端）
+
 	MsgTypeError = "error" // 服务端错误消息，payload.message 可给前端转换成用户提示
 )

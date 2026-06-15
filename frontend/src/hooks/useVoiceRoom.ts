@@ -464,6 +464,7 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
           })
         },
         sendSFUOffer: offer => signalingClientRef.current?.sendSFUOffer(offer),
+        sendRenegotiationAnswer: answer => signalingClientRef.current?.sendRenegotiationAnswer(answer),
         sendSFUIce: candidate => signalingClientRef.current?.sendSFUIce(candidate),
         setConnected: connected => setState(prev => ({ ...prev, isConnected: connected })),
         setError: message => setState(prev => ({ ...prev, error: message })),

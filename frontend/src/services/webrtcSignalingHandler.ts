@@ -11,6 +11,7 @@ export interface WebRTCSignalingHandlerOptions {
   setRemoteStream: (userId: string, stream: MediaStream) => void // 添加或更新某用户的远端音频流。
   removeRemoteStream: (userId: string) => void // 移除某用户的远端音频流（该用户已离开）。
   sendSFUOffer: (offer: RTCSessionDescriptionInit) => void // 把本端 SDP Offer 发给 SFU 服务端。
+  sendRenegotiationAnswer: (answer: RTCSessionDescriptionInit) => void // 把 renegotiation Answer 发给 SFU 服务端。
   sendSFUIce: (candidate: RTCIceCandidate) => void // 把 ICE Candidate 发给 SFU 服务端。
   setConnected: (connected: boolean) => void // 更新页面上的连接状态。
   setError: (message: string) => void // 更新页面上的错误提示。
@@ -58,6 +59,21 @@ export async function handleWebRTCSignaling(
         // ICE candidate 添加失败通常不影响整体连接，浏览器会自动尝试其他候选。
         console.warn('[sfu] 添加 ICE candidate 失败:', err)
       }
+      break
+    }
+
+    case 'sfu_renegotiation_offer': {
+      // SFU 服务端在 AddTrack 后发送的 renegotiation Offer，客户端需要创建 Answer 并回复。
+      console.log('[sfu] 收到 renegotiation Offer，正在回复 Answer...')
+      if (!pc) {
+        console.warn('[sfu] 没有可用的 PeerConnection 处理 renegotiation offer')
+        return
+      }
+      const offerPayload = data.payload as { sdp: string }
+      await pc.setRemoteDescription(new RTCSessionDescription({ sdp: offerPayload.sdp, type: 'offer' }))
+      const answer = await pc.createAnswer()
+      await pc.setLocalDescription(answer)
+      options.sendRenegotiationAnswer(answer)
       break
     }
 

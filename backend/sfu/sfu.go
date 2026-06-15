@@ -36,6 +36,11 @@ import (
 // 信令层收到后通过 WebSocket 转发给对应客户端。
 type ICECandidateCallback func(clientID string, candidate webrtc.ICECandidateInit)
 
+// RenegotiationCallback 是 SFU -> 信令层 的重新协商回调。
+// 当 SFU 向订阅者添加中继音轨后，需要触发重新协商，由信令层通过 WebSocket 发送新 Offer 给客户端。
+// 客户端回复 Answer 后，信令层通过 AcceptRenegotiationAnswer 交回 SFU 处理。
+type RenegotiationCallback func(clientID string, offerSDP string)
+
 // SFUServer 管理一组 SFU 房间，每个房间包含多个 SFU Peer 连接。
 // 调用方（room 包）通过 GetOrCreateRoom / RemoveRoom 来管理 SFU 房间生命周期。
 type SFUServer struct {
@@ -51,6 +56,8 @@ type SFURoom struct {
 
 	// ICE Candidate 回调，由信令层注册，用于把 SFU 收集到的 candidate 转发给客户端。
 	onICECandidate ICECandidateCallback
+	// 重新协商回调，当 AddTrack 后触发，由信令层向客户端发送 renegotiation Offer。
+	onRenegotiation RenegotiationCallback
 }
 
 // SFUPeer 包装单个客户端的 WebRTC PeerConnection，负责收发音频和中继管理。
@@ -153,6 +160,25 @@ func (r *SFURoom) Join(clientID string) error {
 		// ToJSON 返回 ICECandidateInit，pion/webrtc v4 中不返回 error。
 		candJSON := candidate.ToJSON()
 		r.onICECandidate(clientID, candJSON)
+	})
+
+	// 当 AddTrack 被调用后，pion 会触发 OnNegotiationNeeded，此时需要向客户端发送 renegotiation Offer。
+	pc.OnNegotiationNeeded(func() {
+		if r.onRenegotiation == nil {
+			log.Printf("[sfu] renegotiation 触发但无回调: client=%s", clientID[:8])
+			return
+		}
+		offer, err := pc.CreateOffer(nil)
+		if err != nil {
+			log.Printf("[sfu] 创建 renegotiation Offer 失败: client=%s err=%v", clientID[:8], err)
+			return
+		}
+		if err := pc.SetLocalDescription(offer); err != nil {
+			log.Printf("[sfu] 设置 renegotiation Offer 失败: client=%s err=%v", clientID[:8], err)
+			return
+		}
+		log.Printf("[sfu] renegotiation Offer 已创建: client=%s", clientID[:8])
+		r.onRenegotiation(clientID, offer.SDP)
 	})
 
 	// ICE 连接状态日志。
@@ -278,6 +304,34 @@ func (r *SFURoom) SetOnICECandidate(cb ICECandidateCallback) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 	r.onICECandidate = cb
+}
+
+// SetOnRenegotiation 注册重新协商回调，供信令层在 AddTrack 后发送 renegotiation Offer 给客户端。
+func (r *SFURoom) SetOnRenegotiation(cb RenegotiationCallback) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	r.onRenegotiation = cb
+}
+
+// AcceptRenegotiationAnswer 处理客户端对 renegotiation Offer 的 Answer。
+func (r *SFURoom) AcceptRenegotiationAnswer(clientID string, answerSDP string) error {
+	r.lock.RLock()
+	peer, ok := r.peers[clientID]
+	r.lock.RUnlock()
+	if !ok {
+		return fmt.Errorf("peer %s not found", clientID)
+	}
+
+	answer := webrtc.SessionDescription{
+		Type: webrtc.SDPTypeAnswer,
+		SDP:  answerSDP,
+	}
+	if err := peer.PC.SetRemoteDescription(answer); err != nil {
+		return fmt.Errorf("set remote description: %w", err)
+	}
+
+	log.Printf("[sfu] renegotiation answer 已处理: client=%s", clientID[:8])
+	return nil
 }
 
 // PeerCount 返回房间内 SFU 对端数量。

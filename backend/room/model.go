@@ -76,6 +76,16 @@ type SFUAnswerPayload struct {
 	SDP string `json:"sdp"` // SDP Answer 字符串
 }
 
+// RenegotiationOfferPayload 是 SFU 向订阅者客户端发送的 renegotiation Offer。
+type RenegotiationOfferPayload struct {
+	SDP string `json:"sdp"` // renegotiation SDP Offer
+}
+
+// RenegotiationAnswerPayload 是客户端对 renegotiation Offer 的 Answer。
+type RenegotiationAnswerPayload struct {
+	SDP string `json:"sdp"` // renegotiation SDP Answer
+}
+
 // SFUICEPayload 是 SFU 与客户端之间交换的 ICE Candidate。
 // 服务端转发给客户端时携带 candidate 和 usernameFragment；客户端发给服务端时同理。
 type SFUICEPayload struct {
