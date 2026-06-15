@@ -24,7 +24,7 @@ interface VoiceRoomPageProps {
   isHost: boolean // 当前用户是否为房主，用于本地兜底席位和离开交接入口。
   users: HookUser[] // useVoiceRoom 提供的真实成员列表。
   localStream: MediaStream | null // 本地麦克风音频流。
-  remoteStream: MediaStream | null // 当前远端音频流；现阶段仍是单远端音频流。
+  remoteStreams: Map<string, MediaStream> // SFU 架构下多个远端用户的音频流，key 为用户 ID。
   isConnected: boolean // 声音连接是否已经成功建立。
   isMuted: boolean // 当前用户是否静音。
   isSpeakerOn: boolean // 当前是否播放房间声音。
@@ -41,7 +41,7 @@ interface VoiceRoomPageProps {
 
 const MAX_VISIBLE_SEATS = 8
 
-// buildMembers 把真实连接状态整理成席位列表；当前底层仍是单远端流，因此不伪造多人音频。
+// buildMembers 把真实连接状态和远端音频流整理成席位列表。
 function buildMembers({
   users,
   username,
@@ -49,10 +49,10 @@ function buildMembers({
   isHost,
   isMuted,
   isConnected,
-  remoteStream,
+  remoteStreams,
 }: Pick<
   VoiceRoomPageProps,
-  'users' | 'username' | 'hostId' | 'isHost' | 'isMuted' | 'isConnected' | 'remoteStream'
+  'users' | 'username' | 'hostId' | 'isHost' | 'isMuted' | 'isConnected' | 'remoteStreams'
 >) {
   const knownUsers = users.length > 0 ? users : []
   // 成员同步依赖后端 user_id，但初次等待时可能还没有完整列表，所以需要检查本地用户是否已出现。
@@ -66,10 +66,12 @@ function buildMembers({
     isMuted: user.username === username ? isMuted : user.isMuted,
     isSpeaking: user.username === username ? !isMuted && Boolean(isConnected) : user.isSpeaking,
     isOnline: true,
+    // SFU 下每个远端成员有独立音频流，通过 user.id 检查是否已有流。
+    hasAudio: remoteStreams.has(user.id),
   }))
 
   if (!hasSelfInUsers) {
-    // 加入成功但还没收到服务端成员快照时，用本地信息先展示“我”的席位。
+    // 加入成功但还没收到服务端成员快照时，用本地信息先展示"我"的席位。
     realMembers.unshift({
       id: 'local-user',
       name: username || '我',
@@ -78,19 +80,24 @@ function buildMembers({
       isMuted,
       isSpeaking: !isMuted && Boolean(isConnected),
       isOnline: true,
+      hasAudio: false,
     })
   }
 
-  if (remoteStream && realMembers.length === 1) {
-    // 兼容旧的两人音频阶段：如果已有远端流但成员列表还没同步，先给用户一个可理解的朋友席位。
-    realMembers.push({
-      id: 'remote-user',
-      name: '朋友',
-      role: 'member',
-      isSelf: false,
-      isMuted: false,
-      isSpeaking: true,
-      isOnline: true,
+  if (remoteStreams.size > 0 && realMembers.length === 1 && realMembers[0]?.isSelf) {
+    // 有远端音频流但成员列表还没同步时，为每个远端流添加一个"朋友"席位。
+    // 正常情况应当由服务端 user_joined 同步成员列表，此分支只做兜底。
+    remoteStreams.forEach((_stream, userId) => {
+      realMembers.push({
+        id: userId,
+        name: '朋友',
+        role: 'member',
+        isSelf: false,
+        isMuted: false,
+        isSpeaking: true,
+        isOnline: true,
+        hasAudio: true,
+      })
     })
   }
 
@@ -104,6 +111,7 @@ function buildMembers({
     isMuted: false,
     isSpeaking: false,
     isOnline: false,
+    hasAudio: false,
   }))
 
   return [...realMembers, ...emptySeats]
@@ -142,7 +150,7 @@ export default function VoiceRoomPage({
   isHost,
   users,
   localStream,
-  remoteStream,
+  remoteStreams,
   isConnected,
   isMuted,
   isSpeakerOn,
@@ -158,8 +166,8 @@ export default function VoiceRoomPage({
 }: VoiceRoomPageProps) {
   // members 是页面组件真正消费的席位模型，包含真实成员、兜底成员和空席位。
   const members = useMemo(
-    () => buildMembers({ users, username, hostId, isHost, isMuted, isConnected, remoteStream }),
-    [users, username, hostId, isHost, isMuted, isConnected, remoteStream],
+    () => buildMembers({ users, username, hostId, isHost, isMuted, isConnected, remoteStreams }),
+    [users, username, hostId, isHost, isMuted, isConnected, remoteStreams],
   )
   const onlineMemberCount = members.filter(member => member.isOnline).length
   const roomStatus = getRoomStatus(isConnected, localStream, error)
@@ -187,7 +195,10 @@ export default function VoiceRoomPage({
 
   return (
     <main className="voice-room-page">
-      <RemoteAudio stream={remoteStream} isSpeakerOn={isSpeakerOn} />
+      {/* SFU 架构下，为每个远端用户渲染一个隐藏音频播放器 */}
+      {Array.from(remoteStreams.entries()).map(([userId, stream]) => (
+        <RemoteAudio key={userId} stream={stream} isSpeakerOn={isSpeakerOn} />
+      ))}
 
       <RoomTopBar
         roomId={roomId}

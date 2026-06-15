@@ -19,10 +19,11 @@ export interface VoiceRoomMember {
   id: string // 成员唯一标识，真实成员来自后端，空席位使用前端生成的占位 ID。
   name: string // 页面展示的成员昵称。
   role: RoomParticipantRole // 成员在席位中的角色，用于显示房主或空席位。
-  isSelf: boolean // 是否为当前用户自己，用于标记“我”和同步本地静音状态。
+  isSelf: boolean // 是否为当前用户自己，用于标记"我"和同步本地静音状态。
   isMuted: boolean // 该成员是否静音。
   isSpeaking: boolean // 该成员是否正在说话，第一阶段主要用于 UI 表达和后续音量检测扩展。
   isOnline: boolean // 该成员是否在线，空席位和已离开成员为 false。
+  hasAudio: boolean // SFU 下该成员是否有远端音频流到达。
 }
 
 export interface RoomStatusCopy {

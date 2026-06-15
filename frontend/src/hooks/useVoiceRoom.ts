@@ -11,10 +11,13 @@ import type {
   WaitingPayload,
 } from '../types/signaling'
 
-// 本 Hook 是前端语音房的实时通信适配层：
-// 页面只关心“成员、房主、是否连上、是否静音、是否有错误”，WebSocket/WebRTC 的细节都收在这里。
+// 本 Hook 是前端语音房的实时通信适配层。
+// SFU 架构下，前端只与 SFU 服务端建立一条 PeerConnection：
+//   - 本地音轨加入该连接
+//   - 服务端转发其他成员的音轨过来，通过 ontrack 按用户分组存放
+//   - 成员列表和房主状态仍由信令消息同步
 
-// WebRTC 需要借助 STUN 服务器发现双方可用于直连的公网/局域网候选地址。
+// WebRTC 需要借助 STUN 服务器发现可用于直连的候选地址。
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' }, // 主 STUN 地址。
@@ -25,7 +28,7 @@ const ICE_SERVERS: RTCConfiguration = {
 // 浏览器要求麦克风采集运行在安全上下文；localhost 是本地开发时的例外。
 const LOCALHOST_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1'])
 
-// MICROPHONE_ERROR_MESSAGES 是用户可见文案，不直接暴露 getUserMedia/WebRTC 等技术词。
+// MICROPHONE_ERROR_MESSAGES 报错文案
 const MICROPHONE_ERROR_MESSAGES = {
   default: '无法访问麦克风，请检查浏览器权限和设备状态', // 通用麦克风错误提示。
   denied: '麦克风权限被拒绝，请在浏览器地址栏中允许麦克风访问', // 用户拒绝授权时的提示。
@@ -55,7 +58,7 @@ export interface User {
 // Hook 内部统一维护页面要展示的语音房状态，组件只读取这些状态并渲染 UI。
 interface VoiceRoomState {
   localStream: MediaStream | null // 本地麦克风采集到的音频流，null 表示尚未接入。
-  remoteStream: MediaStream | null // 对端传来的音频流，null 表示暂无远端音频。
+  remoteStreams: Map<string, MediaStream> // SFU 架构下多个远端用户的音频流，key 为用户 ID。
   users: User[] // 房间成员列表，由信令消息同步，供多人席位和成员列表展示。
   hostId: string | null // 当前房主 ID，来自服务端权威状态。
   isHost: boolean // 当前用户是否为房主，用于控制离开时是否展示交接弹窗。
@@ -82,7 +85,7 @@ interface UseVoiceRoomReturn extends VoiceRoomState {
 function createEmptyVoiceRoomState(): VoiceRoomState {
   return {
     localStream: null,
-    remoteStream: null,
+    remoteStreams: new Map(),
     users: [],
     hostId: null,
     isHost: false,
@@ -146,7 +149,10 @@ function upsertRoomUser(users: User[], nextUser: User): User[] {
   return users.map(user => (user.id === nextUser.id ? { ...user, ...nextUser } : user))
 }
 
-// useVoiceRoom 负责串起三个环节：采集本地麦克风、通过 WebSocket 交换信令、用 WebRTC 播放远端音频。
+// useVoiceRoom 负责串起三个环节：
+//   1. 采集本地麦克风
+//   2. 通过 WebSocket 交换 SFU 信令（sfu_offer / sfu_answer / sfu_ice）
+//   3. 与 SFU 服务端建立单条 PeerConnection，接收多路远端音频流
 export function useVoiceRoom(): UseVoiceRoomReturn {
   // state 会驱动 React 页面刷新，例如成员席位、房主标记、远程音频和连接状态。
   const [state, setState] = useState<VoiceRoomState>(createEmptyVoiceRoomState)
@@ -170,11 +176,11 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
   }, [])
 
   // 初始化本地麦克风。成功后把 MediaStream 同时放进 ref 和 state：
-  // ref 供 WebRTC 添加音轨使用，state 供页面展示“本地音频已连接”。
+  // ref 供 WebRTC 添加音轨使用，state 供页面展示"本地音频已连接"。
   // deviceId 可选，不传时使用浏览器默认麦克风。
   const initLocalStream = useCallback(async (deviceId?: string) => {
     try {
-      console.log('Requesting microphone access...', deviceId ? `deviceId: ${deviceId}` : '(default)')
+      console.log('正在请求麦克风权限...', deviceId ? `deviceId: ${deviceId}` : '(默认)')
 
       const isLocalhost = LOCALHOST_HOSTNAMES.has(window.location.hostname)
       // 非 localhost 页面必须是安全上下文，否则浏览器会阻止麦克风采集。
@@ -198,7 +204,7 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
         video: false,
       })
 
-      console.log('Microphone ready, tracks:', stream.getAudioTracks().length)
+      console.log('麦克风已就绪, tracks:', stream.getAudioTracks().length)
 
       if (stream.getAudioTracks().length === 0) {
         throw new Error('NO_AUDIO_TRACK')
@@ -213,7 +219,7 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
       }))
       return stream
     } catch (err) {
-      console.error('Failed to get microphone stream:', err)
+      console.error('获取麦克风流失败:', err)
 
       const error = err instanceof Error ? err : new Error('UNKNOWN_MEDIA_ERROR')
       setState(prev => ({
@@ -226,7 +232,7 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
   }, [])
 
   // refreshAudioDevices 枚举当前可用的音频输入/输出设备，供 SettingsModal 设备下拉框展示。
-  // 设备标签可能为空（浏览器隐私策略限制），此时用 "麦克风 1"、"麦克风 2" 等序号兜底。
+  // 设备标签可能为空（浏览器隐私策略限制），此时用"麦克风 1"、"麦克风 2"等序号兜底。
   const refreshAudioDevices = useCallback(async () => {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices()
@@ -249,7 +255,7 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
         availableSpeakers: speakers,
       }))
     } catch (err) {
-      console.error('Failed to enumerate devices:', err)
+      console.error('枚举设备失败:', err)
     }
   }, [])
 
@@ -274,50 +280,79 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
         }
       }
 
-      console.log('Microphone switched to deviceId:', deviceId)
+      console.log('已切换麦克风设备:', deviceId)
     },
     [initLocalStream],
   )
 
-  // createPeerConnection 创建 WebRTC 连接，并绑定音轨、ICE 和连接状态事件。
+  // createPeerConnection 创建与 SFU 服务端的单条 PeerConnection，加入本地音轨，
+  // 并绑定 ontrack（接收多路远端音频）、onicecandidate（转发 ICE 给 SFU）和连接状态事件。
   const createPeerConnection = useCallback(() => {
-    console.log('Creating WebRTC peer connection...')
+    console.log('[sfu] 正在创建 SFU PeerConnection...')
     const pc = new RTCPeerConnection(ICE_SERVERS)
 
-    // 把本地麦克风音轨加入连接，对端收到后才能播放我们的声音。
+    // 把本地麦克风音轨加入连接，SFU 服务端收到后转发给房间内其他成员。
     if (localStreamRef.current) {
-      console.log('Adding local tracks to peer connection...')
+      console.log('[sfu] 正在将本地音轨添加到 SFU PeerConnection...')
       localStreamRef.current.getTracks().forEach(track => {
         pc.addTrack(track, localStreamRef.current!)
       })
     }
 
-    // 对端音轨到达时，浏览器会触发 ontrack；这里把远端流写入 state 交给 audio 标签播放。
+    // ontrack 处理 SFU 服务端转发来的各路远端音频。
+    // SFU 服务端为每个远端用户创建一个音轨，label 格式为 "audio_<userId>"。
+    // 前端根据 label 提取 userId，将 track 归入该用户的 MediaStream。
     pc.ontrack = event => {
-      console.log('Received remote media stream')
-      setState(prev => ({ ...prev, remoteStream: event.streams[0] }))
+      console.log('[sfu] 收到远端音轨:', event.track.label)
+      // 从 track label 中提取源用户 ID，格式为 "audio_<userId>"。
+      const sourceUserId = event.track.label.replace(/^audio_/, '')
+      if (!sourceUserId) {
+        console.warn('[sfu] 收到无法识别来源的音轨:', event.track.label)
+        return
+      }
+
+      setState(prev => {
+        const newStreams = new Map(prev.remoteStreams)
+        let userStream = newStreams.get(sourceUserId)
+
+        if (!userStream) {
+          // 该用户的首条音轨，创建新的 MediaStream。
+          userStream = new MediaStream([event.track])
+          newStreams.set(sourceUserId, userStream)
+          console.log('[sfu] 为用户创建新音频流:', sourceUserId)
+        } else {
+          // 已有该用户的流，添加新音轨（通常 SFU 每用户只发一条 audio track）。
+          // 先移除旧音轨再添加新音轨，避免多个同类型音轨冲突。
+          userStream.getAudioTracks().forEach(t => userStream!.removeTrack(t))
+          userStream.addTrack(event.track)
+          console.log('[sfu] 已替换用户的音轨:', sourceUserId)
+        }
+
+        return { ...prev, remoteStreams: newStreams }
+      })
     }
 
-    // ICE candidate 是浏览器发现的可连接地址，需要通过信令服务器转发给房间里的另一端。
+    // ICE candidate 收集后发给 SFU 服务端，由 SFU 统一管理 ICE 交换。
     pc.onicecandidate = event => {
       if (event.candidate) {
-        signalingClientRef.current?.sendIce(event.candidate)
+        signalingClientRef.current?.sendSFUIce(event.candidate)
       }
     }
 
-    // WebRTC 真正连通后更新页面状态；失败/断开状态由 signaling handler 继续兜底处理。
+    // WebRTC 连通后更新页面状态。
     pc.onconnectionstatechange = () => {
-      console.log('WebRTC connection state:', pc.connectionState)
+      console.log('[sfu] SFU 连接状态:', pc.connectionState)
       if (pc.connectionState === 'connected') {
         setState(prev => ({ ...prev, isConnected: true }))
       }
+      // 连接断开/失败时，通过 signaling handler 兜底处理。
     }
 
     pcRef.current = pc
     return pc
   }, [])
 
-  // syncUsersFromSignaling 只同步页面成员和房主状态，不处理 Offer/Answer/ICE 协商。
+  // syncUsersFromSignaling 根据信令消息同步成员列表和房主状态，不处理 Offer/Answer/ICE 协商。
   const syncUsersFromSignaling = useCallback((data: SignalingMessage) => {
     // waiting 和 room_ready 都会携带服务端分配给当前连接的 user_id。
     if (data.user_id && (data.type === 'waiting' || data.type === 'room_ready')) {
@@ -327,13 +362,15 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
     if (data.type === 'waiting' && data.user_id) {
       const payload = data.payload as WaitingPayload | undefined
       // 房间只有自己时，也要先把自己放进成员列表，页面才能展示房主席位。
-      const currentUser = createRoomUser(data.user_id, currentUsernameRef.current, state.isMuted)
-      setState(prev => ({
-        ...prev,
-        users: upsertRoomUser(prev.users, currentUser),
-        hostId: payload?.host_id || prev.hostId,
-        isHost: Boolean((payload?.host_id || prev.hostId) && (payload?.host_id || prev.hostId) === data.user_id),
-      }))
+      setState(prev => {
+        const currentUser = createRoomUser(data.user_id!, currentUsernameRef.current, prev.isMuted)
+        return {
+          ...prev,
+          users: upsertRoomUser(prev.users, currentUser),
+          hostId: payload?.host_id || prev.hostId,
+          isHost: Boolean((payload?.host_id || prev.hostId) && (payload?.host_id || prev.hostId) === data.user_id),
+        }
+      })
       return
     }
 
@@ -388,68 +425,102 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
       // host_changed 是显式房主变更事件，即使成员列表没变化，也要刷新房主权限。
       syncHostState(payload.host_id)
     }
-  }, [state.isMuted, syncHostState])
+  }, [syncHostState])
 
-  // 处理后端转发来的信令消息。成员/房主状态先同步，Offer/Answer/ICE 再交给 WebRTC handler。
-  const handleSignaling = useCallback(async (data: SignalingMessage) => {
-    syncUsersFromSignaling(data)
+  // 处理 SFU 信令消息。成员/房主状态先同步，再处理信令协商消息。
+  // 客户端发起 Offer：收到 waiting/room_ready 后创建 Offer 并发送。
+  const handleSignaling = useCallback(
+    async (data: SignalingMessage) => {
+      syncUsersFromSignaling(data)
 
-    await handleWebRTCSignaling(data, {
-      getPeerConnection: () => pcRef.current,
-      clearPeerConnection: () => {
-        pcRef.current = null
-      },
-      createPeerConnection,
-      sendOffer: offer => signalingClientRef.current?.sendOffer(offer),
-      sendAnswer: answer => signalingClientRef.current?.sendAnswer(answer),
-      setConnected: connected => setState(prev => ({ ...prev, isConnected: connected })),
-      clearRemoteStream: () => setState(prev => ({ ...prev, remoteStream: null })),
-      setError: message => setState(prev => ({ ...prev, error: message })),
-      serverErrorMessage: MICROPHONE_ERROR_MESSAGES.server,
-    })
-  }, [createPeerConnection, syncUsersFromSignaling])
+      // 收到 waiting 或 room_ready 后，客户端创建 SDP Offer 并发给服务端。
+      if (data.type === 'waiting' || data.type === 'room_ready') {
+        const pc = pcRef.current
+        if (!pc) {
+          console.warn('[sfu] 没有 PeerConnection 可用来创建 Offer')
+          return
+        }
+        console.log('[sfu] 收到', data.type, '后正在创建 Offer...')
+        const offer = await pc.createOffer()
+        await pc.setLocalDescription(offer)
+        signalingClientRef.current?.sendSFUOffer(offer)
+        return
+      }
 
-  // 加入房间的完整流程：先拿麦克风，再连 WebSocket，最后创建 WebRTC 连接等待信令。
-  const joinRoom = useCallback(async (roomId: string, username: string) => {
-    currentUsernameRef.current = username
-
-    const stream = await initLocalStream()
-    if (!stream) return false
-
-    // 加入房间时刷新设备列表，供 SettingsModal 展示下拉选项。
-    await refreshAudioDevices()
-
-    setState(prev => ({
-      ...prev,
-      // 成员列表只保存后端确认过的真实成员；确认前的"我"由房间页兜底展示。
-      users: [],
-      hostId: null,
-      isHost: false,
-      error: null,
-    }))
-
-    // SignalingClient 只负责连接信令服务器，收到的信令再交回 hook 驱动 WebRTC 协商。
-    const signalingClient = new SignalingClient({
-      roomId,
-      username,
-      handlers: {
-        onOpen: () => {
-          signalingClient.sendJoin()
+      await handleWebRTCSignaling(data, {
+        getPeerConnection: () => pcRef.current,
+        setRemoteStream: (userId, stream) => {
+          setState(prev => {
+            const newStreams = new Map(prev.remoteStreams)
+            newStreams.set(userId, stream)
+            return { ...prev, remoteStreams: newStreams }
+          })
         },
-        onMessage: message => {
-          void handleSignaling(message)
+        removeRemoteStream: userId => {
+          setState(prev => {
+            const newStreams = new Map(prev.remoteStreams)
+            newStreams.delete(userId)
+            return { ...prev, remoteStreams: newStreams }
+          })
         },
-        onError: () => {
-          setState(prev => ({ ...prev, error: MICROPHONE_ERROR_MESSAGES.signaling }))
-        },
-      },
-    })
-    signalingClientRef.current = signalingClient
-    signalingClient.connect()
+        sendSFUOffer: offer => signalingClientRef.current?.sendSFUOffer(offer),
+        sendSFUIce: candidate => signalingClientRef.current?.sendSFUIce(candidate),
+        setConnected: connected => setState(prev => ({ ...prev, isConnected: connected })),
+        setError: message => setState(prev => ({ ...prev, error: message })),
+        serverErrorMessage: MICROPHONE_ERROR_MESSAGES.server,
+      })
+    },
+    [syncUsersFromSignaling],
+  )
 
-    createPeerConnection()
-    return true
-  }, [initLocalStream, handleSignaling, createPeerConnection])
+  // 加入房间的完整流程：先拿麦克风，再连 WebSocket 和创建 PeerConnection。
+  // 客户端加入后收到 waiting/room_ready，触发客户端创建 SDP Offer 并发起协商。
+  const joinRoom = useCallback(
+    async (roomId: string, username: string) => {
+      currentUsernameRef.current = username
+
+      const stream = await initLocalStream()
+      if (!stream) return false
+
+      // 加入房间时刷新设备列表，供 SettingsModal 展示下拉选项。
+      await refreshAudioDevices()
+
+      setState(prev => ({
+        ...prev,
+        users: [],
+        hostId: null,
+        isHost: false,
+        error: null,
+        remoteStreams: new Map(),
+      }))
+
+      // 先创建与 SFU 服务端的 PeerConnection（加入本地音轨），
+      // 再连接信令。客户端加入后收到 waiting/room_ready 时创建并发送 Offer。
+      createPeerConnection()
+
+      // SignalingClient 只负责连接信令服务器，收到的信令再交回 hook 驱动 WebRTC 协商。
+      const signalingClient = new SignalingClient({
+        roomId,
+        username,
+        handlers: {
+          onOpen: () => {
+            signalingClient.sendJoin()
+          },
+          onMessage: message => {
+            void handleSignaling(message)
+          },
+          onError: () => {
+            setState(prev => ({ ...prev, error: MICROPHONE_ERROR_MESSAGES.signaling }))
+          },
+        },
+      })
+      signalingClientRef.current = signalingClient
+      signalingClient.connect()
+
+      return true
+    },
+    [initLocalStream, handleSignaling, createPeerConnection, refreshAudioDevices],
+  )
 
   // 离开房间时先向服务端发送 leave，再释放本地麦克风、WebSocket 和 WebRTC 资源。
   // nextHostId 只在当前用户是房主时有意义；服务端仍会校验它是否在线。
@@ -485,48 +556,32 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
     if (localStreamRef.current) {
       const audioTrack = localStreamRef.current.getAudioTracks()[0]
       if (audioTrack) {
-        audioTrack.enabled = state.isMuted
-        setState(prev => {
-          const nextMuted = !prev.isMuted
-          return {
-            ...prev,
-            isMuted: nextMuted,
-            users: prev.users.map(user => {
-              // 当前用户可能还没有拿到 user_id，因此这里同时用昵称做一次兜底匹配。
-              const isCurrentUser = user.id === currentUserIdRef.current || user.username === currentUsernameRef.current
-              return isCurrentUser ? { ...user, isMuted: nextMuted } : user
-            }),
-          }
-        })
+        audioTrack.enabled = !audioTrack.enabled
+        setState(prev => ({ ...prev, isMuted: !audioTrack.enabled }))
       }
     }
-  }, [state.isMuted])
+  }, [])
 
-  // 扬声器开关控制页面是否播放远端 audio，不影响自己是否把声音发给别人。
+  // 切换扬声器播放开关；只是改变了 state.isSpeakerOn 的值，实际的 audio 元素由 RemoteAudio 组件响应。
   const toggleSpeaker = useCallback(() => {
     setState(prev => ({ ...prev, isSpeakerOn: !prev.isSpeakerOn }))
   }, [])
 
-  // 组件卸载时只做资源清理，不再发送 leave，避免页面销毁阶段异步发送失败导致噪声日志。
+  // 页面关闭或路由离开时释放所有资源。
   useEffect(() => {
     return () => {
       if (pcRef.current) {
         pcRef.current.close()
         pcRef.current = null
       }
-
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach(track => track.stop())
         localStreamRef.current = null
       }
-
       if (signalingClientRef.current) {
         signalingClientRef.current.close()
         signalingClientRef.current = null
       }
-
-      currentUserIdRef.current = null
-      currentUsernameRef.current = ''
     }
   }, [])
 

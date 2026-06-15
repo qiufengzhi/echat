@@ -10,7 +10,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/pion/webrtc/v4"
+
+	"voice-room-backend/sfu"
 )
+
+// sfuServer 是全局 SFU 引擎实例，管理所有房间的 WebRTC PeerConnection 和音频转发。
+var sfuServer = sfu.NewSFUServer()
 
 // StartCleanupLoop 启动空房间清理协程。
 // 正常离开时房间会立即尝试删除；这里主要兜底处理异常断开后残留的空房间。
@@ -33,7 +39,7 @@ func createRoom(roomID string) *Room {
 		Clients: make(map[string]*Client),
 	}
 	allActiveRooms[roomID] = r
-	log.Printf("room created: %s", roomID)
+	log.Printf("房间已创建: %s", roomID)
 	return r
 }
 
@@ -65,7 +71,7 @@ func HandleConnection(conn *websocket.Conn) {
 	allConnectedClients[userID] = client
 	clientLock.Unlock()
 
-	log.Printf("client connected: %s", userID)
+	log.Printf("客户端已连接: %s", userID)
 
 	go writePump(client) // 统一串行写 WebSocket，避免并发写连接。
 	readPump(client)     // 当前协程负责读取并按消息顺序分发。
@@ -73,11 +79,11 @@ func HandleConnection(conn *websocket.Conn) {
 }
 
 // readPump 持续读取客户端发来的 WebSocket 消息，并分发给对应业务处理函数。
-// 同一连接上的消息在这里串行处理，保证 join/leave/offer 等顺序不被打乱。
+// 同一连接上的消息在这里串行处理，保证 join/leave/sfu_answer 等顺序不被打乱。
 func readPump(client *Client) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("readPump panic for %s: %v", client.ID, r)
+			log.Printf("readPump 发生 panic: %s, %v", client.ID, r)
 		}
 	}()
 
@@ -92,7 +98,7 @@ func readPump(client *Client) {
 			}
 			// 记录所有读循环结束原因，用来区分代理/网络断开和客户端主动 leave。
 			log.Printf(
-				"websocket read ended: client_id=%s room_id=%s username=%q close_code=%d close_text=%q err=%v time=%s",
+				"WebSocket 读取结束: client_id=%s room_id=%s username=%q close_code=%d close_text=%q err=%v time=%s",
 				client.ID,
 				client.RoomID,
 				client.Username,
@@ -106,7 +112,7 @@ func readPump(client *Client) {
 
 		var msg Message
 		if err := json.Unmarshal(message, &msg); err != nil {
-			log.Printf("invalid message from %s: %v", client.ID, err)
+			log.Printf("无效消息: %s, %v", client.ID, err)
 			continue
 		}
 
@@ -129,17 +135,22 @@ func writePump(client *Client) {
 	_ = client.Conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 }
 
-// handleMessage 根据消息类型把请求分发到加入房间、转发信令、离开房间或心跳响应。
+// handleMessage 根据消息类型把请求分发到 SFU 信令处理、加入房间、离开房间或心跳响应。
+//
+// SFU 信令流程（客户端发起 Offer）：
+//
+//	客户端 join → 服务端创建 Room + SFU PeerConnection → waiting/room_ready 回客户端
+//	客户端创建 Offer → sfu_offer 给服务端 → 服务端创建 Answer → sfu_answer 给客户端
+//	客户端收集到 ICE Candidate → sfu_ice 给服务端
+//	SFU 引擎收集到 ICE Candidate → sfu_ice 给客户端
 func handleMessage(client *Client, msg *Message) {
 	switch msg.Type {
 	case MsgTypeJoin: // 加入房间
 		handleJoin(client, msg)
-	case MsgTypeOffer: // 转发 WebRTC Offer
-		handleRelay(client, MsgTypeOffer, msg.Payload)
-	case MsgTypeAnswer: // 转发 WebRTC Answer
-		handleRelay(client, MsgTypeAnswer, msg.Payload)
-	case MsgTypeICE: // 转发 ICE 候选地址
-		handleRelay(client, MsgTypeICE, msg.Payload)
+	case MsgTypeSFUOffer: // 客户端发起的 SDP Offer
+		handleSFUOffer(client, msg.Payload)
+	case MsgTypeSFUICE: // 客户端的 ICE Candidate
+		handleSFUICE(client, msg.Payload)
 	case MsgTypeLeave: // 用户主动离开，可能携带房主交接目标
 		handleLeave(client, msg.Payload)
 	case MsgTypePing: // 心跳响应
@@ -147,8 +158,14 @@ func handleMessage(client *Client, msg *Message) {
 	}
 }
 
-// handleJoin 把客户端加入指定房间，并在房间可用时通知成员开始 WebRTC 信令协商。
-// 首位加入者会成为房主；后续加入者收到完整成员快照和当前房主 ID。
+// handleJoin 把客户端加入指定房间，创建 SFU PeerConnection（不生成 Offer）。
+//
+// SFU 信令流程（客户端发起 Offer）：
+//  1. 客户端 join → 服务端创建房间并创建 SFU PeerConnection
+//  2. 服务端返回 waiting 或 room_ready → 客户端创建 Offer
+//  3. 客户端发送 sfu_offer → 服务端通过 AcceptOffer 回复 sfu_answer
+//  4. SFU <-> 客户端交换 ICE Candidate（sfu_ice）
+//  5. 音轨到达 SFU → 自动转发给其他成员
 func handleJoin(client *Client, msg *Message) {
 	roomID := strings.TrimSpace(msg.RoomID)
 	if roomID == "" {
@@ -161,7 +178,7 @@ func handleJoin(client *Client, msg *Message) {
 		username = "用户" + client.ID[:8]
 	}
 
-	// 加房间和设置房主必须在同一把房间锁内完成，避免并发加入时产生多个房主。
+	// 加入信令房间（设置成员和房主）。
 	r := getOrCreateRoom(roomID)
 	r.Lock.Lock()
 	client.RoomID = roomID
@@ -169,29 +186,60 @@ func handleJoin(client *Client, msg *Message) {
 	client.JoinedAt = time.Now()
 	r.Clients[client.ID] = client
 	if r.HostID == "" {
-		// 房间没有房主时，第一位成员自动成为房主。
 		r.HostID = client.ID
 	}
-	userCount := len(r.Clients)
 	hostID := r.HostID
+	userCount := len(r.Clients)
 	r.Lock.Unlock()
 
-	log.Printf("user %s joined room %s (count=%d host=%s)", username, roomID, userCount, hostID)
+	log.Printf("用户 %s 已加入房间 %s (人数=%d 房主=%s)", username, roomID, userCount, hostID)
+
+	// --- SFU 集成：创建 PeerConnection，但不生成 Offer ---
+	// Offer 由客户端发起，服务端收到 sfu_offer 后通过 AcceptOffer 创建 Answer。
+
+	sfuRoom := sfuServer.GetOrCreateRoom(roomID)
+
+	// 注册 ICE Candidate 回调：SFU 引擎收集到 candidate 后通过 WebSocket 转发给客户端。
+	sfuRoom.SetOnICECandidate(func(clientID string, candidate webrtc.ICECandidateInit) {
+		roomLock.RLock()
+		r, ok := allActiveRooms[roomID]
+		roomLock.RUnlock()
+		if !ok {
+			return
+		}
+		r.Lock.RLock()
+		targetClient, ok := r.Clients[clientID]
+		r.Lock.RUnlock()
+		if !ok {
+			return
+		}
+		payload := SFUPayloadFromICECandidateInit(candidate)
+		sendToClient(targetClient, MsgTypeSFUICE, payload, roomID)
+	})
+
+	// 让 SFU 引擎为该客户端创建 PeerConnection（不生成 Offer）。
+	if err := sfuRoom.Join(client.ID); err != nil {
+		log.Printf("[sfu] 加入失败: %s %v", client.ID[:8], err)
+		sendError(client, "无法创建 WebRTC 连接，请重试")
+		return
+	}
+
+	// --- 房间状态广播 ---
 
 	if userCount == 1 {
-		// 第一个进入房间的用户先等待，同时拿到 host_id 用于前端展示“我是房主”。
+		// 首位成员：发送 waiting，告知其是房主。
 		sendToClient(client, MsgTypeWaiting, WaitingPayload{HostID: hostID}, roomID)
 		return
 	}
 
-	// 通知已有成员新用户已加入；新用户自己会在 room_ready 中拿到完整成员快照。
+	// 通知已有成员新用户已加入。
 	broadcastToRoom(roomID, client.ID, MsgTypeUserJoined, UserJoinedPayload{
 		UserID:   client.ID,
 		Username: username,
 		HostID:   hostID,
 	})
 
-	// 通知新加入者房间已有其他成员。前端随后可开始创建/响应 WebRTC 信令。
+	// 通知新加入者房间成员快照。
 	sendToClient(client, MsgTypeRoomReady, RoomReadyPayload{
 		Users:    getRoomUsers(roomID),
 		HostID:   hostID,
@@ -199,8 +247,62 @@ func handleJoin(client *Client, msg *Message) {
 	}, roomID)
 }
 
+// handleSFUOffer 处理客户端发来的 SDP Offer，通过 SFU 引擎创建 Answer 并返回。
+func handleSFUOffer(client *Client, payload json.RawMessage) {
+	if client.RoomID == "" {
+		sendError(client, "join a room before signaling")
+		return
+	}
+
+	var offer SFUOfferPayload
+	if err := json.Unmarshal(payload, &offer); err != nil {
+		log.Printf("sfu_offer 内容无效: %s %v", client.ID[:8], err)
+		return
+	}
+
+	sfuRoom := sfuServer.GetRoom(client.RoomID)
+	if sfuRoom == nil {
+		log.Printf("SFU 房间未找到: %s", client.RoomID)
+		return
+	}
+
+	answerSDP, err := sfuRoom.AcceptOffer(client.ID, offer.SDP)
+	if err != nil {
+		log.Printf("接受 Offer 失败: %s %v", client.ID[:8], err)
+		sendError(client, "信令协商失败")
+		return
+	}
+
+	// 将 Answer SDP 通过 sfu_answer 发回客户端。
+	sendToClient(client, MsgTypeSFUAnswer, SFUAnswerPayload{SDP: answerSDP}, client.RoomID)
+}
+
+// handleSFUICE 处理客户端发来的 ICE Candidate，传递给 SFU 引擎。
+func handleSFUICE(client *Client, payload json.RawMessage) {
+	if client.RoomID == "" {
+		sendError(client, "join a room before signaling")
+		return
+	}
+
+	var ice SFUICEPayload
+	if err := json.Unmarshal(payload, &ice); err != nil {
+		log.Printf("sfu_ice 内容无效: %s %v", client.ID[:8], err)
+		return
+	}
+
+	sfuRoom := sfuServer.GetRoom(client.RoomID)
+	if sfuRoom == nil {
+		log.Printf("SFU 房间未找到: %s", client.RoomID)
+		return
+	}
+
+	if err := sfuRoom.AcceptICECandidate(client.ID, ice.ToWebRTCICECandidateInit()); err != nil {
+		log.Printf("ICE Candidate 添加失败: %s %v", client.ID[:8], err)
+	}
+}
+
 // handleRelay 把 offer、answer、ice 这类 WebRTC 信令原样转发给同房间其他成员。
-// 后端只负责转发，不解析 SDP 或 ICE 内容。
+// 已弃用，由 SFU 替代。保留以供旧客户端兼容，当前不被 handleMessage 调用。
 func handleRelay(client *Client, msgType string, payload json.RawMessage) {
 	if client.RoomID == "" {
 		sendError(client, "join a room before signaling")
@@ -208,7 +310,7 @@ func handleRelay(client *Client, msgType string, payload json.RawMessage) {
 	}
 
 	broadcastRawToRoom(client.RoomID, client.ID, msgType, payload)
-	log.Printf("relayed %s from %s", msgType, client.ID[:8])
+	log.Printf("已转发 %s from %s", msgType, client.ID[:8])
 }
 
 // handleLeave 处理客户端主动离开房间的请求。
@@ -217,12 +319,12 @@ func handleLeave(client *Client, payload json.RawMessage) {
 	var leavePayload LeavePayload
 	if len(payload) > 0 {
 		if err := json.Unmarshal(payload, &leavePayload); err != nil {
-			log.Printf("invalid leave payload from %s: %v", client.ID, err)
+			log.Printf("离开消息无效: %s %v", client.ID, err)
 		}
 	}
 
 	log.Printf(
-		"user requested leave: client_id=%s room_id=%s username=%q next_host=%q time=%s",
+		"用户请求离开: client_id=%s room_id=%s username=%q next_host=%q time=%s",
 		client.ID,
 		client.RoomID,
 		client.Username,
@@ -232,11 +334,22 @@ func handleLeave(client *Client, payload json.RawMessage) {
 	disconnect(client, strings.TrimSpace(leavePayload.NextHostID))
 }
 
-// disconnect 清理客户端、房间成员关系和连接资源，并在需要时通知其他房间成员。
+// disconnect 清理客户端、房间成员关系、SFU PeerConnection 和连接资源。
 // preferredNextHostID 只在离开者是当前房主时生效，且必须指向仍在房间内的成员。
 func disconnect(client *Client, preferredNextHostID string) {
 	client.closeOnce.Do(func() {
 		roomID := client.RoomID
+
+		// 先清理 SFU 连接，确保停止音轨转发。
+		if roomID != "" {
+			if sfuRoom := sfuServer.GetRoom(roomID); sfuRoom != nil {
+				sfuRoom.Leave(client.ID)
+				// 如果 SFU 房间已空，也清理 SFU 房间。
+				if sfuRoom.PeerCount() == 0 {
+					sfuServer.RemoveRoom(roomID)
+				}
+			}
+		}
 
 		// 如果客户端已加入房间，则先更新房间成员和房主，再广播离开事件。
 		if roomID != "" {
@@ -255,12 +368,10 @@ func disconnect(client *Client, preferredNextHostID string) {
 				remaining := len(r.Clients)
 
 				if remaining == 0 {
-					// 最后一位成员离开时清空房主，并在锁外删除空房间。
 					r.HostID = ""
 					shouldDeleteRoom = true
 				} else {
 					if wasHost {
-						// 房主离开时优先使用指定交接对象，否则服务端选择一位剩余成员。
 						r.HostID = chooseNextHostID(r, preferredNextHostID)
 					}
 					nextHostID = r.HostID
@@ -268,14 +379,12 @@ func disconnect(client *Client, preferredNextHostID string) {
 				r.Lock.Unlock()
 
 				if remaining > 0 {
-					// user_left 总是广播，用于移除席位；HostID 让前端同步离开后的房主状态。
 					broadcastToRoom(roomID, client.ID, MsgTypeUserLeft, UserLeftPayload{
 						UserID: client.ID,
 						HostID: nextHostID,
 					})
 
 					if wasHost && nextHostID != "" && nextHostID != client.ID {
-						// host_changed 是更明确的房主变更事件，便于前端单独触发房主 UI 刷新。
 						broadcastToRoom(roomID, client.ID, MsgTypeHostChanged, map[string]string{
 							"host_id": nextHostID,
 						})
@@ -291,27 +400,27 @@ func disconnect(client *Client, preferredNextHostID string) {
 					r.Lock.RUnlock()
 					if empty {
 						delete(allActiveRooms, roomID)
-						log.Printf("room removed: %s", roomID)
+						log.Printf("房间已删除: %s", roomID)
 					}
 				}
 				roomLock.Unlock()
 			}
 		}
 
-		// 从全局客户端索引移除，避免后续诊断或广播误认为该连接仍在线。
+		// 从全局客户端索引移除。
 		clientLock.Lock()
 		delete(allConnectedClients, client.ID)
 		clientLock.Unlock()
 
-		// 关闭发送队列会让 writePump 退出；随后关闭底层 WebSocket。
+		// 关闭发送队列和底层 WebSocket。
 		close(client.Send)
 		_ = client.Conn.Close()
-		log.Printf("client disconnected: %s", client.ID[:8])
+		log.Printf("客户端已断开: %s", client.ID[:8])
 	})
 }
 
 // chooseNextHostID 在当前房间剩余成员中选择下一任房主。
-// preferredNextHostID 有效时优先使用；否则从排序后的成员 ID 中随机选择，排序让随机池稳定可观察。
+// preferredNextHostID 有效时优先使用；否则从排序后的成员 ID 中随机选择。
 func chooseNextHostID(room *Room, preferredNextHostID string) string {
 	if preferredNextHostID != "" {
 		if _, ok := room.Clients[preferredNextHostID]; ok {
@@ -339,7 +448,7 @@ func sendToClient(client *Client, msgType string, payload interface{}, roomID st
 	if payload != nil {
 		data, err := json.Marshal(payload)
 		if err != nil {
-			log.Printf("marshal payload failed for %s: %v", msgType, err)
+			log.Printf("payload 序列化失败: %s %v", msgType, err)
 			return
 		}
 		rawPayload = data
@@ -362,15 +471,14 @@ func sendError(client *Client, message string) {
 func sendRaw(client *Client, msg Message) {
 	data, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("marshal message failed: %v", err)
+		log.Printf("消息序列化失败: %v", err)
 		return
 	}
 
 	select {
 	case client.Send <- data:
 	default:
-		// 慢客户端不再消费时直接丢弃，避免拖慢整个房间。
-		log.Printf("dropping message for slow client: %s", client.ID[:8])
+		log.Printf("慢客户端消息丢弃: %s", client.ID[:8])
 	}
 }
 
@@ -380,7 +488,7 @@ func broadcastToRoom(roomID, senderID, msgType string, payload interface{}) {
 	if payload != nil {
 		data, err := json.Marshal(payload)
 		if err != nil {
-			log.Printf("marshal broadcast payload failed for %s: %v", msgType, err)
+			log.Printf("广播 payload 序列化失败: %s %v", msgType, err)
 			return
 		}
 		rawPayload = data
@@ -390,7 +498,6 @@ func broadcastToRoom(roomID, senderID, msgType string, payload interface{}) {
 }
 
 // broadcastRawToRoom 把原始信令消息广播给房间内除发送者外的所有成员。
-// offer/answer/ice 会走这里，因为后端不需要解析 WebRTC 载荷。
 func broadcastRawToRoom(roomID, senderID, msgType string, payload json.RawMessage) {
 	roomLock.RLock()
 	r, ok := allActiveRooms[roomID]
@@ -408,11 +515,10 @@ func broadcastRawToRoom(roomID, senderID, msgType string, payload json.RawMessag
 
 	data, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("marshal broadcast message failed: %v", err)
+		log.Printf("广播消息序列化失败: %v", err)
 		return
 	}
 
-	// 先复制接收者列表，再逐个发送，避免网络写入或慢客户端长期占用房间锁。
 	r.Lock.RLock()
 	recipients := make([]*Client, 0, len(r.Clients))
 	for id, client := range r.Clients {
@@ -426,8 +532,7 @@ func broadcastRawToRoom(roomID, senderID, msgType string, payload json.RawMessag
 		select {
 		case client.Send <- data:
 		default:
-			// 单个慢客户端的阻塞不会影响房间里其他人的消息发送。
-			log.Printf("dropping room message for slow client: %s", client.ID[:8])
+			log.Printf("房间广播消息丢弃(慢客户端): %s", client.ID[:8])
 		}
 	}
 }
@@ -449,7 +554,6 @@ func getRoomUsers(roomID string) []RoomUser {
 	}
 	r.Lock.RUnlock()
 
-	// 复制客户端后再排序，避免排序过程持有房间锁影响加入/离开。
 	slices.SortFunc(clients, func(a, b *Client) int {
 		if a.JoinedAt.Before(b.JoinedAt) {
 			return -1
@@ -495,7 +599,6 @@ func cleanupIdleRooms() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		// 正常断开时也会删房间，这里主要兜底清理异常情况下残留的空房间。
 		roomLock.Lock()
 		for id, r := range allActiveRooms {
 			r.Lock.RLock()
@@ -503,7 +606,7 @@ func cleanupIdleRooms() {
 			r.Lock.RUnlock()
 			if empty {
 				delete(allActiveRooms, id)
-				log.Printf("idle room cleaned: %s", id)
+				log.Printf("清理空闲房间: %s", id)
 			}
 		}
 		roomLock.Unlock()

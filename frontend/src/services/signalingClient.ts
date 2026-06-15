@@ -43,7 +43,7 @@ export class SignalingClient {
 
   // connect 建立信令服务器 WebSocket 连接，并绑定浏览器 WebSocket 事件。
   connect(): WebSocket {
-    console.log('Connecting signaling WebSocket:', {
+    console.log('正在连接信令 WebSocket:', {
       wsUrl: this.wsUrl,
       roomId: this.roomId,
       username: this.username,
@@ -53,7 +53,7 @@ export class SignalingClient {
     this.ws = ws
 
     ws.onopen = () => {
-      console.log('Signaling WebSocket connected:', {
+      console.log('信令 WebSocket 已连接:', {
         wsUrl: this.wsUrl,
         roomId: this.roomId,
         username: this.username,
@@ -63,13 +63,13 @@ export class SignalingClient {
     }
 
     ws.onmessage = event => {
-      console.log('Received signaling WebSocket message:', {
+      console.log('收到信令 WebSocket 消息:', {
         wsUrl: this.wsUrl,
         data: event.data,
       })
       const message = JSON.parse(event.data) as SignalingMessage
       if (message.type === 'pong') {
-        console.log('Received signaling WebSocket pong:', {
+        console.log('收到信令 WebSocket pong:', {
           wsUrl: this.wsUrl,
           roomId: this.roomId,
           time: new Date().toISOString(),
@@ -81,7 +81,7 @@ export class SignalingClient {
 
     ws.onerror = error => {
       // onerror 不会暴露太多底层原因，因此把信令服务器地址和当前房间一起打出来方便和后端/Nginx 日志对齐。
-      console.error('Signaling WebSocket connection failed:', {
+      console.error('信令 WebSocket 连接失败:', {
         wsUrl: this.wsUrl,
         roomId: this.roomId,
         readyState: ws.readyState,
@@ -94,10 +94,10 @@ export class SignalingClient {
 
     ws.onclose = event => {
       // 记录浏览器能拿到的关闭细节，排查代理超时或异常断开时重点看 code 和 wasClean。
-      console.log('Signaling WebSocket closed:', {
+      console.log('信令 WebSocket 已关闭:', {
         wsUrl: this.wsUrl,
         code: event.code,
-        reason: event.reason || '(empty)',
+        reason: event.reason || '(空)',
         wasClean: event.wasClean,
         readyState: ws.readyState,
         roomId: this.roomId,
@@ -116,7 +116,7 @@ export class SignalingClient {
   // send 把结构化信令消息序列化后发给信令服务器。
   send<TPayload>(message: OutgoingSignalingMessage<TPayload>): void {
     if (this.ws?.readyState !== WebSocket.OPEN) {
-      console.warn('Signaling WebSocket is not open, message skipped:', {
+      console.warn('信令 WebSocket 未打开，跳过消息:', {
         wsUrl: this.wsUrl,
         roomId: this.roomId,
         readyState: this.ws?.readyState,
@@ -145,30 +145,29 @@ export class SignalingClient {
     })
   }
 
-  // sendOffer 把本端创建的 SDP offer 转发给房间内对端。
-  sendOffer(offer: RTCSessionDescriptionInit): void {
+  // --- SFU 信令方法 ---
+  // 客户端发起 SDP Offer，服务端回复 Answer。
+
+  // sendSFUOffer 把本端创建的 SDP Offer 发给 SFU 服务端以启动 SDP 协商。
+  sendSFUOffer(offer: RTCSessionDescriptionInit): void {
     this.send({
-      type: 'offer',
+      type: 'sfu_offer',
       room_id: this.roomId,
       payload: offer,
     })
   }
 
-  // sendAnswer 把本端创建的 SDP answer 转发给房间内对端。
-  sendAnswer(answer: RTCSessionDescriptionInit): void {
+  // sendSFUIce 把浏览器发现的 ICE Candidate 发给 SFU 服务端。
+  sendSFUIce(candidate: RTCIceCandidate): void {
     this.send({
-      type: 'answer',
+      type: 'sfu_ice',
       room_id: this.roomId,
-      payload: answer,
-    })
-  }
-
-  // sendIce 把浏览器发现的 ICE candidate 转发给房间内对端。
-  sendIce(candidate: RTCIceCandidate): void {
-    this.send({
-      type: 'ice',
-      room_id: this.roomId,
-      payload: candidate,
+      payload: {
+        candidate: candidate.candidate,
+        sdpMLineIndex: candidate.sdpMLineIndex,
+        sdpMid: candidate.sdpMid,
+        usernameFragment: candidate.usernameFragment,
+      },
     })
   }
 

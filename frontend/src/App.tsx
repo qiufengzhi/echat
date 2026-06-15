@@ -187,7 +187,7 @@ function App() {
           isHost={voiceRoom.isHost}
           users={voiceRoom.users}
           localStream={voiceRoom.localStream}
-          remoteStream={voiceRoom.remoteStream}
+          remoteStreams={voiceRoom.remoteStreams}
           isConnected={voiceRoom.isConnected}
           isMuted={voiceRoom.isMuted}
           isSpeakerOn={voiceRoom.isSpeakerOn}

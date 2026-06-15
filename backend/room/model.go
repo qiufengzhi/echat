@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/pion/webrtc/v4"
 )
 
 // Client 表示一个已连接的浏览器客户端，以及它在房间中的成员信息。
@@ -61,6 +62,54 @@ type UserLeftPayload struct {
 // LeavePayload 是客户端主动离开时可携带的载荷，房主可用它指定下一任房主。
 type LeavePayload struct {
 	NextHostID string `json:"next_host_id,omitempty"` // 期望交接给的成员 ID；为空或无效时服务端自动选择。
+}
+
+// ---------- SFU 信令载荷类型 ----------
+
+// SFUOfferPayload 是客户端发起的 SDP Offer，发给 SFU 引擎用于创建 Answer。
+type SFUOfferPayload struct {
+	SDP string `json:"sdp"` // SDP Offer 字符串
+}
+
+// SFUAnswerPayload 是 SFU 引擎回复的 SDP Answer，发给客户端完成协商。
+type SFUAnswerPayload struct {
+	SDP string `json:"sdp"` // SDP Answer 字符串
+}
+
+// SFUICEPayload 是 SFU 与客户端之间交换的 ICE Candidate。
+// 服务端转发给客户端时携带 candidate 和 usernameFragment；客户端发给服务端时同理。
+type SFUICEPayload struct {
+	Candidate        string  `json:"candidate"`
+	SDPMid           string  `json:"sdpMid"`
+	SDPMLineIndex    *uint16 `json:"sdpMLineIndex"`
+	UsernameFragment string  `json:"usernameFragment"`
+}
+
+// ToWebRTCICECandidateInit 将 SFUICEPayload 转换为 pion/webrtc 的 ICECandidateInit。
+func (p *SFUICEPayload) ToWebRTCICECandidateInit() webrtc.ICECandidateInit {
+	return webrtc.ICECandidateInit{
+		Candidate:        p.Candidate,
+		SDPMid:           &p.SDPMid,
+		SDPMLineIndex:    p.SDPMLineIndex,
+		UsernameFragment: &p.UsernameFragment,
+	}
+}
+
+// SFUPayloadFromICECandidateInit 从 pion/webrtc 的 ICECandidateInit 转换为 SFU 信令载荷。
+func SFUPayloadFromICECandidateInit(candidate webrtc.ICECandidateInit) SFUICEPayload {
+	p := SFUICEPayload{
+		Candidate: candidate.Candidate,
+	}
+	if candidate.SDPMid != nil {
+		p.SDPMid = *candidate.SDPMid
+	}
+	if candidate.SDPMLineIndex != nil {
+		p.SDPMLineIndex = candidate.SDPMLineIndex
+	}
+	if candidate.UsernameFragment != nil {
+		p.UsernameFragment = *candidate.UsernameFragment
+	}
+	return p
 }
 
 // Message 是前后端 WebSocket 共用的信令信封，具体 payload 结构由 Type 决定。
