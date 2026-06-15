@@ -300,14 +300,33 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
     }
 
     // ontrack 处理 SFU 服务端转发来的各路远端音频。
-    // SFU 服务端为每个远端用户创建一个音轨，label 格式为 "audio_<userId>"。
-    // 前端根据 label 提取 userId，将 track 归入该用户的 MediaStream。
+    // SFU 服务端为每个远端用户创建一个 relay track，streamID 格式为 "audio_<userId>"，
+    // 浏览器通过 event.streams[0].id 携带该 streamID。
+    // 注意：event.track.label 对远端轨在 Chrome 中返回空字符串，不能用它识别来源。
     pc.ontrack = event => {
-      console.log('[sfu] 收到远端音轨:', event.track.label)
-      // 从 track label 中提取源用户 ID，格式为 "audio_<userId>"。
-      const sourceUserId = event.track.label.replace(/^audio_/, '')
+      // 优先从 event.streams[0].id 获取 SFU 设定的流标识，
+      // 兜底再用 event.track.label（部分浏览器可能有值）。
+      const streamId =
+        event.streams && event.streams[0] ? event.streams[0].id : event.track.label
+      console.log('[sfu] 收到音轨 streamId:', streamId, 'trackLabel:', event.track.label)
+
+      // 只有 SFU 转发的音轨才以 "audio_" 开头，本地 addTrack 触发的 ontrack 不会有这个前缀。
+      // 过滤掉非 SFU 转发的音轨，避免把本地麦克风音轨误认为是远端音轨。
+      if (!streamId.startsWith('audio_')) {
+        console.log('[sfu] 忽略非 SFU 音轨 streamId:', streamId)
+        return
+      }
+
+      // 从 streamId 中提取源用户 ID，格式为 "audio_<userId>"。
+      const sourceUserId = streamId.replace(/^audio_/, '')
       if (!sourceUserId) {
-        console.warn('[sfu] 收到无法识别来源的音轨:', event.track.label)
+        console.warn('[sfu] 收到无法识别来源的音轨 streamId:', streamId)
+        return
+      }
+
+      // 过滤掉自己的音轨，避免听到自己的回声。
+      if (sourceUserId === currentUserIdRef.current) {
+        console.warn('[sfu] 忽略自己的音轨:', sourceUserId)
         return
       }
 

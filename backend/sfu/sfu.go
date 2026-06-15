@@ -360,6 +360,9 @@ func (r *SFURoom) HasPeer(clientID string) bool {
 func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemote) {
 	r.lock.Lock()
 
+	// 获取发布音频的客户端，用于后续设置 outgoingRelays。
+	sourcePeer := r.peers[sourceID]
+
 	// 为房间内每个其他客户端创建中继音轨。
 	for subscriberID, subscriber := range r.peers {
 		if subscriberID == sourceID {
@@ -369,7 +372,7 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 		relayTrack, err := webrtc.NewTrackLocalStaticRTP(
 			remoteTrack.Codec().RTPCodecCapability,
 			"audio",
-			sourceID, // label 为源 clientID，接收端据此识别声音来源
+			"audio_"+sourceID, // label 格式为 "audio_<userId>"，前端据此识别声音来源
 		)
 		if err != nil {
 			log.Printf("[sfu] 创建中继轨失败: source=%s sub=%s err=%v",
@@ -383,12 +386,13 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 			continue
 		}
 
-		subscriber.outgoingRelays[sourceID] = relayTrack
+		// 关键修复：将中继音轨记录在 source 的 outgoingRelays 中，而不是 subscriber 的。
+		// 这样转发协程才能从 source 的 outgoingRelays 中取出所有要转发的音轨。
+		sourcePeer.outgoingRelays[subscriberID] = relayTrack
 		log.Printf("[sfu] 中继已添加: %s -> %s", sourceID[:8], subscriberID[:8])
 	}
 
-	// 为当前 source 创建其他已有客户端的中继音轨。
-	sourcePeer := r.peers[sourceID]
+	// 为当前 source 创建其他已有客户端的中继音轨，让 source 能听到其他人。
 	for otherID, otherPeer := range r.peers {
 		if otherID == sourceID || otherPeer.incomingTrack == nil {
 			continue
@@ -397,7 +401,7 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 		relayTrack, err := webrtc.NewTrackLocalStaticRTP(
 			otherPeer.incomingTrack.Codec().RTPCodecCapability,
 			"audio",
-			otherID,
+			"audio_"+otherID, // label 格式为 "audio_<userId>"，前端据此识别声音来源
 		)
 		if err != nil {
 			log.Printf("[sfu] 为新对端创建中继轨失败: source=%s other=%s err=%v",
@@ -411,7 +415,10 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 			continue
 		}
 
-		sourcePeer.outgoingRelays[otherID] = relayTrack
+		// 关键修复：将中继音轨记录在 other 的 outgoingRelays 中，而不是 source 的。
+		// 这样 other 的转发协程才能从 other 的 outgoingRelays 中取出这个音轨，
+		// 将 other 的音频转发给 source。
+		otherPeer.outgoingRelays[sourceID] = relayTrack
 		log.Printf("[sfu] 中继已添加(新对端): %s <- %s", sourceID[:8], otherID[:8])
 	}
 
