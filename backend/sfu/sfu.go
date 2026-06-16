@@ -26,6 +26,7 @@ package sfu
 import (
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -154,11 +155,17 @@ func (r *SFURoom) Join(clientID string) error {
 
 	// ICE Candidate 收集 -> 通知信令层转发给客户端。
 	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
-		if candidate == nil || r.onICECandidate == nil {
+		if candidate == nil {
+			log.Printf("[sfu] ICE 收集完成: client=%s", clientID[:8])
 			return
 		}
-		// ToJSON 返回 ICECandidateInit，pion/webrtc v4 中不返回 error。
+		if r.onICECandidate == nil {
+			log.Printf("[sfu] ICE callback 未设置，candidate 已丢弃: client=%s", clientID[:8])
+			return
+		}
 		candJSON := candidate.ToJSON()
+		log.Printf("[sfu] 收集到 ICE candidate: client=%s type=%s", clientID[:8],
+			strings.Split(candJSON.Candidate, " ")[7]) // 提取 candidate 类型
 		r.onICECandidate(clientID, candJSON)
 	})
 
