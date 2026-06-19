@@ -26,6 +26,9 @@ package sfu
 import (
 	"fmt"
 	"log"
+	"net"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -77,6 +80,57 @@ type SFUPeer struct {
 	stopRelay chan struct{}
 
 	connectedAt time.Time
+}
+
+var (
+	mediaMinPort uint16   = 50000 // WebRTC 媒体流最小端口，默认 50000
+	mediaMaxPort uint16   = 50100 // WebRTC 媒体流最大端口，默认 50100
+	nat1To1IPs   []string         // NAT 1:1 映射的公网 IP 列表，用于 Docker 部署时告诉客户端正确的外部地址
+)
+
+func init() {
+	// SFU_MEDIA_MIN_PORT/SFU_MEDIA_MAX_PORT: 限制 WebRTC 媒体流端口范围，需与 Docker 端口映射一致
+	if minRtcPort := os.Getenv("SFU_MEDIA_MIN_PORT"); minRtcPort != "" {
+		if p, err := strconv.ParseUint(minRtcPort, 10, 16); err == nil {
+			mediaMinPort = uint16(p)
+		}
+	}
+	if maxRtcPort := os.Getenv("SFU_MEDIA_MAX_PORT"); maxRtcPort != "" {
+		if p, err := strconv.ParseUint(maxRtcPort, 10, 16); err == nil {
+			mediaMaxPort = uint16(p)
+		}
+	}
+	// SFU_NAT1_TO_1_IP: 服务器公网 IP/域名，支持逗号分隔多个。
+	// 在 Docker 部署时，SFU 默认生成容器内部 IP 的 ICE candidate，客户端无法访问。
+	// 设置此变量后，SFU 会用公网 IP 替换内部 IP，让客户端能正确连接。
+	if ip := os.Getenv("SFU_NAT1_TO_1_IP"); ip != "" {
+		for _, addr := range strings.Split(ip, ",") {
+			addr = strings.TrimSpace(addr)
+			// 如果是 IP 地址，直接使用
+			if parsedIP := net.ParseIP(addr); parsedIP != nil {
+				nat1To1IPs = append(nat1To1IPs, parsedIP.String())
+				continue
+			}
+			// 如果是域名，解析成 IP（pion/webrtc 的 SetNAT1To1IPs 只接受 IP 地址）
+			ips, err := net.LookupIP(addr)
+			if err != nil {
+				log.Printf("[sfu] 域名解析失败: %s, err=%v", addr, err)
+				continue
+			}
+			for _, resolvedIP := range ips {
+				// 优先使用 IPv4
+				if resolvedIP.To4() != nil {
+					nat1To1IPs = append(nat1To1IPs, resolvedIP.String())
+					break
+				}
+			}
+			// 如果没有 IPv4，使用第一个解析到的 IP（通常是 IPv6）
+			if len(nat1To1IPs) == 0 && len(ips) > 0 {
+				nat1To1IPs = append(nat1To1IPs, ips[0].String())
+			}
+		}
+	}
+	log.Printf("[sfu] 媒体端口范围: %d-%d, NAT1To1IP: %v", mediaMinPort, mediaMaxPort, nat1To1IPs)
 }
 
 // NewSFUServer 创建 SFU 引擎实例。
@@ -133,14 +187,31 @@ func (r *SFURoom) Join(clientID string) error {
 		return fmt.Errorf("client %s already in SFU room", clientID)
 	}
 
-	// 创建 WebRTC PeerConnection，STUN 服务器用于 NAT 穿透。
+	settingEngine := webrtc.SettingEngine{}
+
+	// SetEphemeralUDPPortRange: 限制 WebRTC 媒体流使用的 UDP 端口范围。
+	// Docker 部署时必须设置，确保端口与 Docker 端口映射一致，否则客户端无法连接。
+	if err := settingEngine.SetEphemeralUDPPortRange(mediaMinPort, mediaMaxPort); err != nil {
+		return fmt.Errorf("set port range: %w", err)
+	}
+
+	// SetNAT1To1IPs: 配置 NAT 1:1 映射的公网 IP。
+	// 当 SFU 在 Docker 容器内运行时，默认生成的 ICE candidate 使用容器内部 IP（如 172.17.0.x），
+	// 客户端无法访问。设置此选项后，SFU 会将 host 类型的 candidate 地址替换为公网 IP，
+	// 让客户端能正确建立 WebRTC 连接。
+	if len(nat1To1IPs) > 0 {
+		settingEngine.SetNAT1To1IPs(nat1To1IPs, webrtc.ICECandidateTypeHost)
+	}
+
+	api := webrtc.NewAPI(webrtc.WithSettingEngine(settingEngine))
+
 	config := webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
 			{URLs: []string{"stun:stun.l.google.com:19302"}},
 		},
 	}
 
-	pc, err := webrtc.NewPeerConnection(config)
+	pc, err := api.NewPeerConnection(config)
 	if err != nil {
 		return fmt.Errorf("create peer connection: %w", err)
 	}
@@ -164,8 +235,7 @@ func (r *SFURoom) Join(clientID string) error {
 			return
 		}
 		candJSON := candidate.ToJSON()
-		log.Printf("[sfu] 收集到 ICE candidate: client=%s type=%s", clientID[:8],
-			strings.Split(candJSON.Candidate, " ")[7]) // 提取 candidate 类型
+		log.Printf("[sfu] 收集到 ICE candidate: client=%s candidate=%s", clientID[:8], candJSON.Candidate)
 		r.onICECandidate(clientID, candJSON)
 	})
 

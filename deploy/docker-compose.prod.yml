@@ -18,8 +18,15 @@ services:
     environment:
       SERVER_ADDR: ":8080" # 后端在容器内部监听 8080 端口。
       HTTPS_ENABLED: "false" # 生产环境默认由前置网关或前端容器处理 HTTP 入口，这里先关闭后端自带 HTTPS。
-    expose:
-      - "8080" # 只暴露给 compose 内部网络，不直接映射到宿主机。
+      SFU_MEDIA_MIN_PORT: "50000" # WebRTC 媒体流起始端口，需与下方 ports 映射一致。
+      SFU_MEDIA_MAX_PORT: "50010" # WebRTC 媒体流结束端口，需与下方 ports 映射一致。
+      SFU_NAT1_TO_1_IP: "47.121.180.1" # 服务器公网域名/IP，用于 NAT 穿透时告诉客户端正确的外部地址。
+    # expose:
+    #   - "8080" # 只暴露给 compose 内部网络，不直接映射到宿主机。
+    #   - "49152-65535:49152-65535/udp" 
+    ports:
+      - "8080:8080" # 映射 HTTP/WebSocket 信令端口
+      -  "50000-50010:50000-50010/udp" # 映射 WebRTC 媒体流端口
 
   frontend: # 前端静态站点和 Nginx 反向代理入口。
     image: ${FRONTEND_IMAGE}:${IMAGE_TAG} # 本次部署的前端镜像名和 tag，由 CI 写入 .env。
