@@ -10,6 +10,8 @@ RUN apk add --no-cache git
 COPY . .
 
 # 下载依赖
+ENV GOPROXY=https://goproxy.cn,direct
+ENV GOSUMDB=off
 RUN go mod tidy
 
 # 构建
