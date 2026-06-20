@@ -13,9 +13,9 @@ var (
 	roomLock            sync.RWMutex
 	clientLock          sync.RWMutex
 
-	// 本地开发阶段允许任意来源建立 WebSocket 连接，线上环境应收紧来源校验。
+	// 本地开发阶段允许任意来源建立 WebSocket 连接，线上环境应收紧来源校验
 	Upgrader = websocket.Upgrader{
-		// CheckOrigin 决定是否允许当前来源发起 WebSocket 升级。
+		// CheckOrigin 决定是否允许当前来源发起 WebSocket 升级
 		CheckOrigin: func(r *http.Request) bool {
 			return true
 		},

@@ -3,16 +3,16 @@ import { useEffect, useState } from 'react'
 import type { JoinRoomInput } from '../types/voiceRoomUi'
 
 interface HomePageProps {
-  defaultRoomId: string // 页面首次打开或重新加入时预填的房间号。
-  defaultUsername: string // 页面首次打开或重新加入时预填的昵称。
-  error: string | null // 加入流程中需要展示给用户的错误提示。
-  isJoining: boolean // 是否正在请求麦克风并进入房间，用于禁用按钮。
-  onCreateRoom: (input: JoinRoomInput) => void // 用户点击创建房间时触发。
-  onJoinRoom: (input: JoinRoomInput) => void // 用户点击加入房间时触发。
-  onOpenSettings: () => void // 用户点击设备检测时打开设置弹窗。
+  defaultRoomId: string // 页面首次打开或重新加入时预填的房间号
+  defaultUsername: string // 页面首次打开或重新加入时预填的昵称
+  error: string | null // 加入流程中需要展示给用户的错误提示
+  isJoining: boolean // 是否正在请求麦克风并进入房间，用于禁用按钮
+  onCreateRoom: (input: JoinRoomInput) => void // 用户点击创建房间时触发
+  onJoinRoom: (input: JoinRoomInput) => void // 用户点击加入房间时触发
+  onOpenSettings: () => void // 用户点击设备检测时打开设置弹窗
 }
 
-// HomePage 是声聊间的入口页，负责收集昵称和房间号，并把创建/加入动作交给 App 处理。
+// HomePage 是声聊间的入口页，负责收集昵称和房间号，并把创建/加入动作交给 App 处理
 export default function HomePage({
   defaultRoomId,
   defaultUsername,
@@ -26,7 +26,7 @@ export default function HomePage({
   const [username, setUsername] = useState(defaultUsername)
   const [formError, setFormError] = useState<string | null>(null)
 
-  // 当用户从离开页回到入口时，App 会传入上一次房间信息，这里同步到表单里。
+  // 当用户从离开页回到入口时，App 会传入上一次房间信息，这里同步到表单里
   useEffect(() => {
     setRoomId(defaultRoomId)
     setUsername(defaultUsername)

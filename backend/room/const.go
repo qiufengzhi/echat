@@ -11,9 +11,9 @@ const (
 	MsgTypePing   = "ping"   // 心跳探测，服务端收到后回复 pong，避免 WebSocket 被空闲断开
 
 	// SFU 信令：客户端 -> 服务端
-	// 客户端创建 SDP Offer 后通过 sfu_offer 发给 SFU 引擎。
+	// 客户端创建 SDP Offer 后通过 sfu_offer 发给 SFU 引擎
 	MsgTypeSFUOffer = "sfu_offer" // 客户端发起的 SDP Offer
-	// 客户端的 ICE Candidate 通过 sfu_ice 发送给 SFU 引擎。
+	// 客户端的 ICE Candidate 通过 sfu_ice 发送给 SFU 引擎
 	MsgTypeSFUICE = "sfu_ice" // 客户端的 ICE Candidate
 
 	// ---------- 服务端 -> 客户端 ----------
@@ -25,14 +25,14 @@ const (
 	MsgTypeHostChanged = "host_changed" // 房主发生变更，通知剩余成员刷新房主展示和交接权限
 
 	// SFU 信令：服务端 -> 客户端
-	// SFU 引擎收到客户端发起的 Offer 后创建 Answer，通过 sfu_answer 发送给客户端。
+	// SFU 引擎收到客户端发起的 Offer 后创建 Answer，通过 sfu_answer 发送给客户端
 	MsgTypeSFUAnswer = "sfu_answer" // SFU 引擎回复的 SDP Answer
-	// SFU 引擎收集到的 ICE Candidate 通过 sfu_ice 发送给客户端。
+	// SFU 引擎收集到的 ICE Candidate 通过 sfu_ice 发送给客户端
 	MsgTypeSFUICEServer = "sfu_ice" // SFU 引擎的 ICE Candidate
 
-	// SFU renegotiation（重新协商）：当 AddTrack 后触发，由 SFU 向订阅者客户端发送新 Offer。
+	// SFU renegotiation（重新协商）：当 AddTrack 后触发，由 SFU 向订阅者客户端发送新 Offer
 	MsgTypeRenegotiationOffer = "sfu_renegotiation_offer" // SFU 向客户端发送的新 Offer（服务端 -> 客户端）
-	// 客户端收到 renegotiation Offer 后回复 Answer。
+	// 客户端收到 renegotiation Offer 后回复 Answer
 	MsgTypeRenegotiationAnswer = "sfu_renegotiation_answer" // 客户端回复的 Answer（客户端 -> 服务端）
 
 	MsgTypeError = "error" // 服务端错误消息，payload.message 可给前端转换成用户提示

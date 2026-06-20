@@ -1,11 +1,11 @@
 import type { VoiceRoomMember } from '../../types/voiceRoomUi'
 
 interface MemberSeatProps {
-  member: VoiceRoomMember // 当前席位展示的成员或空席位。
-  onInvite: () => void // 点击空席位时打开邀请弹窗。
+  member: VoiceRoomMember // 当前席位展示的成员或空席位
+  onInvite: () => void // 点击空席位时打开邀请弹窗
 }
 
-// MemberSeat 渲染单个成员席位：真实成员展示昵称/状态，空席位展示邀请入口。
+// MemberSeat 渲染单个成员席位：真实成员展示昵称/状态，空席位展示邀请入口
 export default function MemberSeat({ member, onInvite }: MemberSeatProps) {
   if (member.role === 'empty') {
     return (

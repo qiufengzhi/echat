@@ -2,7 +2,7 @@ package handlers
 
 import "net/http"
 
-// IndexHandler 返回一个简单的状态页面，方便直接在浏览器里查看后端和 WebSocket 入口。
+// IndexHandler 返回一个简单的状态页面，方便直接在浏览器里查看后端和 WebSocket 入口
 func IndexHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(`
@@ -11,7 +11,7 @@ func IndexHandler(w http.ResponseWriter, r *http.Request) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Voice Room Demo</title>
+    <title>eChat 语音间</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;

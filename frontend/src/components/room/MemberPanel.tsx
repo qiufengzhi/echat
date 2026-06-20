@@ -1,12 +1,12 @@
 import type { VoiceRoomMember } from '../../types/voiceRoomUi'
 
 interface MemberPanelProps {
-  members: VoiceRoomMember[] // 当前在线成员和页面展示席位。
-  isOpen: boolean // 手机端成员抽屉是否打开。
-  onClose: () => void // 关闭手机端成员抽屉。
+  members: VoiceRoomMember[] // 当前在线成员和页面展示席位
+  isOpen: boolean // 手机端成员抽屉是否打开
+  onClose: () => void // 关闭手机端成员抽屉
 }
 
-// MemberPanel 在桌面端作为右侧栏，在手机端作为抽屉展示成员状态。
+// MemberPanel 在桌面端作为右侧栏，在手机端作为抽屉展示成员状态
 export default function MemberPanel({ members, isOpen, onClose }: MemberPanelProps) {
   const onlineMembers = members.filter(member => member.isOnline)
 

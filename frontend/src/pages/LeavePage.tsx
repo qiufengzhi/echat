@@ -1,12 +1,12 @@
 import type { LeaveRoomSummary } from '../types/voiceRoomUi'
 
 interface LeavePageProps {
-  summary: LeaveRoomSummary | null // 用户刚刚离开的房间摘要，为空时展示通用离开态。
-  onRejoin: () => void // 重新加入上一次房间。
-  onHome: () => void // 回到首页并重新开始。
+  summary: LeaveRoomSummary | null // 用户刚刚离开的房间摘要，为空时展示通用离开态
+  onRejoin: () => void // 重新加入上一次房间
+  onHome: () => void // 回到首页并重新开始
 }
 
-// LeavePage 给离开动作一个明确收尾，让用户知道麦克风和房间连接都已经关闭。
+// LeavePage 给离开动作一个明确收尾，让用户知道麦克风和房间连接都已经关闭
 export default function LeavePage({ summary, onRejoin, onHome }: LeavePageProps) {
   return (
     <main className="leave-page">

@@ -3,14 +3,14 @@ import { useMemo, useState } from 'react'
 import BaseModal from './BaseModal'
 
 interface InviteModalProps {
-  isOpen: boolean // 邀请弹窗是否显示。
-  roomId: string // 当前房间号，用于展示和复制。
-  hostName: string // 房主昵称，用于告诉用户是谁创建了房间。
-  memberCount: number // 当前在线成员数量。
-  onClose: () => void // 关闭邀请弹窗。
+  isOpen: boolean // 邀请弹窗是否显示
+  roomId: string // 当前房间号，用于展示和复制
+  hostName: string // 房主昵称，用于告诉用户是谁创建了房间
+  memberCount: number // 当前在线成员数量
+  onClose: () => void // 关闭邀请弹窗
 }
 
-// InviteModal 负责把当前房间的链接和房间号交给用户，复制成功后给出轻量反馈。
+// InviteModal 负责把当前房间的链接和房间号交给用户，复制成功后给出轻量反馈
 export default function InviteModal({ isOpen, roomId, hostName, memberCount, onClose }: InviteModalProps) {
   const [copyText, setCopyText] = useState('复制')
 

@@ -1,15 +1,15 @@
 interface ControlDockProps {
-  isMuted: boolean // 当前用户是否静音。
-  isSpeakerOn: boolean // 当前是否播放房间声音。
-  onToggleMute: () => void // 点击麦克风按钮时触发。
-  onToggleSpeaker: () => void // 点击扬声器按钮时触发。
-  onOpenMembers: () => void // 点击成员按钮时触发。
-  onOpenInvite: () => void // 点击邀请按钮时触发。
-  onOpenSettings: () => void // 点击设置按钮时触发。
-  onLeave: () => void // 点击离开按钮时触发。
+  isMuted: boolean // 当前用户是否静音
+  isSpeakerOn: boolean // 当前是否播放房间声音
+  onToggleMute: () => void // 点击麦克风按钮时触发
+  onToggleSpeaker: () => void // 点击扬声器按钮时触发
+  onOpenMembers: () => void // 点击成员按钮时触发
+  onOpenInvite: () => void // 点击邀请按钮时触发
+  onOpenSettings: () => void // 点击设置按钮时触发
+  onLeave: () => void // 点击离开按钮时触发
 }
 
-// ControlDock 是声聊间的高频控制栏，所有按钮都用自然语言 title 说明点击结果。
+// ControlDock 是声聊间的高频控制栏，所有按钮都用自然语言 title 说明点击结果
 export default function ControlDock({
   isMuted,
   isSpeakerOn,

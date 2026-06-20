@@ -4,21 +4,21 @@ import BaseModal from './BaseModal'
 import type { AudioDevice } from '../../hooks/useVoiceRoom'
 
 interface SettingsModalProps {
-  isOpen: boolean // 设置弹窗是否显示。
-  hasMicrophone: boolean // 当前是否已经拿到麦克风音频流。
-  isMuted: boolean // 当前用户是否静音。
-  isSpeakerOn: boolean // 当前是否播放房间声音。
-  availableMicrophones: AudioDevice[] // 可用的麦克风设备列表。
-  availableSpeakers: AudioDevice[] // 可用的扬声器设备列表。
-  currentMicrophoneId: string | null // 当前选中的麦克风设备 ID。
-  onToggleMute: () => void // 切换麦克风静音状态。
-  onToggleSpeaker: () => void // 切换扬声器播放状态。
-  onRefreshDevices: () => void // 刷新音频设备列表。
-  onSwitchMicrophone: (deviceId: string) => void // 切换麦克风设备。
-  onClose: () => void // 关闭设置弹窗。
+  isOpen: boolean // 设置弹窗是否显示
+  hasMicrophone: boolean // 当前是否已经拿到麦克风音频流
+  isMuted: boolean // 当前用户是否静音
+  isSpeakerOn: boolean // 当前是否播放房间声音
+  availableMicrophones: AudioDevice[] // 可用的麦克风设备列表
+  availableSpeakers: AudioDevice[] // 可用的扬声器设备列表
+  currentMicrophoneId: string | null // 当前选中的麦克风设备 ID
+  onToggleMute: () => void // 切换麦克风静音状态
+  onToggleSpeaker: () => void // 切换扬声器播放状态
+  onRefreshDevices: () => void // 刷新音频设备列表
+  onSwitchMicrophone: (deviceId: string) => void // 切换麦克风设备
+  onClose: () => void // 关闭设置弹窗
 }
 
-// SettingsModal 麦克风、扬声器设置弹窗。
+// SettingsModal 麦克风、扬声器设置弹窗
 export default function SettingsModal({
   isOpen,
   hasMicrophone,
@@ -37,7 +37,7 @@ export default function SettingsModal({
   const [autoGain, setAutoGain] = useState(true)
   const [testResult, setTestResult] = useState<string | null>(null)
 
-  // 弹窗打开时刷新设备列表，确保下拉框显示最新可用设备。
+  // 弹窗打开时刷新设备列表，确保下拉框显示最新可用设备
   useEffect(() => {
     if (isOpen) {
       onRefreshDevices()
@@ -50,7 +50,7 @@ export default function SettingsModal({
 
   const handleMicrophoneChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
     const deviceId = event.target.value
-    // 'default' 表示使用系统默认麦克风，传入空字符串让 hook 忽略 deviceId。
+    // 'default' 表示使用系统默认麦克风，传入空字符串让 hook 忽略 deviceId
     onSwitchMicrophone(deviceId === 'default' ? '' : deviceId)
   }
 

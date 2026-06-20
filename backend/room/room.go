@@ -2,6 +2,7 @@ package room
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"math/rand"
 	"slices"
@@ -15,17 +16,17 @@ import (
 	"voice-room-backend/sfu"
 )
 
-// sfuServer 是全局 SFU 引擎实例，管理所有房间的 WebRTC PeerConnection 和音频转发。
+// sfuServer 是全局 SFU 引擎实例，管理所有房间的 WebRTC PeerConnection 和音频转发
 var sfuServer = sfu.NewSFUServer()
 
-// StartCleanupLoop 启动空房间清理协程。
-// 正常离开时房间会立即尝试删除；这里主要兜底处理异常断开后残留的空房间。
+// StartCleanupLoop 启动空房间清理协程
+// 正常离开时房间会立即尝试删除；这里主要兜底处理异常断开后残留的空房间
 func StartCleanupLoop() {
 	go cleanupIdleRooms()
 }
 
-// createRoom 创建房间；如果房间已存在，则直接返回已有房间。
-// roomID 是前端传入或生成的房间号，调用前应已做空值校验。
+// createRoom 创建房间；如果房间已存在，则直接返回已有房间
+// roomID 是前端传入或生成的房间号，调用前应已做空值校验
 func createRoom(roomID string) *Room {
 	roomLock.Lock()
 	defer roomLock.Unlock()
@@ -39,12 +40,12 @@ func createRoom(roomID string) *Room {
 		Clients: make(map[string]*Client),
 	}
 	allActiveRooms[roomID] = r
-	log.Printf("房间已创建: %s", roomID)
+	log.Printf("[sig] 房间已创建: %s", roomID)
 	return r
 }
 
-// getOrCreateRoom 先查找房间，不存在时再创建，避免调用方重复写判断逻辑。
-// 返回值始终是可用房间实例。
+// getOrCreateRoom 先查找房间，不存在时再创建，避免调用方重复写判断逻辑
+// 返回值始终是可用房间实例
 func getOrCreateRoom(roomID string) *Room {
 	roomLock.RLock()
 	r, exists := allActiveRooms[roomID]
@@ -56,14 +57,14 @@ func getOrCreateRoom(roomID string) *Room {
 	return createRoom(roomID)
 }
 
-// HandleConnection 为新 WebSocket 连接创建客户端对象，启动写协程，并持续读取客户端消息。
-// conn 的生命周期由 readPump/writePump/disconnect 共同管理。
+// HandleConnection 为新 WebSocket 连接创建客户端对象，启动写协程，并持续读取客户端消息
+// conn 的生命周期由 readPump/writePump/disconnect 共同管理
 func HandleConnection(conn *websocket.Conn) {
-	userID := uuid.NewString()
+	userID := uuid.NewString() // 客户端唯一标识
 	client := &Client{
 		ID:   userID,
 		Conn: conn,
-		// 使用缓冲队列避免短暂慢客户端立刻阻塞整房广播。
+		// 使用缓冲队列避免短暂慢客户端立刻阻塞整房广播
 		Send: make(chan []byte, 256),
 	}
 
@@ -71,19 +72,19 @@ func HandleConnection(conn *websocket.Conn) {
 	allConnectedClients[userID] = client
 	clientLock.Unlock()
 
-	log.Printf("客户端已连接: %s", userID)
+	log.Printf("[sig] 客户端已连接: %s", userID)
 
-	go writePump(client) // 统一串行写 WebSocket，避免并发写连接。
-	readPump(client)     // 当前协程负责读取并按消息顺序分发。
+	go writePump(client) // 统一串行写 WebSocket，避免并发写连接
+	readPump(client)     // 当前协程负责读取并按消息顺序分发
 	disconnect(client, "")
 }
 
-// readPump 持续读取客户端发来的 WebSocket 消息，并分发给对应业务处理函数。
-// 同一连接上的消息在这里串行处理，保证 join/leave/sfu_answer 等顺序不被打乱。
+// readPump 持续读取客户端发来的 WebSocket 消息，并分发给对应业务处理函数
+// 同一连接上的消息在这里串行处理，保证 join/leave/sfu_answer 等顺序不被打乱
 func readPump(client *Client) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("readPump 发生 panic: %s, %v", client.ID, r)
+			log.Printf("[sig] readPump 发生 panic: %s, %v", client.ID, r)
 		}
 	}()
 
@@ -92,13 +93,14 @@ func readPump(client *Client) {
 		if err != nil {
 			closeCode := 0
 			closeText := ""
-			if closeErr, ok := err.(*websocket.CloseError); ok {
+			var closeErr *websocket.CloseError
+			if errors.As(err, &closeErr) {
 				closeCode = closeErr.Code
 				closeText = closeErr.Text
 			}
-			// 记录所有读循环结束原因，用来区分代理/网络断开和客户端主动 leave。
+			// 记录所有读循环结束原因，用来区分代理/网络断开和客户端主动 leave
 			log.Printf(
-				"WebSocket 读取结束: client_id=%s room_id=%s username=%q close_code=%d close_text=%q err=%v time=%s",
+				"[sig] WebSocket 读取结束: client_id=%s room_id=%s username=%q close_code=%d close_text=%q err=%v time=%s",
 				client.ID,
 				client.RoomID,
 				client.Username,
@@ -111,18 +113,18 @@ func readPump(client *Client) {
 		}
 
 		var msg Message
-		if err := json.Unmarshal(message, &msg); err != nil {
-			log.Printf("无效消息: %s, %v", client.ID, err)
+		if err = json.Unmarshal(message, &msg); err != nil {
+			log.Printf("[sig] 无效消息: %s, %v", client.ID, err)
 			continue
 		}
 
-		// 统一在读取协程里处理消息，避免同一个客户端的状态被多个 goroutine 交叉修改。
+		// 统一在读取协程里处理消息，避免同一个客户端的状态被多个 goroutine 交叉修改
 		handleMessage(client, &msg)
 	}
 }
 
-// writePump 持续消费客户端发送队列，把待发送消息写回对应的 WebSocket 连接。
-// gorilla/websocket 不适合被多个协程同时写，因此一个客户端只保留一个写协程。
+// writePump 持续消费客户端发送队列，把待发送消息写回对应的 WebSocket 连接
+// gorilla/websocket 不适合被多个协程同时写，因此一个客户端只保留一个写协程
 func writePump(client *Client) {
 	defer client.Conn.Close()
 
@@ -135,7 +137,7 @@ func writePump(client *Client) {
 	_ = client.Conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 }
 
-// handleMessage 根据消息类型把请求分发到 SFU 信令处理、加入房间、离开房间或心跳响应。
+// handleMessage 根据消息类型把请求分发到 SFU 信令处理、加入房间、离开房间或心跳响应
 //
 // SFU 信令流程（客户端发起 Offer）：
 //
@@ -160,7 +162,7 @@ func handleMessage(client *Client, msg *Message) {
 	}
 }
 
-// handleJoin 把客户端加入指定房间，创建 SFU PeerConnection（不生成 Offer）。
+// handleJoin 把客户端加入指定房间，创建 SFU PeerConnection（不生成 Offer）
 //
 // SFU 信令流程（客户端发起 Offer）：
 //  1. 客户端 join → 服务端创建房间并创建 SFU PeerConnection
@@ -180,7 +182,7 @@ func handleJoin(client *Client, msg *Message) {
 		username = "用户" + client.ID[:8]
 	}
 
-	// 加入信令房间（设置成员和房主）。
+	// 加入信令房间（设置成员和房主）
 	r := getOrCreateRoom(roomID)
 	r.Lock.Lock()
 	client.RoomID = roomID
@@ -194,14 +196,14 @@ func handleJoin(client *Client, msg *Message) {
 	userCount := len(r.Clients)
 	r.Lock.Unlock()
 
-	log.Printf("用户 %s 已加入房间 %s (人数=%d 房主=%s)", username, roomID, userCount, hostID)
+	log.Printf("[sig] 用户 %s 已加入房间 %s (人数=%d 房主=%s)", username, roomID, userCount, hostID)
 
 	// --- SFU 集成：创建 PeerConnection，但不生成 Offer ---
-	// Offer 由客户端发起，服务端收到 sfu_offer 后通过 AcceptOffer 创建 Answer。
+	// Offer 由客户端发起，服务端收到 sfu_offer 后通过 AcceptOffer 创建 Answer
 
 	sfuRoom := sfuServer.GetOrCreateRoom(roomID)
 
-	// 注册 ICE Candidate 回调：SFU 引擎收集到 candidate 后通过 WebSocket 转发给客户端。
+	// 注册 ICE Candidate 回调：SFU 引擎收集到 candidate 后通过 WebSocket 转发给客户端
 	sfuRoom.SetOnICECandidate(func(clientID string, candidate webrtc.ICECandidateInit) {
 		roomLock.RLock()
 		r, ok := allActiveRooms[roomID]
@@ -219,7 +221,7 @@ func handleJoin(client *Client, msg *Message) {
 		sendToClient(targetClient, MsgTypeSFUICE, payload, roomID)
 	})
 
-	// 注册 renegotiation 回调：当 SFU 向订阅者添加中继音轨后，需要向该客户端发送 renegotiation Offer。
+	// 注册 renegotiation 回调：当 SFU 向订阅者添加中继音轨后，需要向该客户端发送 renegotiation Offer
 	sfuRoom.SetOnRenegotiation(func(clientID string, offerSDP string) {
 		roomLock.RLock()
 		r, ok := allActiveRooms[roomID]
@@ -236,9 +238,9 @@ func handleJoin(client *Client, msg *Message) {
 		sendToClient(targetClient, MsgTypeRenegotiationOffer, RenegotiationOfferPayload{SDP: offerSDP}, roomID)
 	})
 
-	// 让 SFU 引擎为该客户端创建 PeerConnection（不生成 Offer）。
+	// 让 SFU 引擎为该客户端创建 PeerConnection（不生成 Offer）
 	if err := sfuRoom.Join(client.ID); err != nil {
-		log.Printf("[sfu] 加入失败: %s %v", client.ID[:8], err)
+		log.Printf("[sig] 加入失败: %s %v", client.ID[:8], err)
 		sendError(client, "无法创建 WebRTC 连接，请重试")
 		return
 	}
@@ -246,19 +248,19 @@ func handleJoin(client *Client, msg *Message) {
 	// --- 房间状态广播 ---
 
 	if userCount == 1 {
-		// 首位成员：发送 waiting，告知其是房主。
+		// 首位成员：发送 waiting，告知其是房主
 		sendToClient(client, MsgTypeWaiting, WaitingPayload{HostID: hostID}, roomID)
 		return
 	}
 
-	// 通知已有成员新用户已加入。
+	// 通知已有成员新用户已加入
 	broadcastToRoom(roomID, client.ID, MsgTypeUserJoined, UserJoinedPayload{
 		UserID:   client.ID,
 		Username: username,
 		HostID:   hostID,
 	})
 
-	// 通知新加入者房间成员快照。
+	// 通知新加入者房间成员快照
 	sendToClient(client, MsgTypeRoomReady, RoomReadyPayload{
 		Users:    getRoomUsers(roomID),
 		HostID:   hostID,
@@ -266,7 +268,7 @@ func handleJoin(client *Client, msg *Message) {
 	}, roomID)
 }
 
-// handleSFUOffer 处理客户端发来的 SDP Offer，通过 SFU 引擎创建 Answer 并返回。
+// handleSFUOffer 处理客户端发来的 SDP Offer，通过 SFU 引擎创建 Answer 并返回
 func handleSFUOffer(client *Client, payload json.RawMessage) {
 	if client.RoomID == "" {
 		sendError(client, "join a room before signaling")
@@ -275,28 +277,28 @@ func handleSFUOffer(client *Client, payload json.RawMessage) {
 
 	var offer SFUOfferPayload
 	if err := json.Unmarshal(payload, &offer); err != nil {
-		log.Printf("sfu_offer 内容无效: %s %v", client.ID[:8], err)
+		log.Printf("[sig] sfu_offer 内容无效: %s %v", client.ID[:8], err)
 		return
 	}
 
 	sfuRoom := sfuServer.GetRoom(client.RoomID)
 	if sfuRoom == nil {
-		log.Printf("SFU 房间未找到: %s", client.RoomID)
+		log.Printf("[sig] SFU 房间未找到: %s", client.RoomID)
 		return
 	}
 
 	answerSDP, err := sfuRoom.AcceptOffer(client.ID, offer.SDP)
 	if err != nil {
-		log.Printf("接受 Offer 失败: %s %v", client.ID[:8], err)
+		log.Printf("[sig] 接受 Offer 失败: %s %v", client.ID[:8], err)
 		sendError(client, "信令协商失败")
 		return
 	}
 
-	// 将 Answer SDP 通过 sfu_answer 发回客户端。
+	// 将 Answer SDP 通过 sfu_answer 发回客户端
 	sendToClient(client, MsgTypeSFUAnswer, SFUAnswerPayload{SDP: answerSDP}, client.RoomID)
 }
 
-// handleRenegotiationAnswer 处理客户端对 renegotiation Offer 的 Answer，交回 SFU 引擎处理。
+// handleRenegotiationAnswer 处理客户端对 renegotiation Offer 的 Answer，交回 SFU 引擎处理
 func handleRenegotiationAnswer(client *Client, payload json.RawMessage) {
 	if client.RoomID == "" {
 		sendError(client, "join a room before signaling")
@@ -305,23 +307,23 @@ func handleRenegotiationAnswer(client *Client, payload json.RawMessage) {
 
 	var answer RenegotiationAnswerPayload
 	if err := json.Unmarshal(payload, &answer); err != nil {
-		log.Printf("renegotiation answer 内容无效: %s %v", client.ID[:8], err)
+		log.Printf("[sig] renegotiation answer 内容无效: %s %v", client.ID[:8], err)
 		return
 	}
 
 	sfuRoom := sfuServer.GetRoom(client.RoomID)
 	if sfuRoom == nil {
-		log.Printf("SFU 房间未找到: %s", client.RoomID)
+		log.Printf("[sig] SFU 房间未找到: %s", client.RoomID)
 		return
 	}
 
 	if err := sfuRoom.AcceptRenegotiationAnswer(client.ID, answer.SDP); err != nil {
-		log.Printf("renegotiation answer 处理失败: %s %v", client.ID[:8], err)
+		log.Printf("[sig] renegotiation answer 处理失败: %s %v", client.ID[:8], err)
 		return
 	}
 }
 
-// handleSFUICE 处理客户端发来的 ICE Candidate，传递给 SFU 引擎。
+// handleSFUICE 处理客户端发来的 ICE Candidate，传递给 SFU 引擎
 func handleSFUICE(client *Client, payload json.RawMessage) {
 	if client.RoomID == "" {
 		sendError(client, "join a room before signaling")
@@ -330,23 +332,23 @@ func handleSFUICE(client *Client, payload json.RawMessage) {
 
 	var ice SFUICEPayload
 	if err := json.Unmarshal(payload, &ice); err != nil {
-		log.Printf("sfu_ice 内容无效: %s %v", client.ID[:8], err)
+		log.Printf("[sig] sfu_ice 内容无效: %s %v", client.ID[:8], err)
 		return
 	}
 
 	sfuRoom := sfuServer.GetRoom(client.RoomID)
 	if sfuRoom == nil {
-		log.Printf("SFU 房间未找到: %s", client.RoomID)
+		log.Printf("[sig] SFU 房间未找到: %s", client.RoomID)
 		return
 	}
 
 	if err := sfuRoom.AcceptICECandidate(client.ID, ice.ToWebRTCICECandidateInit()); err != nil {
-		log.Printf("ICE Candidate 添加失败: %s %v", client.ID[:8], err)
+		log.Printf("[sig] ICE Candidate 添加失败: %s %v", client.ID[:8], err)
 	}
 }
 
-// handleRelay 把 offer、answer、ice 这类 WebRTC 信令原样转发给同房间其他成员。
-// 已弃用，由 SFU 替代。保留以供旧客户端兼容，当前不被 handleMessage 调用。
+// handleRelay 把 offer、answer、ice 这类 WebRTC 信令原样转发给同房间其他成员
+// 已弃用，由 SFU 替代。保留以供旧客户端兼容，当前不被 handleMessage 调用
 func handleRelay(client *Client, msgType string, payload json.RawMessage) {
 	if client.RoomID == "" {
 		sendError(client, "join a room before signaling")
@@ -354,21 +356,21 @@ func handleRelay(client *Client, msgType string, payload json.RawMessage) {
 	}
 
 	broadcastRawToRoom(client.RoomID, client.ID, msgType, payload)
-	log.Printf("已转发 %s from %s", msgType, client.ID[:8])
+	log.Printf("[sig] 已转发 %s from %s", msgType, client.ID[:8])
 }
 
-// handleLeave 处理客户端主动离开房间的请求。
-// payload 可包含 next_host_id；服务端会在 disconnect 中校验该目标是否仍在线。
+// handleLeave 处理客户端主动离开房间的请求
+// payload 可包含 next_host_id；服务端会在 disconnect 中校验该目标是否仍在线
 func handleLeave(client *Client, payload json.RawMessage) {
 	var leavePayload LeavePayload
 	if len(payload) > 0 {
 		if err := json.Unmarshal(payload, &leavePayload); err != nil {
-			log.Printf("离开消息无效: %s %v", client.ID, err)
+			log.Printf("[sig] 离开消息无效: %s %v", client.ID, err)
 		}
 	}
 
 	log.Printf(
-		"用户请求离开: client_id=%s room_id=%s username=%q next_host=%q time=%s",
+		"[sig] 用户请求离开: client_id=%s room_id=%s username=%q next_host=%q time=%s",
 		client.ID,
 		client.RoomID,
 		client.Username,
@@ -378,24 +380,24 @@ func handleLeave(client *Client, payload json.RawMessage) {
 	disconnect(client, strings.TrimSpace(leavePayload.NextHostID))
 }
 
-// disconnect 清理客户端、房间成员关系、SFU PeerConnection 和连接资源。
-// preferredNextHostID 只在离开者是当前房主时生效，且必须指向仍在房间内的成员。
+// disconnect 清理客户端、房间成员关系、SFU PeerConnection 和连接资源
+// preferredNextHostID 只在离开者是当前房主时生效，且必须指向仍在房间内的成员
 func disconnect(client *Client, preferredNextHostID string) {
 	client.closeOnce.Do(func() {
 		roomID := client.RoomID
 
-		// 先清理 SFU 连接，确保停止音轨转发。
+		// 先清理 SFU 连接，确保停止音轨转发
 		if roomID != "" {
 			if sfuRoom := sfuServer.GetRoom(roomID); sfuRoom != nil {
 				sfuRoom.Leave(client.ID)
-				// 如果 SFU 房间已空，也清理 SFU 房间。
+				// 如果 SFU 房间已空，也清理 SFU 房间
 				if sfuRoom.PeerCount() == 0 {
 					sfuServer.RemoveRoom(roomID)
 				}
 			}
 		}
 
-		// 如果客户端已加入房间，则先更新房间成员和房主，再广播离开事件。
+		// 如果客户端已加入房间，则先更新房间成员和房主，再广播离开事件
 		if roomID != "" {
 			var (
 				shouldDeleteRoom bool
@@ -444,27 +446,27 @@ func disconnect(client *Client, preferredNextHostID string) {
 					r.Lock.RUnlock()
 					if empty {
 						delete(allActiveRooms, roomID)
-						log.Printf("房间已删除: %s", roomID)
+						log.Printf("[sig] 房间已删除: %s", roomID)
 					}
 				}
 				roomLock.Unlock()
 			}
 		}
 
-		// 从全局客户端索引移除。
+		// 从全局客户端索引移除
 		clientLock.Lock()
 		delete(allConnectedClients, client.ID)
 		clientLock.Unlock()
 
-		// 关闭发送队列和底层 WebSocket。
+		// 关闭发送队列和底层 WebSocket
 		close(client.Send)
 		_ = client.Conn.Close()
-		log.Printf("客户端已断开: %s", client.ID[:8])
+		log.Printf("[sig] 客户端已断开: %s", client.ID[:8])
 	})
 }
 
-// chooseNextHostID 在当前房间剩余成员中选择下一任房主。
-// preferredNextHostID 有效时优先使用；否则从排序后的成员 ID 中随机选择。
+// chooseNextHostID 在当前房间剩余成员中选择下一任房主
+// preferredNextHostID 有效时优先使用；否则从排序后的成员 ID 中随机选择
 func chooseNextHostID(room *Room, preferredNextHostID string) string {
 	if preferredNextHostID != "" {
 		if _, ok := room.Clients[preferredNextHostID]; ok {
@@ -485,14 +487,14 @@ func chooseNextHostID(room *Room, preferredNextHostID string) string {
 	return clientIDs[rand.Intn(len(clientIDs))]
 }
 
-// sendToClient 把结构化 payload 编码成统一 Message 后发送给指定客户端。
-// payload 为 nil 时不携带 payload 字段。
+// sendToClient 把结构化 payload 编码成统一 Message 后发送给指定客户端
+// payload 为 nil 时不携带 payload 字段
 func sendToClient(client *Client, msgType string, payload interface{}, roomID string) {
 	var rawPayload json.RawMessage
 	if payload != nil {
 		data, err := json.Marshal(payload)
 		if err != nil {
-			log.Printf("payload 序列化失败: %s %v", msgType, err)
+			log.Printf("[sig] payload 序列化失败: %s %v", msgType, err)
 			return
 		}
 		rawPayload = data
@@ -506,42 +508,41 @@ func sendToClient(client *Client, msgType string, payload interface{}, roomID st
 	})
 }
 
-// sendError 向客户端发送统一格式的错误消息。
+// sendError 向客户端发送统一格式的错误消息
 func sendError(client *Client, message string) {
 	sendToClient(client, MsgTypeError, map[string]string{"message": message}, client.RoomID)
 }
 
-// sendRaw 把已经组装好的消息放入客户端发送队列，必要时丢弃慢客户端消息。
+// sendRaw 把已经组装好的消息放入客户端发送队列，必要时丢弃慢客户端消息
 func sendRaw(client *Client, msg Message) {
 	data, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("消息序列化失败: %v", err)
+		log.Printf("[sig] 消息序列化失败: %v", err)
 		return
 	}
 
 	select {
 	case client.Send <- data:
 	default:
-		log.Printf("慢客户端消息丢弃: %s", client.ID[:8])
+		log.Printf("[sig] 慢客户端消息丢弃: %s", client.ID[:8])
 	}
 }
 
-// broadcastToRoom 把普通结构化消息广播给房间内除发送者外的所有成员。
+// broadcastToRoom 把普通结构化消息广播给房间内除发送者外的所有成员
 func broadcastToRoom(roomID, senderID, msgType string, payload interface{}) {
 	var rawPayload json.RawMessage
 	if payload != nil {
 		data, err := json.Marshal(payload)
 		if err != nil {
-			log.Printf("广播 payload 序列化失败: %s %v", msgType, err)
+			log.Printf("[sig] 广播 payload 序列化失败: %s %v", msgType, err)
 			return
 		}
 		rawPayload = data
 	}
-
 	broadcastRawToRoom(roomID, senderID, msgType, rawPayload)
 }
 
-// broadcastRawToRoom 把原始信令消息广播给房间内除发送者外的所有成员。
+// broadcastRawToRoom 把原始信令消息广播给房间内除发送者外的所有成员
 func broadcastRawToRoom(roomID, senderID, msgType string, payload json.RawMessage) {
 	roomLock.RLock()
 	r, ok := allActiveRooms[roomID]
@@ -559,7 +560,7 @@ func broadcastRawToRoom(roomID, senderID, msgType string, payload json.RawMessag
 
 	data, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("广播消息序列化失败: %v", err)
+		log.Printf("[sig] 广播消息序列化失败: %v", err)
 		return
 	}
 
@@ -576,13 +577,13 @@ func broadcastRawToRoom(roomID, senderID, msgType string, payload json.RawMessag
 		select {
 		case client.Send <- data:
 		default:
-			log.Printf("房间广播消息丢弃(慢客户端): %s", client.ID[:8])
+			log.Printf("[sig] 房间广播消息丢弃(慢客户端): %s", client.ID[:8])
 		}
 	}
 }
 
-// getRoomUsers 返回房间内当前所有用户的简要信息列表。
-// 返回顺序按 JoinedAt 排列，让前端成员列表和席位展示尽量稳定。
+// getRoomUsers 返回房间内当前所有用户的简要信息列表
+// 返回顺序按 JoinedAt 排列，让前端成员列表和席位展示尽量稳定
 func getRoomUsers(roomID string) []RoomUser {
 	roomLock.RLock()
 	r, ok := allActiveRooms[roomID]
@@ -626,8 +627,8 @@ func getRoomUsers(roomID string) []RoomUser {
 	return users
 }
 
-// parseUsername 从 join 消息载荷中提取用户名，并做基本的空白裁剪。
-// 兼容 JSON 字符串和少量直接传原始字符串的简单客户端。
+// parseUsername 从 join 消息载荷中提取用户名，并做基本的空白裁剪
+// 兼容 JSON 字符串和少量直接传原始字符串的简单客户端
 func parseUsername(payload json.RawMessage) string {
 	var username string
 	if err := json.Unmarshal(payload, &username); err == nil {
@@ -637,7 +638,7 @@ func parseUsername(payload json.RawMessage) string {
 	return strings.Trim(strings.TrimSpace(string(payload)), "\"")
 }
 
-// cleanupIdleRooms 定时扫描所有房间，把已经空掉的房间从内存中移除。
+// cleanupIdleRooms 定时扫描所有房间，把已经空掉的房间从内存中移除
 func cleanupIdleRooms() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
@@ -650,7 +651,7 @@ func cleanupIdleRooms() {
 			r.Lock.RUnlock()
 			if empty {
 				delete(allActiveRooms, id)
-				log.Printf("清理空闲房间: %s", id)
+				log.Printf("[sig] 清理空闲房间: %s", id)
 			}
 		}
 		roomLock.Unlock()
