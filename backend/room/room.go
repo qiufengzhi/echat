@@ -13,7 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v4"
 
-	"voice-room-backend/sfu"
+	"echat-backend/sfu"
 )
 
 // sfuServer 是全局 SFU 引擎实例，管理所有房间的 WebRTC PeerConnection 和音频转发
@@ -31,7 +31,7 @@ func createRoom(roomID string) *Room {
 	roomLock.Lock()
 	defer roomLock.Unlock()
 
-	if existing, ok := allActiveRooms[roomID]; ok {
+	if existing, ok := allSignalRooms[roomID]; ok {
 		return existing
 	}
 
@@ -39,7 +39,7 @@ func createRoom(roomID string) *Room {
 		ID:      roomID,
 		Clients: make(map[string]*Client),
 	}
-	allActiveRooms[roomID] = r
+	allSignalRooms[roomID] = r
 	log.Printf("[sig] 房间已创建: %s", roomID)
 	return r
 }
@@ -48,7 +48,7 @@ func createRoom(roomID string) *Room {
 // 返回值始终是可用房间实例
 func getOrCreateRoom(roomID string) *Room {
 	roomLock.RLock()
-	r, exists := allActiveRooms[roomID]
+	r, exists := allSignalRooms[roomID]
 	roomLock.RUnlock()
 	if exists {
 		return r
@@ -206,14 +206,14 @@ func handleJoin(client *Client, msg *Message) {
 	// 注册 ICE Candidate 回调：SFU 引擎收集到 candidate 后通过 WebSocket 转发给客户端
 	sfuRoom.SetOnICECandidate(func(clientID string, candidate webrtc.ICECandidateInit) {
 		roomLock.RLock()
-		r, ok := allActiveRooms[roomID]
+		signalRoom, ok := allSignalRooms[roomID]
 		roomLock.RUnlock()
 		if !ok {
 			return
 		}
-		r.Lock.RLock()
-		targetClient, ok := r.Clients[clientID]
-		r.Lock.RUnlock()
+		signalRoom.Lock.RLock()
+		targetClient, ok := signalRoom.Clients[clientID]
+		signalRoom.Lock.RUnlock()
 		if !ok {
 			return
 		}
@@ -224,14 +224,14 @@ func handleJoin(client *Client, msg *Message) {
 	// 注册 renegotiation 回调：当 SFU 向订阅者添加中继音轨后，需要向该客户端发送 renegotiation Offer
 	sfuRoom.SetOnRenegotiation(func(clientID string, offerSDP string) {
 		roomLock.RLock()
-		r, ok := allActiveRooms[roomID]
+		signalRoom, ok := allSignalRooms[roomID]
 		roomLock.RUnlock()
 		if !ok {
 			return
 		}
-		r.Lock.RLock()
-		targetClient, ok := r.Clients[clientID]
-		r.Lock.RUnlock()
+		signalRoom.Lock.RLock()
+		targetClient, ok := signalRoom.Clients[clientID]
+		signalRoom.Lock.RUnlock()
 		if !ok {
 			return
 		}
@@ -400,24 +400,24 @@ func disconnect(client *Client, preferredNextHostID string) {
 		// 如果客户端已加入房间，则先更新房间成员和房主，再广播离开事件
 		if roomID != "" {
 			var (
-				shouldDeleteRoom bool
-				nextHostID       string
+				shouldDeleteRoom bool   // 房间无人时删除整个房间
+				nextHostID       string // 新房主 ID，用于广播给剩余成员
 			)
 
 			roomLock.RLock()
-			r, ok := allActiveRooms[roomID]
+			r, ok := allSignalRooms[roomID]
 			roomLock.RUnlock()
 			if ok {
 				r.Lock.Lock()
-				wasHost := r.HostID == client.ID
+				wasHost := r.HostID == client.ID // 是否为房主
 				delete(r.Clients, client.ID)
 				remaining := len(r.Clients)
 
-				if remaining == 0 {
+				if remaining == 0 { // 房间无人，删除整个房间
 					r.HostID = ""
 					shouldDeleteRoom = true
 				} else {
-					if wasHost {
+					if wasHost { // 房主离开，选择新房主
 						r.HostID = chooseNextHostID(r, preferredNextHostID)
 					}
 					nextHostID = r.HostID
@@ -440,12 +440,12 @@ func disconnect(client *Client, preferredNextHostID string) {
 
 			if shouldDeleteRoom {
 				roomLock.Lock()
-				if r, ok := allActiveRooms[roomID]; ok {
+				if r, ok := allSignalRooms[roomID]; ok {
 					r.Lock.RLock()
 					empty := len(r.Clients) == 0
 					r.Lock.RUnlock()
 					if empty {
-						delete(allActiveRooms, roomID)
+						delete(allSignalRooms, roomID)
 						log.Printf("[sig] 房间已删除: %s", roomID)
 					}
 				}
@@ -545,7 +545,7 @@ func broadcastToRoom(roomID, senderID, msgType string, payload interface{}) {
 // broadcastRawToRoom 把原始信令消息广播给房间内除发送者外的所有成员
 func broadcastRawToRoom(roomID, senderID, msgType string, payload json.RawMessage) {
 	roomLock.RLock()
-	r, ok := allActiveRooms[roomID]
+	r, ok := allSignalRooms[roomID]
 	roomLock.RUnlock()
 	if !ok {
 		return
@@ -586,7 +586,7 @@ func broadcastRawToRoom(roomID, senderID, msgType string, payload json.RawMessag
 // 返回顺序按 JoinedAt 排列，让前端成员列表和席位展示尽量稳定
 func getRoomUsers(roomID string) []RoomUser {
 	roomLock.RLock()
-	r, ok := allActiveRooms[roomID]
+	r, ok := allSignalRooms[roomID]
 	roomLock.RUnlock()
 	if !ok {
 		return nil
@@ -645,12 +645,12 @@ func cleanupIdleRooms() {
 
 	for range ticker.C {
 		roomLock.Lock()
-		for id, r := range allActiveRooms {
+		for id, r := range allSignalRooms {
 			r.Lock.RLock()
 			empty := len(r.Clients) == 0
 			r.Lock.RUnlock()
 			if empty {
-				delete(allActiveRooms, id)
+				delete(allSignalRooms, id)
 				log.Printf("[sig] 清理空闲房间: %s", id)
 			}
 		}

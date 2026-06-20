@@ -36,7 +36,7 @@
 │                                                                         │
 │  ┌─────────────────── 全局状态 ───────────────────────────────────┐    │
 │  │                                                                  │    │
-│  │  allActiveRooms      map[string]*Room   ← 所有房间    roomLock     │    │
+│  │  allSignalRooms      map[string]*Room   ← 信令层房间  roomLock     │    │
 │  │  allConnectedClients map[string]*Client ← 所有客户端  clientLock   │    │
 │  │                                                                  │    │
 │  └──────────────────────────────────────────────────────────────────┘    │
@@ -116,11 +116,11 @@
 
 ```
 main.go
-  ├── "voice-room-backend/handlers"
+  ├── "echat-backend/handlers"
   │     ├── index.go          → 仅依赖 net/http
   │     └── websocket.go      → 依赖 room 包
   │
-  ├── "voice-room-backend/room"
+  ├── "echat-backend/room"
   │     └── room.go
   │           ├── "github.com/gorilla/websocket"   (WebSocket 协议)
   │           └── "github.com/google/uuid"          (生成用户 ID)
@@ -162,7 +162,7 @@ main.go
 | **空房间 (Empty)** | 房间存在但没有任何用户 | `len(r.Clients) == 0` | 最后一人离开 / 尚未有人加入 |
 | **等待中 (Waiting)** | 仅 1 人，等待第二人加入 | `userCount == 1` | 第一个用户发送 `join` |
 | **就绪 (Ready)** | 2 人及以上，可开始 WebRTC 协商 | `userCount >= 2` | 第二人及后续用户加入 |
-| **已销毁** | 从 `allActiveRooms` 中移除 | map 中不存在 | 最后一人离开或 `cleanupIdleRooms` 兜底清理 |
+| **已销毁** | 从 `allSignalRooms` 中移除 | map 中不存在 | 最后一人离开或 `cleanupIdleRooms` 兜底清理 |
 
 ```
 状态流转:

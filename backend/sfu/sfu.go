@@ -70,10 +70,10 @@ type SFUPeer struct {
 	PC       *webrtc.PeerConnection // 到客户端的 WebRTC 连接
 
 	// 该客户端发布的音频远端音轨（由 SFU 的 OnTrack 收到）
-	incomingTrack *webrtc.TrackRemote
+	publishedAudioTrack *webrtc.TrackRemote
 
 	// 该客户端音频被转发给其他客户端时的本地中继音轨
-	// 键是订阅者（接收方）的 clientID，值是对应中继音轨
+	// 键是订阅者（接收方）的 clientID，值是对应中继音轨，该房间内其他所有用户
 	outgoingRelays map[string]*webrtc.TrackLocalStaticRTP
 
 	// 停止中继转发协程的信号，在客户端离开或断连时关闭
@@ -250,7 +250,7 @@ func (r *SFURoom) Join(clientID string) error {
 			log.Printf("[sfu] 创建 renegotiation Offer 失败: client=%s err=%v", clientID[:8], err)
 			return
 		}
-		if err := pc.SetLocalDescription(offer); err != nil {
+		if err = pc.SetLocalDescription(offer); err != nil {
 			log.Printf("[sfu] 设置 renegotiation Offer 失败: client=%s err=%v", clientID[:8], err)
 			return
 		}
@@ -283,7 +283,7 @@ func (r *SFURoom) Join(clientID string) error {
 		log.Printf("[sfu] 收到音频轨: client=%s codec=%s",
 			clientID[:8], remoteTrack.Codec().MimeType)
 
-		peer.incomingTrack = remoteTrack
+		peer.publishedAudioTrack = remoteTrack
 		// 在锁外启动转发，避免持有锁时调用 AddTrack（AddTrack 也可能触发 ICE 回调）
 		go r.startForwarding(clientID, remoteTrack)
 	})
@@ -310,7 +310,7 @@ func (r *SFURoom) AcceptOffer(clientID string, offerSDP string) (answerSDP strin
 		Type: webrtc.SDPTypeOffer,
 		SDP:  offerSDP,
 	}
-	if err := peer.PC.SetRemoteDescription(offer); err != nil {
+	if err = peer.PC.SetRemoteDescription(offer); err != nil {
 		return "", fmt.Errorf("set remote description: %w", err)
 	}
 
@@ -318,7 +318,7 @@ func (r *SFURoom) AcceptOffer(clientID string, offerSDP string) (answerSDP strin
 	if err != nil {
 		return "", fmt.Errorf("create answer: %w", err)
 	}
-	if err := peer.PC.SetLocalDescription(answer); err != nil {
+	if err = peer.PC.SetLocalDescription(answer); err != nil {
 		return "", fmt.Errorf("set local description: %w", err)
 	}
 
@@ -440,7 +440,7 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 	// 获取发布音频的客户端，用于后续设置 outgoingRelays
 	sourcePeer := r.peers[sourceID]
 
-	// 为房间内每个其他客户端创建中继音轨
+	// 为房间内每个其他客户端创建中继音轨，让其他人能听到 source 的音频
 	for subscriberID, subscriber := range r.peers {
 		if subscriberID == sourceID {
 			continue
@@ -457,26 +457,25 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 			continue
 		}
 
-		if _, err := subscriber.PC.AddTrack(relayTrack); err != nil {
+		if _, err = subscriber.PC.AddTrack(relayTrack); err != nil {
 			log.Printf("[sfu] 添加中继轨失败: source=%s sub=%s err=%v",
 				sourceID[:8], subscriberID[:8], err)
 			continue
 		}
 
-		// 关键修复：将中继音轨记录在 source 的 outgoingRelays 中，而不是 subscriber 的
-		// 这样转发协程才能从 source 的 outgoingRelays 中取出所有要转发的音轨
+		// 将房间内其他人的音轨通过中继轨加入 source
 		sourcePeer.outgoingRelays[subscriberID] = relayTrack
 		log.Printf("[sfu] 中继已添加: %s -> %s", sourceID[:8], subscriberID[:8])
 	}
 
 	// 为当前 source 创建其他已有客户端的中继音轨，让 source 能听到其他人
 	for otherID, otherPeer := range r.peers {
-		if otherID == sourceID || otherPeer.incomingTrack == nil {
+		if otherID == sourceID || otherPeer.publishedAudioTrack == nil {
 			continue
 		}
 
 		relayTrack, err := webrtc.NewTrackLocalStaticRTP(
-			otherPeer.incomingTrack.Codec().RTPCodecCapability,
+			otherPeer.publishedAudioTrack.Codec().RTPCodecCapability,
 			"audio",
 			"audio_"+otherID, // label 格式为 "audio_<userId>"，前端据此识别声音来源
 		)
@@ -486,14 +485,12 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 			continue
 		}
 
-		if _, err := sourcePeer.PC.AddTrack(relayTrack); err != nil {
+		if _, err = sourcePeer.PC.AddTrack(relayTrack); err != nil {
 			log.Printf("[sfu] 为新对端添加中继轨失败: source=%s other=%s err=%v",
 				sourceID[:8], otherID[:8], err)
 			continue
 		}
 
-		// 关键修复：将中继音轨记录在 other 的 outgoingRelays 中，而不是 source 的
-		// 这样 other 的转发协程才能从 other 的 outgoingRelays 中取出这个音轨，
 		// 将 other 的音频转发给 source
 		otherPeer.outgoingRelays[sourceID] = relayTrack
 		log.Printf("[sfu] 中继已添加(新对端): %s <- %s", sourceID[:8], otherID[:8])
@@ -501,7 +498,7 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 
 	r.lock.Unlock()
 
-	// 启动 RTP 转发协程：从 remoteTrack 读取 RTP 包，写入所有中继音轨
+	// 启动 RTP 转发协程：从 remoteTrack 读取 RTP 包，写入所有中继音轨。将本人的音频转发给房间内其他客户端
 	go func() {
 		log.Printf("[sfu] 中继协程已启动: source=%s", sourceID[:8])
 		defer log.Printf("[sfu] 中继协程已停止: source=%s", sourceID[:8])
@@ -515,17 +512,19 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 
 			// 获取当前订阅者列表（可能因加入/离开而变化）
 			r.lock.RLock()
-			relays := make([]*webrtc.TrackLocalStaticRTP, 0, len(r.peers))
+			forwardClient := make(map[string]*webrtc.TrackLocalStaticRTP)
+			//relays := make([]*webrtc.TrackLocalStaticRTP, 0, len(r.peers))
 			if peer, ok := r.peers[sourceID]; ok {
-				for _, relay := range peer.outgoingRelays {
-					relays = append(relays, relay)
+				for otherClintId, relay := range peer.outgoingRelays {
+					forwardClient[otherClintId] = relay
+					//relays = append(relays, relay)
 				}
 			}
 			r.lock.RUnlock()
 
-			for _, relay := range relays {
-				if err := relay.WriteRTP(packet); err != nil {
-					log.Printf("[sfu] 写入 RTP 失败: source=%s err=%v", sourceID[:8], err)
+			for otherClintId, relay := range forwardClient {
+				if err = relay.WriteRTP(packet); err != nil {
+					log.Printf("[sfu] 写入 RTP 失败: source=%s dest=%s err=%v", sourceID[:8], otherClintId, err)
 				}
 			}
 		}

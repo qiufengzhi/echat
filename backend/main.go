@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"voice-room-backend/handlers"
-	"voice-room-backend/room"
+	"echat-backend/handlers"
+	"echat-backend/room"
 )
 
 // main 注册 HTTP 路由，并根据环境变量决定以 HTTP 还是 HTTPS 启动后端服务

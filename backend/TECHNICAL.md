@@ -88,7 +88,7 @@ type Room struct {
 
 ```go
 var (
-    allActiveRooms      map[string]*Room    // 所有房间，key = 房间 ID
+    allSignalRooms      map[string]*Room    // 信令层所有房间，key = 房间 ID
     allConnectedClients map[string]*Client  // 所有客户端，key = 用户 ID
     roomLock   sync.RWMutex
     clientLock sync.RWMutex
@@ -193,7 +193,7 @@ WebSocket 连接断开 / 主动调用 leave
 | 场景               | 策略                                              |
 | ------------------ | ------------------------------------------------- |
 | 房间读写            | `Room.Lock` (sync.RWMutex)                        |
-| 全局 allActiveRooms      | `roomLock` (sync.RWMutex)，读写分离                |
+| 全局 allSignalRooms     | `roomLock` (sync.RWMutex)，读写分离                |
 | 全局 allConnectedClients | `clientLock` (sync.RWMutex)                       |
 | 创建房间            | 双重检查锁：先读锁查 → 不存在则写锁创建               |
 | 广播消息            | 先复制接收者列表（持读锁），释放锁后再逐个发送         |
@@ -247,13 +247,13 @@ ws.send(JSON.stringify({ type: "ping" }));
 ### 构建镜像
 
 ```bash
-docker build -t voice-room-backend .
+docker build -t echat-backend .
 ```
 
 ### 运行容器
 
 ```bash
-docker run -p 8080:8080 voice-room-backend
+docker run -p 8080:8080 echat-backend
 ```
 
 ### Dockerfile 结构

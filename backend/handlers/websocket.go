@@ -4,7 +4,7 @@ import (
 	"log"
 	"net/http"
 
-	"voice-room-backend/room"
+	"echat-backend/room"
 )
 
 // WebSocketHandler 把 HTTP 请求升级为 WebSocket，并把连接生命周期交给 room 包处理

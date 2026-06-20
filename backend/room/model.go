@@ -89,10 +89,10 @@ type RenegotiationAnswerPayload struct {
 // SFUICEPayload 是 SFU 与客户端之间交换的 ICE Candidate
 // 服务端转发给客户端时携带 candidate 和 usernameFragment；客户端发给服务端时同理
 type SFUICEPayload struct {
-	Candidate        string  `json:"candidate"`
-	SDPMid           string  `json:"sdpMid"`
-	SDPMLineIndex    *uint16 `json:"sdpMLineIndex"`
-	UsernameFragment string  `json:"usernameFragment"`
+	Candidate        string  `json:"candidate"`        // ICE 候选描述（SDP 中的候选行）
+	SDPMid           string  `json:"sdpMid"`           // 该候选所属的媒体轨道标识
+	SDPMLineIndex    *uint16 `json:"sdpMLineIndex"`    // 该候选在 SDP 媒体描述中的索引位置
+	UsernameFragment string  `json:"usernameFragment"` // ICE 用户名片段，用于跨域场景
 }
 
 // ToWebRTCICECandidateInit 将 SFUICEPayload 转换为 pion/webrtc 的 ICECandidateInit
