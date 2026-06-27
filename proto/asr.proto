@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package asr;
+
+option go_package = "backend/proto/asr";
+
+// AsrService 定义了后端与 ASR 服务之间的双向流式语音识别接口
+// 后端持续发送音频块，ASR 服务持续返回识别结果，适合实时字幕场景
+service AsrService {
+  rpc RecognizeAudioStream(stream AudioChunk) returns (stream TranscriptAudioChunk); // 以流的方式传输音频，并返回流式文本结果
+}
+
+// AudioChunk 音频数据
+message AudioChunk {
+  string session_id = 1; // 用于区分不同语音会话，避免多个用户或房间的上下文串扰
+  string room_id = 2; // 标识当前音频所属房间，便于后端做房间级广播
+  string client_id = 3; // 表示发送音频的客户端标识
+  bytes pcm = 4; // 原始 PCM16 音频数据，按小端有符号短整型编码
+  int32 sample_rate = 5; // 给出音频采样率，通常应为 16000
+  bool is_last = 6; // 标记当前块是否为本次会话的最后一块
+  int64 seq = 7; // 用于保持消息顺序，便于后端做乱序处理或重试
+}
+
+// TranscriptAudioChunk 表示 ASR 服务返回的一段识别结果
+message TranscriptAudioChunk {
+  string session_id = 1; // 对应输入音频块所属会话
+  string room_id = 2; // 对应输入音频块所属房间
+  string client_id = 3; // 对应输入音频块所属客户端
+  string text = 4; // 当前块对应的识别文本结果
+  bool is_final = 5; // 表示当前文本是否为最终结果
+  int64 seq = 6; // 对应输入音频块的序号，便于客户端按顺序拼接
+}
