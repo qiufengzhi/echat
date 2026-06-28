@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package vad;
+
+option go_package = "backend/proto/vad";
+
+// VadService 语音活动检测（VAD）服务
+// 接收 PCM 音频帧，返回该帧是否包含人声
+service VadService {
+  // VadDetect 检测一段 PCM 音频中是否有人声活动
+  rpc VadDetect(VadRequest) returns (VadResponse);
+}
+
+message VadRequest {
+  bytes pcm = 1;           // 原始 16-bit 有符号 PCM 音频字节流（int16 little-endian，单声道）
+  int32 sample_rate = 2;   // PCM 音频的采样率，例如 8000、16000
+}
+
+message VadResponse {
+  bool speech = 1;  // true 表示检测到人声活动，false 表示静音或非人声
+  float score = 2;  // 置信度分数，1.0=高度确信有人声，0.0=高度确信为静音
+}

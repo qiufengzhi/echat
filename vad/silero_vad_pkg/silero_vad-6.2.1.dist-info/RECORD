@@ -1,0 +1,15 @@
+silero_vad/__init__.py,sha256=RlsZ_h1IvBflR99yPTJ4aEtjiCuo7HX5iIIrXb_skls,436
+silero_vad/model.py,sha256=nzMnefdgnnD_Hgu-rbCH_yS6ph0v-oRCZvPJFQo8zT0,1147
+silero_vad/tinygrad_model.py,sha256=ea-4quKLudIHNd9AU77xGRqFt0oNszWl_BbDAt3afoY,2563
+silero_vad/utils_vad.py,sha256=29z8XO8sFKv4zCm0Svt5A4UJqbw0roui50grSIE5Se4,25590
+silero_vad/data/__init__.py,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
+silero_vad/data/silero_vad.jit,sha256=4RIoN_QVTFEUhf4LnGRFX3uSnJb7uNefvbM2OD69NyA,2272526
+silero_vad/data/silero_vad.onnx,sha256=GhU6IvRQnikqlOZ9b5uF6N6yW0mIaCt-F0xlJ52HiOM,2327524
+silero_vad/data/silero_vad_16k.safetensors,sha256=xZJxwoSunIM115XWDgv9txqqzuxXjZvZ_8G4FTwxnqE,1239748
+silero_vad/data/silero_vad_16k_op15.onnx,sha256=ftmN262EzKxM0K6zCZBJKAcT34JcYQqO00VDMY8bLEk,1289603
+silero_vad/data/silero_vad_half.onnx,sha256=HgsZWtSAZZXvRGb0GdFvyn5K_PxmabjAtfduqHVHx2k,1280395
+silero_vad/data/silero_vad_op18_ifless.onnx,sha256=dnHNBLAE6QdtoNSnsaWuw2rfFhw5IwwcuUpP1dtrvSg,2845718
+silero_vad-6.2.1.dist-info/METADATA,sha256=Yg0R6W6hAN4QEiakawu8mBUTSmhLavxA1QlzpVWbp30,9452
+silero_vad-6.2.1.dist-info/WHEEL,sha256=QccIxa26bgl1E6uMy58deGWi-0aeIkkangHcxk2kWfw,87
+silero_vad-6.2.1.dist-info/licenses/LICENSE,sha256=LmPpo4tuj8DHvDfOF0ysoYYocIVsba9Wl8-3heklUgs,1075
+silero_vad-6.2.1.dist-info/RECORD,,
