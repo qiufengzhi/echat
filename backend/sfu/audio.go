@@ -1,84 +1,198 @@
 package sfu
 
 import (
-	"echat-backend/vad"
+	"echat-backend/asr_cli"
+	"echat-backend/vad_cli"
 	"fmt"
-	"github.com/pion/opus"
-	"github.com/pion/rtp"
 	"log"
 	"sync"
+
+	asrpb "echat-backend/proto/asr"
+
+	"github.com/pion/opus"
+	"github.com/pion/rtp"
 )
 
 // vadBufferSize = 16000Hz * 0.5s = 8000 samples，攒够 500ms 后送给 VAD
 const vadBufferSize = 8000
 
-// userVADBuffer 每个用户的 VAD 缓冲状态
-type userVADBuffer struct {
-	pcm []int16
-	mu  sync.Mutex
+// asrPush asr服务请求参数
+type asrReq struct {
+	packet   *rtp.Packet // RTP 包
+	clientID string      // 客户端id，等同于用户id
+	roomId   string      // 房间id
 }
 
-// vadBuffers 按 clientID 缓存 PCM，键是 sourceID（说话人）
-var vadBuffers = &sync.Map{} // map[clientID]*userVADBuffer
+func init() {
+	// todo 本地部署asr接受识别结果用
+	return
+	go getAsrRes()
+}
 
-// vadDetect 检测 RTP 数据包是否包含人声，返回是否有声音（bool）
-func vadDetect(packet *rtp.Packet, clientID string, roomId string) (hasVoice bool) {
-	// 1. 获取 Opus 载荷
-	opusData := packet.Payload
+func getAsrRes() {
+	for res := range asr_cli.AsrServiceClient.Out {
+		log.Printf("[asr] 收到识别结果: user=%s text=%q isFinal=%v seq=%d", res.ClientId, res.Text, res.IsFinal, res.Seq)
+	}
+}
 
-	// DTX / Comfort Noise / 空包等不可解码的载荷，跳过解码，视为无人声
+// asrChunkDuration samples = 16000Hz * 0.4s = 6400 samples，攒够 400ms 送一次 ASR
+const asrChunkDuration = 6400
+
+// asrBuffer 每个 session 的 ASR PCM 缓冲
+type asrBuffer struct {
+	pcm []int16
+	mu  sync.Mutex
+	seq int64
+}
+
+// asrBuffers 按 sessionId 缓存待发送的 PCM
+var asrBuffers = &sync.Map{} // map[sessionId]*asrBuffer
+
+// speechRecognition 语音识别：解码 Opus → VAD 过滤静音 → 攒帧 → 发 ASR
+func speechRecognition(ap asrReq) {
+	opusData := ap.packet.Payload
 	if len(opusData) < 2 {
 		return
 	}
 
-	// 2. 解码为 int16 PCM（silero-vad 原生 16kHz）
 	pcm, err := decodeOpusToInt16(opusData, 16000)
 	if err != nil {
-		log.Printf("[vad] 解码失败: %v", err)
+		log.Printf("[asr] 解码失败: %v", err)
 		return
 	}
 
-	// 3. 写入缓冲区
-	sessionId := getSessionId(clientID, roomId)
-	buf := getOrCreateVADBuffer(sessionId)
+	// VAD 检测当前帧是否为人声，静音跳过，只把说话片段送 ASR
+	sessionId := getSessionId(ap.clientID, ap.roomId)
+	if !vadDetectAndAccumulate(pcm, sessionId) {
+		return
+	}
+
+	buf := getOrCreateASRBuffer(sessionId)
 	buf.mu.Lock()
 	buf.pcm = append(buf.pcm, pcm...)
 
-	// 未攒够 500ms，返回之前的状态（保守策略：不够时不丢弃，视为有声音）
-	if len(buf.pcm) < vadBufferSize {
+	// 未攒够 400ms，先不发送
+	if len(buf.pcm) < asrChunkDuration {
 		buf.mu.Unlock()
-		return true // 攒不够时放行，避免因缓冲时间差导致漏掉声音
+		return
 	}
 
-	// 4. 取出一段 500ms 数据送 VAD
-	chunk := make([]int16, vadBufferSize)
-	copy(chunk, buf.pcm[:vadBufferSize])
-	buf.pcm = buf.pcm[vadBufferSize:] // 保留新的剩余部分
+	// 取出一段 400ms 送 ASR
+	chunk := make([]int16, asrChunkDuration)
+	copy(chunk, buf.pcm[:asrChunkDuration])
+	buf.pcm = buf.pcm[asrChunkDuration:]
+	buf.seq++
+	seq := buf.seq
 	buf.mu.Unlock()
 
-	hasVoice, score, err := vad.VADClientInstance.Detect(chunk, 16000)
-	if err != nil {
-		log.Printf("[vad] VAD检测失败: %v", err)
-		return true // 保守放行
+	asr_cli.AsrServiceClient.In <- asrpb.AudioChunk{
+		SessionId:  sessionId,
+		RoomId:     ap.roomId,
+		ClientId:   ap.clientID,
+		Pcm:        int16ToLEBytes(chunk),
+		SampleRate: 16000,
+		IsLast:     false,
+		Seq:        seq,
 	}
-	log.Printf("[vad] client=%s hasVoice=%v score=%.2f", clientID[:8], hasVoice, score)
-	return
 }
 
-func getOrCreateVADBuffer(clientID string) *userVADBuffer {
-	v, _ := vadBuffers.LoadOrStore(clientID, &userVADBuffer{})
-	return v.(*userVADBuffer)
+func getOrCreateASRBuffer(sessionID string) *asrBuffer {
+	v, _ := asrBuffers.LoadOrStore(sessionID, &asrBuffer{})
+	return v.(*asrBuffer)
+}
+
+// RemoveASRBuffer 客户端离开时清理对应 session 缓冲，并发送结束包
+func RemoveASRBuffer(sessionID string) {
+	v, ok := asrBuffers.LoadAndDelete(sessionID)
+	if !ok {
+		return
+	}
+	buf := v.(*asrBuffer)
+	buf.mu.Lock()
+	defer buf.mu.Unlock()
+
+	// 发送最后一段（如果有残留数据）
+	if len(buf.pcm) > 0 {
+		buf.seq++
+		asr_cli.AsrServiceClient.In <- asrpb.AudioChunk{
+			SessionId:  sessionID,
+			Pcm:        int16ToLEBytes(buf.pcm),
+			SampleRate: 16000,
+			IsLast:     true,
+			Seq:        buf.seq,
+		}
+	} else {
+		// 没有数据也发结束标记，让 ASR 服务刷新内部缓存
+		buf.seq++
+		asr_cli.AsrServiceClient.In <- asrpb.AudioChunk{
+			SessionId:  sessionID,
+			SampleRate: 16000,
+			IsLast:     true,
+			Seq:        buf.seq,
+		}
+	}
+}
+
+// vadState 每个 session 的 VAD 跟踪状态
+type vadState struct {
+	pcm        []int16
+	isSpeaking bool // 当前是否在说话（由上次 VAD 检测结果决定）
+	mu         sync.Mutex
+}
+
+// vadStates 按 sessionId 跟踪每个会话的说话状态
+var vadStates = &sync.Map{} // map[sessionId]*vadState
+
+// vadDetectAndAccumulate 攒够 500ms 做一次 VAD 判定，决定是否继续放行
+// 返回 true 表示当前帧可能是人声（或尚未判定），应送 ASR
+// 初始状态放行，直到 VAD 判定为静音后才拦截；再次检测到人声时恢复放行
+func vadDetectAndAccumulate(pcm []int16, sessionID string) bool {
+	vs := getOrCreateVADState(sessionID)
+	vs.mu.Lock()
+	vs.pcm = append(vs.pcm, pcm...)
+
+	// 尚未攒够 500ms：保持当前状态
+	if len(vs.pcm) < vadBufferSize {
+		cur := vs.isSpeaking
+		vs.mu.Unlock()
+		return cur
+	}
+
+	// 攒够了，取出检测
+	chunk := make([]int16, vadBufferSize)
+	copy(chunk, vs.pcm[:vadBufferSize])
+	vs.pcm = vs.pcm[vadBufferSize:]
+	vs.mu.Unlock()
+
+	hasVoice, _, err := vad_cli.VADClientInstance.Detect(chunk, 16000)
+	if err != nil {
+		log.Printf("[vad] 检测失败: %v", err)
+		// 出错时保守放行
+		return true
+	}
+
+	vs.mu.Lock()
+	vs.isSpeaking = hasVoice
+	vs.mu.Unlock()
+
+	//log.Printf("[vad] session=%s hasVoice=%v", sessionID[:8], hasVoice)
+	return hasVoice
+}
+
+func getOrCreateVADState(sessionID string) *vadState {
+	v, _ := vadStates.LoadOrStore(sessionID, &vadState{isSpeaking: true}) // 初始放行，首次检测后再截断
+	return v.(*vadState)
+}
+
+// RemoveVADState 客户端离开时清理 VAD 状态
+func RemoveVADState(sessionID string) {
+	vadStates.Delete(sessionID)
 }
 
 // 生成一个唯一的 sessionId。房间+用户 视为同一个会话
 func getSessionId(clientID string, roomId string) string {
 	sessionId := fmt.Sprintf("%s-%s", clientID, roomId)
 	return sessionId
-}
-
-// RemoveVADBuffer 在客户端离开时清理对应 buffer
-func RemoveVADBuffer(clientID string) {
-	vadBuffers.Delete(clientID)
 }
 
 func decodeOpusToInt16(opusData []byte, sampleRate int) ([]int16, error) {
@@ -96,4 +210,14 @@ func decodeOpusToInt16(opusData []byte, sampleRate int) ([]int16, error) {
 	}
 
 	return pcm[:n], nil
+}
+
+// int16ToLEBytes 将 []int16 转成小端序 byte 切片
+func int16ToLEBytes(samples []int16) []byte {
+	buf := make([]byte, len(samples)*2)
+	for i, v := range samples {
+		buf[i*2] = byte(v)
+		buf[i*2+1] = byte(v >> 8)
+	}
+	return buf
 }

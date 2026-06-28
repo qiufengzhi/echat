@@ -358,8 +358,10 @@ func (r *SFURoom) Leave(clientID string) {
 	// 停止转发协程
 	peer.stopForwarding()
 
-	// 清理 VAD 缓冲
-	RemoveVADBuffer(clientID)
+	// todo 清理 VAD / ASR 缓冲，发送 ASR 结束标记
+	sessionId := getSessionId(clientID, r.ID)
+	RemoveVADState(sessionId)
+	RemoveASRBuffer(sessionId)
 
 	// 从其他所有客户端的中继表中移除当前客户端的音轨
 	r.lock.Lock()
@@ -516,6 +518,14 @@ func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
 			log.Printf("[sfu] 读取 RTP 失败: source=%s err=%v", sourceID[:8], err)
 			return
 		}
+
+		// todo 本地部署asr，失败了，555
+		//ar := asrReq{
+		//	packet:   rtpPacket,
+		//	clientID: sourceID,
+		//	roomId:   "example", // 可改成 roomID
+		//}
+		//go speechRecognition(ar)
 
 		// 获取当前订阅者列表（可能因加入/离开而变化）
 		r.lock.RLock()
