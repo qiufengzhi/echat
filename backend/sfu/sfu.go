@@ -358,6 +358,9 @@ func (r *SFURoom) Leave(clientID string) {
 	// 停止转发协程
 	peer.stopForwarding()
 
+	// 清理 VAD 缓冲
+	RemoveVADBuffer(clientID)
+
 	// 从其他所有客户端的中继表中移除当前客户端的音轨
 	r.lock.Lock()
 	for _, otherPeer := range r.peers {
@@ -499,36 +502,39 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 	r.lock.Unlock()
 
 	// 启动 RTP 转发协程：从 remoteTrack 读取 RTP 包，写入所有中继音轨。将本人的音频转发给房间内其他客户端
-	go func() {
-		log.Printf("[sfu] 中继协程已启动: source=%s", sourceID[:8])
-		defer log.Printf("[sfu] 中继协程已停止: source=%s", sourceID[:8])
+	go r.forwardRtp(sourceID, remoteTrack)
+}
 
-		for {
-			packet, _, err := remoteTrack.ReadRTP()
-			if err != nil {
-				log.Printf("[sfu] 读取 RTP 失败: source=%s err=%v", sourceID[:8], err)
-				return
-			}
+// forwardRtp 从 remoteTrack 读取 RTP 包，写入所有中继音轨。将本人的音频转发给房间内其他所有客户端
+func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
+	log.Printf("[sfu] 中继协程已启动: source=%s", sourceID[:8])
+	defer log.Printf("[sfu] 中继协程已停止: source=%s", sourceID[:8])
 
-			// 获取当前订阅者列表（可能因加入/离开而变化）
-			r.lock.RLock()
-			forwardClient := make(map[string]*webrtc.TrackLocalStaticRTP)
-			//relays := make([]*webrtc.TrackLocalStaticRTP, 0, len(r.peers))
-			if peer, ok := r.peers[sourceID]; ok {
-				for otherClintId, relay := range peer.outgoingRelays {
-					forwardClient[otherClintId] = relay
-					//relays = append(relays, relay)
-				}
-			}
-			r.lock.RUnlock()
+	for {
+		rtpPacket, _, err := remoteTrack.ReadRTP()
+		if err != nil {
+			log.Printf("[sfu] 读取 RTP 失败: source=%s err=%v", sourceID[:8], err)
+			return
+		}
 
-			for otherClintId, relay := range forwardClient {
-				if err = relay.WriteRTP(packet); err != nil {
-					log.Printf("[sfu] 写入 RTP 失败: source=%s dest=%s err=%v", sourceID[:8], otherClintId, err)
-				}
+		// 获取当前订阅者列表（可能因加入/离开而变化）
+		r.lock.RLock()
+		forwardClient := make(map[string]*webrtc.TrackLocalStaticRTP)
+		//relays := make([]*webrtc.TrackLocalStaticRTP, 0, len(r.peers))
+		if peer, ok := r.peers[sourceID]; ok {
+			for otherClintId, relay := range peer.outgoingRelays {
+				forwardClient[otherClintId] = relay
+				//relays = append(relays, relay)
 			}
 		}
-	}()
+		r.lock.RUnlock()
+
+		for otherClintId, relay := range forwardClient {
+			if err = relay.WriteRTP(rtpPacket); err != nil {
+				log.Printf("[sfu] 写入 RTP 失败: source=%s dest=%s err=%v", sourceID[:8], otherClintId, err)
+			}
+		}
+	}
 }
 
 // stopForwarding 关闭转发协程，确保协程退出
