@@ -24,6 +24,8 @@
 package sfu
 
 import (
+	"echat-backend/asr_cli"
+	asrpb "echat-backend/proto/asr"
 	"fmt"
 	"log"
 	"net"
@@ -358,10 +360,15 @@ func (r *SFURoom) Leave(clientID string) {
 	// 停止转发协程
 	peer.stopForwarding()
 
-	// todo 清理 VAD / ASR 缓冲，发送 ASR 结束标记
-	sessionId := getSessionId(clientID, r.ID)
-	RemoveVADState(sessionId)
-	RemoveASRBuffer(sessionId)
+	// 发送 ASR 结束标记，通知阿里云该客户端音频流已结束
+	sessionID := fmt.Sprintf("%s-%s", clientID, r.ID)
+	recognizer.AudioIn <- asrpb.AudioChunk{
+		SessionId:  sessionID,
+		RoomId:     r.ID,
+		ClientId:   clientID,
+		SampleRate: 16000,
+		IsLast:     true,
+	}
 
 	// 从其他所有客户端的中继表中移除当前客户端的音轨
 	r.lock.Lock()
@@ -507,10 +514,37 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 	go r.forwardRtp(sourceID, remoteTrack)
 }
 
-// forwardRtp 从 remoteTrack 读取 RTP 包，写入所有中继音轨。将本人的音频转发给房间内其他所有客户端
+var recognizer *asr_cli.Recognizer
+
+func init() {
+	cfg := asr_cli.DefaultConfig()
+	cfg.AccessKeyID = "LTAI5t8e6m4utS1L98Wc9pzk"
+	cfg.AccessKeySecret = "BIIucGb9tanf16pfKbi9hkM2QuGUrY"
+	cfg.AppKey = "dMhn0S6yFgYKKElf"
+	var err error
+	recognizer, err = asr_cli.NewRecognizer(cfg)
+	if err != nil {
+		log.Fatalf("创建阿里云 ASR 识别器失败: %v", err)
+	}
+	go recognizer.Start()
+
+	// 接收阿里云 ASR 识别结果
+	go getAsrRes()
+}
+
+// getAsrRes 读取阿里云 ASR 返回的识别结果并打印日志
+func getAsrRes() {
+	for res := range recognizer.AudioOut {
+		log.Printf("[asr] 收到识别结果: user=%s text=%q isFinal=%v seq=%d", res.ClientId, res.Text, res.IsFinal, res.Seq)
+	}
+}
+
+// forwardRtp 从 remoteTrack 读取 RTP 包，转发给房间其他客户端，同时送阿里云 ASR 做语音识别
 func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
 	log.Printf("[sfu] 中继协程已启动: source=%s", sourceID[:8])
 	defer log.Printf("[sfu] 中继协程已停止: source=%s", sourceID[:8])
+
+	sessionID := fmt.Sprintf("%s-%s", sourceID, r.ID)
 
 	for {
 		rtpPacket, _, err := remoteTrack.ReadRTP()
@@ -519,22 +553,27 @@ func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
 			return
 		}
 
-		// todo 本地部署asr，失败了，555
-		//ar := asrReq{
-		//	packet:   rtpPacket,
-		//	clientID: sourceID,
-		//	roomId:   "example", // 可改成 roomID
-		//}
-		//go speechRecognition(ar)
+		// 解码 Opus → PCM，直接送阿里云 ASR
+		pcm, err := decodeOpusToInt16(rtpPacket.Payload, 16000)
+		if err != nil {
+			log.Printf("[asr] 解码失败: source=%s err=%v", sourceID[:8], err)
+		} else if len(pcm) > 0 {
+			// 仅有实际音频数据才送 ASR，DTX 静音包解码后 pcm 为空，直接跳过
+			recognizer.AudioIn <- asrpb.AudioChunk{
+				SessionId:  sessionID,
+				RoomId:     r.ID,
+				ClientId:   sourceID,
+				Pcm:        int16ToLEBytes(pcm),
+				SampleRate: 16000,
+			}
+		}
 
-		// 获取当前订阅者列表（可能因加入/离开而变化）
+		// 转发 RTP 给房间内其他客户端
 		r.lock.RLock()
 		forwardClient := make(map[string]*webrtc.TrackLocalStaticRTP)
-		//relays := make([]*webrtc.TrackLocalStaticRTP, 0, len(r.peers))
 		if peer, ok := r.peers[sourceID]; ok {
 			for otherClintId, relay := range peer.outgoingRelays {
 				forwardClient[otherClintId] = relay
-				//relays = append(relays, relay)
 			}
 		}
 		r.lock.RUnlock()
