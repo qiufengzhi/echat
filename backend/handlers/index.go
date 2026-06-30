@@ -1,12 +1,26 @@
 package handlers
 
-import "net/http"
+import (
+	"fmt"
+	"net/http"
+	"strings"
 
-// IndexHandler 返回一个简单的状态页面，方便直接在浏览器里查看后端和 WebSocket 入口
+	"echat-backend/config"
+)
+
+// wsURL 根据监听地址推断 WebSocket 入口地址（开发用，仅作参考）。
+func wsURL() string {
+	host := config.Get().Server.Addr
+	if strings.HasPrefix(host, ":") {
+		host = "localhost" + host
+	}
+	return fmt.Sprintf("ws://%s/ws", host)
+}
+
+// IndexHandler 返回一个简单的状态页面，方便直接在浏览器里查看后端和 WebSocket 入口。
 func IndexHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(`
-<!DOCTYPE html>
+	fmt.Fprintf(w, `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -51,7 +65,7 @@ func IndexHandler(w http.ResponseWriter, r *http.Request) {
 
         <div class="card">
             <strong>WebSocket 地址</strong>
-            <p><code>ws://localhost:8080/ws</code></p>
+            <p><code>%s</code></p>
         </div>
 
         <div class="card">
@@ -66,5 +80,5 @@ func IndexHandler(w http.ResponseWriter, r *http.Request) {
     </main>
 </body>
 </html>
-	`))
+`, wsURL())
 }

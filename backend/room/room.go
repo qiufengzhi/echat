@@ -13,6 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v4"
 
+	"echat-backend/config"
 	"echat-backend/sfu"
 )
 
@@ -638,9 +639,10 @@ func parseUsername(payload json.RawMessage) string {
 	return strings.Trim(strings.TrimSpace(string(payload)), "\"")
 }
 
-// cleanupIdleRooms 定时扫描所有房间，把已经空掉的房间从内存中移除
+// cleanupIdleRooms 定时扫描所有房间，清理空房间。扫描间隔来自配置文件的 room.idle_timeout。
 func cleanupIdleRooms() {
-	ticker := time.NewTicker(5 * time.Minute)
+	interval, _ := time.ParseDuration(config.Get().Room.IdleTimeout)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for range ticker.C {

@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"log"
 
+	"echat-backend/config"
+
 	vadpb "echat-backend/proto/vad"
 
 	"google.golang.org/grpc"
@@ -13,13 +15,17 @@ import (
 
 var VADClientInstance *VADClient
 
-func init() {
+// InitVADClient 从全局配置初始化 VAD 客户端，替代原有的 init() 硬编码地址。
+// 连接失败时只记录日志不 panic，VAD 检测功能降级但不影响主流程。
+func InitVADClient() {
+	cfg := config.Get().VAD
 	var err error
-	VADClientInstance, err = newVADClient("127.0.0.1:50052")
+	VADClientInstance, err = newVADClient(cfg.GrpcAddr)
 	if err != nil {
-		log.Printf("初始化vad客户端失败: %v", err)
+		log.Printf("[vad] 初始化客户端失败 (addr=%s): %v, VAD 功能已降级", cfg.GrpcAddr, err)
 		return
 	}
+	log.Printf("[vad] 客户端已连接: %s", cfg.GrpcAddr)
 }
 
 type VADClient struct {

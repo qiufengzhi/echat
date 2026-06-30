@@ -30,7 +30,9 @@
 ```text
 /srv/echat/
   docker-compose.prod.yml
-  .env
+  .env                       # 从 .env.example 复制并填入密钥
+  backend/
+    config.yaml              # 后端配置，手动维护和更新
   nginx/
     gateway.prod.conf
 ```
@@ -101,7 +103,31 @@
 
 也就是说，外部访问入口默认只有 `gateway` 容器。
 
-## HTTPS 证书放置方式
+## 首次部署前准备
+
+1. 上传并编辑后端配置（端口、STUN、ASR 开关等通用配置）：
+```bash
+# 从项目复制到服务器，按需修改
+scp backend/config.yaml user@host:/srv/echat/backend/config.yaml
+```
+
+2. 复制环境变量模板并填入密钥：
+```bash
+cp .env.example .env
+# 编辑 .env，填入 ASR 密钥（如需启用）
+```
+
+3. Let's Encrypt 证书获取（如果还没有）：
+
+```bash
+certbot certonly --standalone -d echat.qxbnx.cn
+```
+
+4. 确认服务器端口开放：
+   - 80/tcp（HTTP → HTTPS 重定向）
+   - 443/tcp（HTTPS）
+   - 8080/tcp（WebSocket 信令）
+   - 50000-50100/udp（WebRTC 媒体流）
 
 Nginx 网关直接挂载 Let's Encrypt 证书（域名 `echat.qxbnx.cn`），无需手动复制：
 
@@ -118,19 +144,9 @@ Let's Encrypt 会自动续期，无需额外操作。
 
 ## 为什么不用后端直接开 HTTPS
 
-当前 `deploy/docker-compose.prod.yml` 里默认是：
+当前 `config.yaml` 中 `server.https_enabled` 默认为 `false`，由最外层 Nginx 统一处理 TLS，后端只监听内网 HTTP，更简单也更易维护。
 
-- `HTTPS_ENABLED: "false"`
-
-这是因为当前方案由最外层 Nginx 统一处理 TLS，后端继续只监听内网 HTTP，会更简单，也更容易维护。
-
-如果你以后确实希望后端容器自己监听 HTTPS，可以继续扩展这些环境变量：
-
-- `HTTPS_ENABLED`
-- `TLS_CERT_FILE`
-- `TLS_KEY_FILE`
-
-同时还需要把证书文件挂载进后端容器。
+需要在服务器上修改 `config.yaml` 即可切换：
 
 ## 手动排查命令
 

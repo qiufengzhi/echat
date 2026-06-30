@@ -25,12 +25,11 @@ package sfu
 
 import (
 	"echat-backend/asr_cli"
+	"echat-backend/config"
 	asrpb "echat-backend/proto/asr"
 	"fmt"
 	"log"
 	"net"
-	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -84,55 +83,44 @@ type SFUPeer struct {
 	connectedAt time.Time
 }
 
-var (
-	mediaMinPort uint16   = 50000 // WebRTC 媒体流最小端口，默认 50000
-	mediaMaxPort uint16   = 50100 // WebRTC 媒体流最大端口，默认 50100
-	nat1To1IPs   []string         // NAT 1:1 映射的公网 IP 列表，用于 Docker 部署时告诉客户端正确的外部地址
-)
+// InitSFU 打印 SFU 配置信息
+// 必须在 config.Load() 之后调用
+func InitSFU() {
+	cfg := config.Get().SFU
+	log.Printf("[sfu] 媒体端口范围: %d-%d, NAT1To1IP: %q, STUN: %v",
+		cfg.MediaMinPort, cfg.MediaMaxPort, cfg.NAT1To1IP, cfg.STUNServers)
+}
 
-func init() {
-	// SFU_MEDIA_MIN_PORT/SFU_MEDIA_MAX_PORT: 限制 WebRTC 媒体流端口范围，需与 Docker 端口映射一致
-	if minRtcPort := os.Getenv("SFU_MEDIA_MIN_PORT"); minRtcPort != "" {
-		if p, err := strconv.ParseUint(minRtcPort, 10, 16); err == nil {
-			mediaMinPort = uint16(p)
-		}
+// resolveNAT1To1IPs 解析配置中的 NAT 1:1 映射地址（支持 IP 或域名，逗号分隔）
+// pion/webrtc 的 SetNAT1To1IPs 只接受 IP，域名会解析为第一个 IPv4 地址
+func resolveNAT1To1IPs(raw string) []string {
+	if raw == "" {
+		return nil
 	}
-	if maxRtcPort := os.Getenv("SFU_MEDIA_MAX_PORT"); maxRtcPort != "" {
-		if p, err := strconv.ParseUint(maxRtcPort, 10, 16); err == nil {
-			mediaMaxPort = uint16(p)
+	var result []string
+	for _, addr := range strings.Split(raw, ",") {
+		addr = strings.TrimSpace(addr)
+		if parsedIP := net.ParseIP(addr); parsedIP != nil {
+			result = append(result, parsedIP.String())
+			continue
 		}
-	}
-	// SFU_NAT1_TO_1_IP: 服务器公网 IP/域名，支持逗号分隔多个
-	// 在 Docker 部署时，SFU 默认生成容器内部 IP 的 ICE candidate，客户端无法访问
-	// 设置此变量后，SFU 会用公网 IP 替换内部 IP，让客户端能正确连接
-	if ip := os.Getenv("SFU_NAT1_TO_1_IP"); ip != "" {
-		for _, addr := range strings.Split(ip, ",") {
-			addr = strings.TrimSpace(addr)
-			// 如果是 IP 地址，直接使用
-			if parsedIP := net.ParseIP(addr); parsedIP != nil {
-				nat1To1IPs = append(nat1To1IPs, parsedIP.String())
-				continue
-			}
-			// 如果是域名，解析成 IP（pion/webrtc 的 SetNAT1To1IPs 只接受 IP 地址）
-			ips, err := net.LookupIP(addr)
-			if err != nil {
-				log.Printf("[sfu] 域名解析失败: %s, err=%v", addr, err)
-				continue
-			}
-			for _, resolvedIP := range ips {
-				// 优先使用 IPv4
-				if resolvedIP.To4() != nil {
-					nat1To1IPs = append(nat1To1IPs, resolvedIP.String())
-					break
-				}
-			}
-			// 如果没有 IPv4，使用第一个解析到的 IP（通常是 IPv6）
-			if len(nat1To1IPs) == 0 && len(ips) > 0 {
-				nat1To1IPs = append(nat1To1IPs, ips[0].String())
+		// 域名 → 解析为 IP
+		ips, err := net.LookupIP(addr)
+		if err != nil {
+			log.Printf("[sfu] 域名解析失败: %s, err=%v", addr, err)
+			continue
+		}
+		for _, resolvedIP := range ips {
+			if resolvedIP.To4() != nil {
+				result = append(result, resolvedIP.String())
+				break
 			}
 		}
+		if len(result) == 0 && len(ips) > 0 {
+			result = append(result, ips[0].String())
+		}
 	}
-	log.Printf("[sfu] 媒体端口范围: %d-%d, NAT1To1IP: %v", mediaMinPort, mediaMaxPort, nat1To1IPs)
+	return result
 }
 
 // NewSFUServer 创建 SFU 引擎实例
@@ -189,11 +177,13 @@ func (r *SFURoom) Join(clientID string) error {
 		return fmt.Errorf("client %s already in SFU room", clientID)
 	}
 
+	sfuCfg := config.Get().SFU
+
 	settingEngine := webrtc.SettingEngine{}
 
 	// SetEphemeralUDPPortRange: 限制 WebRTC 媒体流使用的 UDP 端口范围
 	// Docker 部署时必须设置，确保端口与 Docker 端口映射一致，否则客户端无法连接
-	if err := settingEngine.SetEphemeralUDPPortRange(mediaMinPort, mediaMaxPort); err != nil {
+	if err := settingEngine.SetEphemeralUDPPortRange(sfuCfg.MediaMinPort, sfuCfg.MediaMaxPort); err != nil {
 		return fmt.Errorf("set port range: %w", err)
 	}
 
@@ -201,19 +191,20 @@ func (r *SFURoom) Join(clientID string) error {
 	// 当 SFU 在 Docker 容器内运行时，默认生成的 ICE candidate 使用容器内部 IP（如 172.17.0.x），
 	// 客户端无法访问。设置此选项后，SFU 会将 host 类型的 candidate 地址替换为公网 IP，
 	// 让客户端能正确建立 WebRTC 连接
+	nat1To1IPs := resolveNAT1To1IPs(sfuCfg.NAT1To1IP)
 	if len(nat1To1IPs) > 0 {
 		settingEngine.SetNAT1To1IPs(nat1To1IPs, webrtc.ICECandidateTypeHost)
 	}
 
 	api := webrtc.NewAPI(webrtc.WithSettingEngine(settingEngine))
 
-	config := webrtc.Configuration{
+	cg := webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
-			{URLs: []string{"stun:stun.l.google.com:19302"}},
+			{URLs: sfuCfg.STUNServers},
 		},
 	}
 
-	pc, err := api.NewPeerConnection(config)
+	pc, err := api.NewPeerConnection(cg)
 	if err != nil {
 		return fmt.Errorf("create peer connection: %w", err)
 	}
@@ -362,7 +353,7 @@ func (r *SFURoom) Leave(clientID string) {
 
 	// 发送 ASR 结束标记，通知阿里云该客户端音频流已结束
 	sessionID := fmt.Sprintf("%s-%s", clientID, r.ID)
-	recognizer.AudioIn <- asrpb.AudioChunk{
+	asr_cli.GlobalRecognizer.AudioIn <- asrpb.AudioChunk{
 		SessionId:  sessionID,
 		RoomId:     r.ID,
 		ClientId:   clientID,
@@ -514,27 +505,15 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 	go r.forwardRtp(sourceID, remoteTrack)
 }
 
-var recognizer *asr_cli.Recognizer
-
-func init() {
-	cfg := asr_cli.DefaultConfig()
-	cfg.AccessKeyID = "LTAI5t8e6m4utS1L98Wc9pzk"
-	cfg.AccessKeySecret = "BIIucGb9tanf16pfKbi9hkM2QuGUrY"
-	cfg.AppKey = "dMhn0S6yFgYKKElf"
-	var err error
-	recognizer, err = asr_cli.NewRecognizer(cfg)
-	if err != nil {
-		log.Fatalf("创建阿里云 ASR 识别器失败: %v", err)
-	}
-	go recognizer.Start()
-
-	// 接收阿里云 ASR 识别结果
+// StartASRLogger 启动后台协程，持续从 ASR 识别器读取识别结果并打印日志
+// 必须在 asr_cli.Init() 之后调用
+func StartASRLogger() {
 	go getAsrRes()
 }
 
 // getAsrRes 读取阿里云 ASR 返回的识别结果并打印日志
 func getAsrRes() {
-	for res := range recognizer.AudioOut {
+	for res := range asr_cli.GlobalRecognizer.AudioOut {
 		log.Printf("[asr] 收到识别结果: user=%s text=%q isFinal=%v seq=%d", res.ClientId, res.Text, res.IsFinal, res.Seq)
 	}
 }
@@ -559,7 +538,7 @@ func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
 			log.Printf("[asr] 解码失败: source=%s err=%v", sourceID[:8], err)
 		} else if len(pcm) > 0 {
 			// 仅有实际音频数据才送 ASR，DTX 静音包解码后 pcm 为空，直接跳过
-			recognizer.AudioIn <- asrpb.AudioChunk{
+			asr_cli.GlobalRecognizer.AudioIn <- asrpb.AudioChunk{
 				SessionId:  sessionID,
 				RoomId:     r.ID,
 				ClientId:   sourceID,

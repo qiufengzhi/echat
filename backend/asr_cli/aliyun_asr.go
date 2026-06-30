@@ -24,6 +24,7 @@ import (
 	"os"
 	"time"
 
+	"echat-backend/config"
 	asrpb "echat-backend/proto/asr"
 
 	nls "github.com/aliyun/alibabacloud-nls-go-sdk"
@@ -128,9 +129,47 @@ func (s *asrSession) shutdown() {
 	s.trans.Shutdown()
 }
 
-// NewRecognizer 创建一个阿里云 ASR 识别器。
+// GlobalRecognizer 全局 ASR 识别器实例，由 Init() 初始化
+// 仅在 provider="aliyun" 且 Init() 成功后非 nil，使用前需判空
+var GlobalRecognizer *Recognizer
+
+// Init 从配置文件初始化全局 ASR 识别器并启动
+// 必须在 config.Load() 之后调用
+func Init(cfg config.ASRConfig) {
+	if cfg.Provider != "aliyun" {
+		log.Printf("[asr] 未启用 (provider=%q)", cfg.Provider)
+		return
+	}
+
+	aliyunCfg := DefaultConfig()
+	if cfg.Aliyun.AccessKeyID != "" {
+		aliyunCfg.AccessKeyID = cfg.Aliyun.AccessKeyID
+	}
+	if cfg.Aliyun.AccessKeySecret != "" {
+		aliyunCfg.AccessKeySecret = cfg.Aliyun.AccessKeySecret
+	}
+	if cfg.Aliyun.AppKey != "" {
+		aliyunCfg.AppKey = cfg.Aliyun.AppKey
+	}
+	aliyunCfg.EnableIntermediateResult = cfg.Aliyun.EnableIntermediate
+	aliyunCfg.EnablePunctuationPrediction = cfg.Aliyun.EnablePunctuation
+	aliyunCfg.EnableITN = cfg.Aliyun.EnableITN
+	if cfg.Aliyun.MaxSentenceSilenceMs > 0 {
+		aliyunCfg.MaxSentenceSilence = cfg.Aliyun.MaxSentenceSilenceMs
+	}
+
+	var err error
+	GlobalRecognizer, err = NewRecognizer(aliyunCfg)
+	if err != nil {
+		log.Fatalf("创建阿里云 ASR 识别器失败: %v", err)
+	}
+	log.Printf("[asr] 阿里云 ASR 已初始化")
+	go GlobalRecognizer.Start()
+}
+
+// NewRecognizer 创建一个阿里云 ASR 识别器
 // 调用方负责在不需要时调用 Start()（会阻塞在读取循环），
-// 或通过关闭 AudioIn 通道来触发优雅退出。
+// 或通过关闭 AudioIn 通道来触发优雅退出
 func NewRecognizer(cfg AliyunASRConfig) (*Recognizer, error) {
 	cfg.fillDefaults()
 	if err := cfg.Validate(); err != nil {

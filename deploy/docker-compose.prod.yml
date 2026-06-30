@@ -1,37 +1,41 @@
-services:
-  gateway: # 最外层 HTTPS 入口，负责 TLS 终止并把请求转发给前端容器。
-    image: nginx:1.27-alpine # 直接使用官方 Nginx 镜像，避免额外维护自定义网关镜像。
-    restart: unless-stopped # 网关异常退出后自动重启，保证外部入口尽量持续可用。
-    depends_on:
-      - frontend # 先启动前端容器，再启动 HTTPS 网关。
-    ports:
-      - "80:80" # 对外开放 HTTP，用于跳转到 HTTPS。
-      - "443:443" # 对外开放 HTTPS，浏览器最终通过这个端口访问。
-    volumes:
-      - ./nginx/gateway.prod.conf:/etc/nginx/conf.d/default.conf:ro # 挂载生产网关配置。
-      - /etc/letsencrypt/live/echat.qxbnx.cn/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro # 挂载 Let's Encrypt 证书公钥链文件。
-      - /etc/letsencrypt/live/echat.qxbnx.cn/privkey.pem:/etc/nginx/ssl/privkey.pem:ro # 挂载 Let's Encrypt 证书私钥文件。
+# eChat 生产环境 Docker Compose 配置
+# 部署前请先配置 .env 文件（参考 .env.example）
+#
+# 启动命令：
+#   docker compose --env-file .env -f docker-compose.prod.yml up -d
 
-  backend: # 后端信令服务，供前端通过容器网络访问。
-    image: ${BACKEND_IMAGE}:${IMAGE_TAG} # 本次部署的后端镜像名和 tag，由 CI 写入 .env。
-    restart: unless-stopped # 容器异常退出后自动重启，手动停止时不强制拉起。
+services:
+  gateway: # 最外层 HTTPS 入口，负责 TLS 终止并把请求转发给前端容器
+    image: nginx:1.27-alpine # 直接使用官方 Nginx 镜像，避免额外维护自定义网关镜像
+    restart: unless-stopped # 网关异常退出后自动重启，保证外部入口尽量持续可用
+    depends_on:
+      - frontend # 先启动前端容器，再启动 HTTPS 网关
+    ports:
+      - "80:80" # 对外开放 HTTP，用于跳转到 HTTPS
+      - "443:443" # 对外开放 HTTPS，浏览器最终通过这个端口访问
+    volumes:
+      - ./nginx/gateway.prod.conf:/etc/nginx/conf.d/default.conf:ro # 挂载生产网关配置
+      - /etc/letsencrypt/live/echat.qxbnx.cn/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro # 证书公钥链文件
+      - /etc/letsencrypt/live/echat.qxbnx.cn/privkey.pem:/etc/nginx/ssl/privkey.pem:ro # 证书私钥文件
+
+  backend: # 后端信令服务，供前端通过容器网络访问
+    image: ${BACKEND_IMAGE}:${IMAGE_TAG} # 本次部署的后端镜像名和 tag，由 CI 写入 .env
+    restart: unless-stopped # 容器异常退出后自动重启，手动停止时不强制拉起
+    volumes:
+      - ./backend/config.yaml:/app/config.yaml:ro
     environment:
-      SERVER_ADDR: ":8080" # 后端在容器内部监听 8080 端口。
-      HTTPS_ENABLED: "false" # 生产环境默认由前置网关或前端容器处理 HTTP 入口，这里先关闭后端自带 HTTPS。
-      SFU_MEDIA_MIN_PORT: "50000" # WebRTC 媒体流起始端口，需与下方 ports 映射一致。
-      SFU_MEDIA_MAX_PORT: "50010" # WebRTC 媒体流结束端口，需与下方 ports 映射一致。
-      SFU_NAT1_TO_1_IP: "47.121.180.1" # 服务器公网域名/IP，用于 NAT 穿透时告诉客户端正确的外部地址。
-    # expose:
-    #   - "8080" # 只暴露给 compose 内部网络，不直接映射到宿主机。
-    #   - "49152-65535:49152-65535/udp" 
+      # 仅密钥通过环境变量注入，其他配置（端口、STUN、ASR 开关等）走 config.yaml
+      ALIBABA_CLOUD_ACCESS_KEY_ID: ${ALIBABA_CLOUD_ACCESS_KEY_ID:-}
+      ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${ALIBABA_CLOUD_ACCESS_KEY_SECRET:-}
+      NLS_APP_KEY: ${NLS_APP_KEY:-}
     ports:
       - "8080:8080" # 映射 HTTP/WebSocket 信令端口
-      -  "50000-50010:50000-50010/udp" # 映射 WebRTC 媒体流端口
+      - "50000-50100:50000-50100/udp" # 映射 WebRTC 媒体流端口范围，需与 config.yaml 中 media_min_port / media_max_port 一致
 
-  frontend: # 前端静态站点和 Nginx 反向代理入口。
-    image: ${FRONTEND_IMAGE}:${IMAGE_TAG} # 本次部署的前端镜像名和 tag，由 CI 写入 .env。
-    restart: unless-stopped # 容器异常退出后自动重启。
+  frontend: # 前端静态站点和 Nginx 反向代理入口
+    image: ${FRONTEND_IMAGE}:${IMAGE_TAG} # 本次部署的前端镜像名和 tag，由 CI 写入 .env
+    restart: unless-stopped # 容器异常退出后自动重启
     depends_on:
-      - backend # 先启动后端，再启动前端代理层。
+      - backend # 先启动后端，再启动前端代理层
     expose:
-      - "80" # 只在 Compose 内部网络暴露，外部流量统一经 gateway 进入。
+      - "80" # 只在 Compose 内部网络暴露，外部流量统一经 gateway 进入
