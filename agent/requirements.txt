@@ -1,0 +1,12 @@
+# Agent gRPC 服务依赖
+# 安装方式：pip install -r agent/requirements.txt
+
+# OpenAI 兼容客户端（调用 DeepSeek API）
+openai>=1.0.0
+
+# gRPC
+grpcio>=1.60.0
+protobuf>=4.25.0
+
+# YAML 配置文件解析
+pyyaml>=6.0

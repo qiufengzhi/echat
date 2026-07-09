@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package llm;
+
+option go_package = "backend/proto/llm";
+
+// LLMService 是 LLM 对话的双向流式服务。
+// 后端将 ASR 识别文本发给 LLM，LLM 调用 API 处理后流式回传结果。
+service LLMService {
+  rpc ChatStream(stream LLMRequest) returns (stream LLMResponse);
+}
+
+message LLMRequest {
+  string session_id = 1; // 会话 ID，用于关联同一对话的多次请求
+  string room_id = 2;    // 房间 ID
+  string client_id = 3;  // 客户端 ID
+  string user_text = 4;  // 用户输入文本（来自 ASR 识别）
+  bool is_last = 5;      // 标记是否为本次请求的最后一个文本块，为 true 时 LLM 开始生成回复
+  int64 seq = 6;         // 请求序号，用于保持消息顺序
+}
+
+message LLMResponse {
+  string session_id = 1;      // 对应请求的会话 ID
+  string room_id = 2;         // 对应请求的房间 ID
+  string client_id = 3;       // 对应请求的客户端 ID
+  string response_text = 4;   // LLM 生成的文本片段（流式返回）
+  bool is_final = 5;          // 标记是否为本次回复的最后一个片段，为 true 表示回复结束
+  int64 seq = 6;              // 对应请求的序号
+}
