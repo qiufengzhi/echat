@@ -26,7 +26,9 @@ package sfu
 import (
 	"echat-backend/asr_cli"
 	"echat-backend/config"
+	"echat-backend/llm_cli"
 	asrpb "echat-backend/proto/asr"
+	llmpb "echat-backend/proto/llm"
 	"fmt"
 	"log"
 	"net"
@@ -514,6 +516,14 @@ func StartASRLogger() {
 // getAsrRes 读取阿里云 ASR 返回的识别结果并打印日志
 func getAsrRes() {
 	for res := range asr_cli.GlobalRecognizer.AudioOut {
+		llm_cli.LLMServiceClient.In <- &llmpb.LLMRequest{
+			SessionId: res.SessionId,
+			RoomId:    res.SessionId,
+			ClientId:  res.ClientId,
+			UserText:  res.Text,
+			IsLast:    res.IsFinal,
+			Seq:       res.Seq,
+		}
 		log.Printf("[asr] 收到识别结果: user=%s text=%q isFinal=%v seq=%d", res.ClientId, res.Text, res.IsFinal, res.Seq)
 	}
 }

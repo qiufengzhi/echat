@@ -135,7 +135,8 @@ var GlobalRecognizer *Recognizer
 
 // Init 从配置文件初始化全局 ASR 识别器并启动
 // 必须在 config.Load() 之后调用
-func Init(cfg config.ASRConfig) {
+func Init() {
+	cfg := config.Get().ASR
 	if cfg.Provider != "aliyun" {
 		log.Printf("[asr] 未启用 (provider=%q)", cfg.Provider)
 		return

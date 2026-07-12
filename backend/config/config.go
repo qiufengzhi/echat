@@ -19,6 +19,7 @@ type Config struct {
 	SFU    SFUConfig    `yaml:"sfu"`    // WebRTC SFU 媒体引擎配置
 	ASR    ASRConfig    `yaml:"asr"`    // 语音识别配置
 	VAD    VADConfig    `yaml:"vad"`    // 语音活动检测配置
+	LLM    LLMConfig    `yaml:"llm"`    // LLM 服务配置
 	Room   RoomConfig   `yaml:"room"`   // 房间与 WebSocket 配置
 }
 
@@ -60,6 +61,11 @@ type AliyunConf struct {
 // VADConfig VAD 语音活动检测配置
 type VADConfig struct {
 	GrpcAddr string `yaml:"grpc_addr"` // VAD gRPC 服务地址
+}
+
+// LLMConfig LLM 服务配置
+type LLMConfig struct {
+	GrpcAddr string `yaml:"grpc_addr"` // LLM gRPC 服务地址
 }
 
 // RoomConfig 房间与 WebSocket 配置
@@ -105,6 +111,9 @@ func DefaultConfig() *Config {
 		},
 		VAD: VADConfig{
 			GrpcAddr: "127.0.0.1:50052",
+		},
+		LLM: LLMConfig{
+			GrpcAddr: "127.0.0.1:50053",
 		},
 		Room: RoomConfig{
 			IdleTimeout:   "5m",
@@ -202,6 +211,11 @@ func applyEnvOverrides(cfg *Config) {
 	// --- VAD ---
 	if v := os.Getenv("VAD_GRPC_ADDR"); v != "" {
 		cfg.VAD.GrpcAddr = v
+	}
+
+	// --- LLM ---
+	if v := os.Getenv("LLM_GRPC_ADDR"); v != "" {
+		cfg.LLM.GrpcAddr = v
 	}
 
 	// --- Room ---

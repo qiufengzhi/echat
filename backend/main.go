@@ -4,6 +4,7 @@ import (
 	"echat-backend/asr_cli"
 	"echat-backend/config"
 	"echat-backend/handlers"
+	"echat-backend/llm_cli"
 	"echat-backend/room"
 	"echat-backend/sfu"
 	"log"
@@ -12,18 +13,20 @@ import (
 
 // main 加载配置、初始化各模块，然后启动 HTTP/HTTPS 服务
 func main() {
+	// 加载配置文件
 	_, err := config.Load("config.yaml")
 	if err != nil {
 		log.Fatalf("加载配置失败: %v", err)
 	}
 
-	sfu.InitSFU()
-	asr_cli.Init(config.Get().ASR)
-	sfu.StartASRLogger()
+	sfu.InitSFU()        // 初始化 SFU
+	asr_cli.Init()       // 初始化 ASR rpc客户端
+	sfu.StartASRLogger() // 启动后台协程，持续从 ASR 识别器读取识别结果并打印日志
 	//vad_cli.InitVADClient()
+	llm_cli.Init() // 初始化 LLM rpc客户端
 
 	http.HandleFunc("/", handlers.IndexHandler)
-	http.HandleFunc("/ws", handlers.WebSocketHandler)
+	http.HandleFunc("/ws", handlers.WebSocketHandler) // 注册 WebSocket 处理函数
 
 	// 启动后台清理协程，定期回收空房间
 	room.StartCleanupLoop()
