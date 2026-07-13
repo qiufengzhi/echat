@@ -20,6 +20,7 @@ type Config struct {
 	ASR    ASRConfig    `yaml:"asr"`    // 语音识别配置
 	VAD    VADConfig    `yaml:"vad"`    // 语音活动检测配置
 	LLM    LLMConfig    `yaml:"llm"`    // LLM 服务配置
+	TTS    TTSConfig    `yaml:"tts"`    // 语音合成配置
 	Room   RoomConfig   `yaml:"room"`   // 房间与 WebSocket 配置
 }
 
@@ -66,6 +67,27 @@ type VADConfig struct {
 // LLMConfig LLM 服务配置
 type LLMConfig struct {
 	GrpcAddr string `yaml:"grpc_addr"` // LLM gRPC 服务地址
+}
+
+// TTSConfig 语音合成配置
+type TTSConfig struct {
+	Provider   string     `yaml:"provider"`    // 合成提供商："aliyun" | "xfyun" | ""（禁用）
+	Aliyun     AliyunConf `yaml:"aliyun"`      // 阿里云语音合成配置（复用 ASR 的阿里云配置）
+	Xfyun      XfyunConf  `yaml:"xfyun"`       // 讯飞语音合成配置
+	Voice      string     `yaml:"voice"`       // 语音音色，默认 "Alicia"
+	SampleRate int        `yaml:"sample_rate"` // 采样率，默认 16000
+}
+
+// XfyunConf 讯飞语音合成配置
+type XfyunConf struct {
+	AppID     string `yaml:"app_id"`     // 讯飞控制台 APPID
+	APIKey    string `yaml:"api_key"`    // 讯飞 APIKey
+	APISecret string `yaml:"api_secret"` // 讯飞 APISecret
+	Voice     string `yaml:"voice"`      // 发音人，如 "x4_xiaoyan"，默认 "xiaoyan"
+	Speed     int    `yaml:"speed"`      // 语速 0-100，默认 50
+	Volume    int    `yaml:"volume"`     // 音量 0-100，默认 50
+	Pitch     int    `yaml:"pitch"`      // 音高 0-100，默认 50
+	AudioFmt  string `yaml:"audio_fmt"`  // 音频编码: raw(pcm) / lame(mp3) / opus / opus-wb，默认 raw
 }
 
 // RoomConfig 房间与 WebSocket 配置
@@ -115,6 +137,18 @@ func DefaultConfig() *Config {
 		LLM: LLMConfig{
 			GrpcAddr: "127.0.0.1:50053",
 		},
+		TTS: TTSConfig{
+			Provider:   "aliyun",
+			Voice:      "Alicia",
+			SampleRate: 16000,
+			Xfyun: XfyunConf{
+				Voice:    "xiaoyan",
+				Speed:    50,
+				Volume:   50,
+				Pitch:    50,
+				AudioFmt: "raw",
+			},
+		},
 		Room: RoomConfig{
 			IdleTimeout:   "5m",
 			WSReadBuffer:  1024,
@@ -140,7 +174,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("读取配置文件 %s: %w", path, err)
 	}
 
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	if err = yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("解析配置文件 %s: %w", path, err)
 	}
 
@@ -216,6 +250,50 @@ func applyEnvOverrides(cfg *Config) {
 	// --- LLM ---
 	if v := os.Getenv("LLM_GRPC_ADDR"); v != "" {
 		cfg.LLM.GrpcAddr = v
+	}
+
+	// --- TTS ---
+	if v := os.Getenv("TTS_PROVIDER"); v != "" {
+		cfg.TTS.Provider = v
+	}
+	if v := os.Getenv("TTS_VOICE"); v != "" {
+		cfg.TTS.Voice = v
+	}
+	if v := os.Getenv("TTS_SAMPLE_RATE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.TTS.SampleRate = n
+		}
+	}
+	// 讯飞 TTS
+	if v := os.Getenv("XF_TTS_APP_ID"); v != "" {
+		cfg.TTS.Xfyun.AppID = v
+	}
+	if v := os.Getenv("XF_TTS_API_KEY"); v != "" {
+		cfg.TTS.Xfyun.APIKey = v
+	}
+	if v := os.Getenv("XF_TTS_API_SECRET"); v != "" {
+		cfg.TTS.Xfyun.APISecret = v
+	}
+	if v := os.Getenv("XF_TTS_VOICE"); v != "" {
+		cfg.TTS.Xfyun.Voice = v
+	}
+	if v := os.Getenv("XF_TTS_SPEED"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.TTS.Xfyun.Speed = n
+		}
+	}
+	if v := os.Getenv("XF_TTS_VOLUME"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.TTS.Xfyun.Volume = n
+		}
+	}
+	if v := os.Getenv("XF_TTS_PITCH"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.TTS.Xfyun.Pitch = n
+		}
+	}
+	if v := os.Getenv("XF_TTS_AUDIO_FMT"); v != "" {
+		cfg.TTS.Xfyun.AudioFmt = v
 	}
 
 	// --- Room ---

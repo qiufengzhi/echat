@@ -2,6 +2,7 @@ package llm_cli
 
 import (
 	"context"
+	"echat-backend/tts_cli"
 	"io"
 	"log"
 
@@ -56,6 +57,7 @@ func Init() {
 				log.Printf("接收 LLM 回复错误: %v", err)
 				return
 			}
+			log.Printf("[llm_cli] 收到回复: %s", resp)
 			LLMServiceClient.Out <- resp
 		}
 	}()
@@ -67,6 +69,14 @@ func Init() {
 				log.Printf("[llm_cli] 发送请求错误: %v", err)
 				break
 			}
+		}
+	}()
+
+	// 启动 TTS 消费协程
+	go func() {
+		for resp := range LLMServiceClient.Out {
+			// 给 TTS 发送语音合成请求
+			tts_cli.GlobalTTSService.ProcessText(resp)
 		}
 	}()
 }

@@ -408,8 +408,15 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, default=None, help="覆盖配置文件中的 llm.temperature")
     args = parser.parse_args()
 
+    # 将相对路径的 --config 解析为相对于项目根目录的绝对路径
+    # 避免因工作目录不同（如 PyCharm 直接运行脚本时）而找不到配置文件
+    config_path = args.config
+    config_file = Path(config_path)
+    if not config_file.is_absolute():
+        config_file = PROJECT_ROOT / config_file
+
     # 加载配置（配置文件 + 环境变量）
-    cfg = Config(args.config)
+    cfg = Config(str(config_file))
 
     # 命令行参数覆盖（优先级最高）
     if args.host is not None:

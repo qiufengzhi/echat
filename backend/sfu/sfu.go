@@ -516,6 +516,7 @@ func StartASRLogger() {
 // getAsrRes 读取阿里云 ASR 返回的识别结果并打印日志
 func getAsrRes() {
 	for res := range asr_cli.GlobalRecognizer.AudioOut {
+		// 将识别结果送 LLM
 		llm_cli.LLMServiceClient.In <- &llmpb.LLMRequest{
 			SessionId: res.SessionId,
 			RoomId:    res.SessionId,
