@@ -1,8 +1,11 @@
 interface ControlDockProps {
   isMuted: boolean // 当前用户是否静音
   isSpeakerOn: boolean // 当前是否播放房间声音
+  isHost: boolean // 当前用户是否为房主，决定是否展示 AI 按钮
+  isAIEnabled: boolean // AI 语音助手是否已开启
   onToggleMute: () => void // 点击麦克风按钮时触发
   onToggleSpeaker: () => void // 点击扬声器按钮时触发
+  onToggleAI: () => void // 点击 AI 按钮时触发，切换 AI 语音助手开关
   onOpenMembers: () => void // 点击成员按钮时触发
   onOpenInvite: () => void // 点击邀请按钮时触发
   onOpenSettings: () => void // 点击设置按钮时触发
@@ -13,8 +16,11 @@ interface ControlDockProps {
 export default function ControlDock({
   isMuted,
   isSpeakerOn,
+  isHost,
+  isAIEnabled,
   onToggleMute,
   onToggleSpeaker,
+  onToggleAI,
   onOpenMembers,
   onOpenInvite,
   onOpenSettings,
@@ -40,6 +46,17 @@ export default function ControlDock({
       >
         {isSpeakerOn ? '🔊' : '🔈'}
       </button>
+      {isHost && (
+        <button
+          className={`icon-button ${isAIEnabled ? 'primary' : ''}`}
+          type="button"
+          aria-label={isAIEnabled ? '关闭 AI 语音助手' : '开启 AI 语音助手'}
+          title={isAIEnabled ? '关闭 AI 语音助手' : '开启 AI 语音助手'}
+          onClick={onToggleAI}
+        >
+          🤖
+        </button>
+      )}
       <button className="icon-button" type="button" aria-label="查看成员" title="查看成员" onClick={onOpenMembers}>
         👥
       </button>

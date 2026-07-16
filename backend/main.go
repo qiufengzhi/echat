@@ -20,9 +20,8 @@ func main() {
 		log.Fatalf("加载配置失败: %v", err)
 	}
 
-	sfu.InitSFU()        // 初始化 SFU
 	asr_cli.Init()       // 初始化 ASR rpc客户端
-	sfu.StartASRLogger() // 启动后台协程，持续从 ASR 识别器读取识别结果并打印日志
+	sfu.StartASRLogger() // 提取ASR识别结果，并送LLM处理
 	//vad_cli.InitVADClient()
 	llm_cli.Init() // 初始化 LLM rpc客户端
 	tts_cli.Init() // 初始化 TTS

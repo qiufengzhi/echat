@@ -10,6 +10,7 @@ export type SignalingClientMessageType =
   | 'sfu_offer' // SFU：前端发起 SDP Offer 给服务端
   | 'sfu_ice'    // SFU：前端转发 ICE Candidate 给服务端
   | 'sfu_renegotiation_answer' // SFU：前端回复 renegotiation Answer 给服务端
+  | 'ai_toggle' // 前端（仅房主）请求切换 AI 语音助手的开关状态
 
 // SignalingServerMessageType 描述服务端发给前端的房间状态和 SFU 信令消息类型
 export type SignalingServerMessageType =
@@ -23,6 +24,7 @@ export type SignalingServerMessageType =
   | 'sfu_answer'  // SFU：服务端回复 SDP Answer，前端设为远端描述完成协商
   | 'sfu_ice'     // SFU：服务端转发 ICE Candidate 给前端
   | 'sfu_renegotiation_offer' // SFU：服务端在 AddTrack 后发送的 renegotiation Offer
+  | 'ai_status'   // 服务端回复发送者当前 AI 语音助手的开关状态
 
 // SignalingMessageType 是前后端 WebSocket 共用的完整消息类型集合
 export type SignalingMessageType = SignalingClientMessageType | SignalingServerMessageType
@@ -104,6 +106,18 @@ export interface RenegotiationOfferPayload {
 // RenegotiationAnswerPayload 是前端回复 renegotiation Offer 的 Answer
 export interface RenegotiationAnswerPayload {
   sdp: string   // renegotiation SDP Answer
+}
+
+// ─── AI 语音助手载荷 ───
+
+// AITogglePayload 是前端请求切换 AI 语音助手开关的载荷
+export interface AITogglePayload {
+  enable: boolean // true 表示开启 AI 语音助手，false 表示关闭
+}
+
+// AIStatusPayload 是服务端回复 AI 语音助手当前状态的载荷
+export interface AIStatusPayload {
+  enable: boolean // 当前 AI 语音助手的实际开关状态
 }
 
 // ─── 通用消息结构 ───

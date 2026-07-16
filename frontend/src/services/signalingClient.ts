@@ -1,4 +1,4 @@
-import type { LeavePayload, OutgoingSignalingMessage, SignalingMessage } from '../types/signaling'
+import type { AITogglePayload, LeavePayload, OutgoingSignalingMessage, SignalingMessage } from '../types/signaling'
 
 // 信令心跳间隔要短于常见代理 60 秒空闲超时，避免 WebSocket 长时间无数据被中间层关闭
 const SIGNALING_HEARTBEAT_INTERVAL_MS = 25_000
@@ -177,6 +177,15 @@ export class SignalingClient {
       type: 'sfu_renegotiation_answer',
       room_id: this.roomId,
       payload: answer,
+    })
+  }
+
+  // sendAIToggle 请求切换 AI 语音助手的开关状态，仅房主可以调用，服务端以 ai_status 回复确认
+  sendAIToggle(enable: boolean): void {
+    this.send<AITogglePayload>({
+      type: 'ai_toggle',
+      room_id: this.roomId,
+      payload: { enable },
     })
   }
 

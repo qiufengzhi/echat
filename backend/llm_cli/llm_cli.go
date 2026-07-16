@@ -2,6 +2,7 @@ package llm_cli
 
 import (
 	"context"
+	"echat-backend/global"
 	"echat-backend/tts_cli"
 	"io"
 	"log"
@@ -75,6 +76,10 @@ func Init() {
 	// 启动 TTS 消费协程
 	go func() {
 		for resp := range LLMServiceClient.Out {
+			// 是否开启ai语音助手
+			if !global.StartAiAssistant.Load() {
+				continue
+			}
 			// 给 TTS 发送语音合成请求
 			tts_cli.GlobalTTSService.ProcessText(resp)
 		}

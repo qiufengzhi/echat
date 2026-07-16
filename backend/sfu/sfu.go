@@ -26,10 +26,12 @@ package sfu
 import (
 	"echat-backend/asr_cli"
 	"echat-backend/config"
+	"echat-backend/global"
 	"echat-backend/llm_cli"
 	asrpb "echat-backend/proto/asr"
 	llmpb "echat-backend/proto/llm"
 	"fmt"
+	"github.com/pion/rtp"
 	"log"
 	"net"
 	"strings"
@@ -83,14 +85,6 @@ type SFUPeer struct {
 	stopRelay chan struct{}
 
 	connectedAt time.Time
-}
-
-// InitSFU 打印 SFU 配置信息
-// 必须在 config.Load() 之后调用
-func InitSFU() {
-	cfg := config.Get().SFU
-	log.Printf("[sfu] 媒体端口范围: %d-%d, NAT1To1IP: %q, STUN: %v",
-		cfg.MediaMinPort, cfg.MediaMaxPort, cfg.NAT1To1IP, cfg.STUNServers)
 }
 
 // resolveNAT1To1IPs 解析配置中的 NAT 1:1 映射地址（支持 IP 或域名，逗号分隔）
@@ -516,20 +510,26 @@ func StartASRLogger() {
 // getAsrRes 读取阿里云 ASR 返回的识别结果并打印日志
 func getAsrRes() {
 	for res := range asr_cli.GlobalRecognizer.AudioOut {
+		// todo 唤醒/屏蔽 AI助手 唤醒：提示词、按钮  打断：任何话、按钮
+		// 是否开启ai语音助手
+		if !global.StartAiAssistant.Load() {
+			continue
+		}
+
 		// 将识别结果送 LLM
 		llm_cli.LLMServiceClient.In <- &llmpb.LLMRequest{
 			SessionId: res.SessionId,
-			RoomId:    res.SessionId,
+			RoomId:    res.RoomId,
 			ClientId:  res.ClientId,
 			UserText:  res.Text,
 			IsLast:    res.IsFinal,
 			Seq:       res.Seq,
 		}
-		log.Printf("[asr] 收到识别结果: user=%s text=%q isFinal=%v seq=%d", res.ClientId, res.Text, res.IsFinal, res.Seq)
+		//log.Printf("[asr] 收到识别结果: user=%s text=%q isFinal=%v seq=%d", res.ClientId, res.Text, res.IsFinal, res.Seq)
 	}
 }
 
-// forwardRtp 从 remoteTrack 读取 RTP 包，转发给房间其他客户端，同时送阿里云 ASR 做语音识别
+// forwardRtp 接收到客户端的语音包，从 remoteTrack 读取 RTP 包，转发给房间其他客户端，同时送阿里云 ASR 做语音识别
 func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
 	log.Printf("[sfu] 中继协程已启动: source=%s", sourceID[:8])
 	defer log.Printf("[sfu] 中继协程已停止: source=%s", sourceID[:8])
@@ -543,20 +543,8 @@ func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
 			return
 		}
 
-		// 解码 Opus → PCM，直接送阿里云 ASR
-		pcm, err := decodeOpusToInt16(rtpPacket.Payload, 16000)
-		if err != nil {
-			log.Printf("[asr] 解码失败: source=%s err=%v", sourceID[:8], err)
-		} else if len(pcm) > 0 {
-			// 仅有实际音频数据才送 ASR，DTX 静音包解码后 pcm 为空，直接跳过
-			asr_cli.GlobalRecognizer.AudioIn <- asrpb.AudioChunk{
-				SessionId:  sessionID,
-				RoomId:     r.ID,
-				ClientId:   sourceID,
-				Pcm:        int16ToLEBytes(pcm),
-				SampleRate: 16000,
-			}
-		}
+		// 开启AI语音助手
+		go aiCall(rtpPacket, sourceID, sessionID, r)
 
 		// 转发 RTP 给房间内其他客户端
 		r.lock.RLock()
@@ -572,6 +560,24 @@ func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
 			if err = relay.WriteRTP(rtpPacket); err != nil {
 				log.Printf("[sfu] 写入 RTP 失败: source=%s dest=%s err=%v", sourceID[:8], otherClintId, err)
 			}
+		}
+	}
+}
+
+// aiCall 调用 AI 助手。总是开启，唤醒词唤醒需要ASR
+func aiCall(rtpPacket *rtp.Packet, sourceID string, sessionID string, r *SFURoom) {
+	// 解码 Opus → PCM，直接送阿里云 ASR
+	pcm, err := decodeOpusToInt16(rtpPacket.Payload, 16000)
+	if err != nil {
+		log.Printf("[asr] 解码失败: source=%s err=%v", sourceID[:8], err)
+	} else if len(pcm) > 0 {
+		// 仅有实际音频数据才送 ASR，DTX 静音包解码后 pcm 为空，直接跳过
+		asr_cli.GlobalRecognizer.AudioIn <- asrpb.AudioChunk{
+			SessionId:  sessionID,
+			RoomId:     r.ID,
+			ClientId:   sourceID,
+			Pcm:        int16ToLEBytes(pcm),
+			SampleRate: 16000,
 		}
 	}
 }

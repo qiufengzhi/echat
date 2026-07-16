@@ -28,11 +28,13 @@ interface VoiceRoomPageProps {
   isConnected: boolean // 声音连接是否已经成功建立
   isMuted: boolean // 当前用户是否静音
   isSpeakerOn: boolean // 当前是否播放房间声音
+  isAIEnabled: boolean // AI 语音助手是否已开启，由服务端 ai_status 确认
   error: string | null // 需要展示给用户的错误提示
   isMembersOpen: boolean // 手机端成员抽屉是否打开
   onCloseMembers: () => void // 关闭手机端成员抽屉
   onToggleMute: () => void // 切换麦克风静音
   onToggleSpeaker: () => void // 切换房间声音播放
+  onToggleAI: () => void // 切换 AI 语音助手开关，仅房主可见按钮
   onOpenMembers: () => void // 打开成员面板
   onOpenInvite: () => void // 打开邀请弹窗
   onOpenSettings: () => void // 打开设置弹窗
@@ -154,11 +156,13 @@ export default function VoiceRoomPage({
   isConnected,
   isMuted,
   isSpeakerOn,
+  isAIEnabled,
   error,
   isMembersOpen,
   onCloseMembers,
   onToggleMute,
   onToggleSpeaker,
+  onToggleAI,
   onOpenMembers,
   onOpenInvite,
   onOpenSettings,
@@ -222,8 +226,11 @@ export default function VoiceRoomPage({
       <ControlDock
         isMuted={isMuted}
         isSpeakerOn={isSpeakerOn}
+        isHost={isHost}
+        isAIEnabled={isAIEnabled}
         onToggleMute={onToggleMute}
         onToggleSpeaker={onToggleSpeaker}
+        onToggleAI={onToggleAI}
         onOpenMembers={onOpenMembers}
         onOpenInvite={onOpenInvite}
         onOpenSettings={onOpenSettings}

@@ -3,12 +3,13 @@ package room
 // 信令消息类型常量
 const (
 	// ---------- 客户端 -> 服务端 ----------
-	MsgTypeJoin   = "join"   // 用户请求加入房间，payload 通常是昵称字符串
-	MsgTypeOffer  = "offer"  // （已弃用，由 SFU 替代）WebRTC SDP Offer，保留占位以防旧客户端
-	MsgTypeAnswer = "answer" // （已弃用）WebRTC SDP Answer
-	MsgTypeICE    = "ice"    // （已弃用）WebRTC ICE 候选地址
-	MsgTypeLeave  = "leave"  // 用户主动离开房间，房主可携带 next_host_id 指定下一任房主
-	MsgTypePing   = "ping"   // 心跳探测，服务端收到后回复 pong，避免 WebSocket 被空闲断开
+	MsgTypeJoin     = "join"      // 用户请求加入房间，payload 通常是昵称字符串
+	MsgTypeOffer    = "offer"     // （已弃用，由 SFU 替代）WebRTC SDP Offer，保留占位以防旧客户端
+	MsgTypeAnswer   = "answer"    // （已弃用）WebRTC SDP Answer
+	MsgTypeICE      = "ice"       // （已弃用）WebRTC ICE 候选地址
+	MsgTypeLeave    = "leave"     // 用户主动离开房间，房主可携带 next_host_id 指定下一任房主
+	MsgTypePing     = "ping"      // 心跳探测，服务端收到后回复 pong，避免 WebSocket 被空闲断开
+	MsgTypeAiToggle = "ai_toggle" // 切换 AI 助手开关
 
 	// SFU 信令：客户端 -> 服务端
 	// 客户端创建 SDP Offer 后通过 sfu_offer 发给 SFU 引擎
@@ -35,5 +36,6 @@ const (
 	// 客户端收到 renegotiation Offer 后回复 Answer
 	MsgTypeRenegotiationAnswer = "sfu_renegotiation_answer" // 客户端回复的 Answer（客户端 -> 服务端）
 
-	MsgTypeError = "error" // 服务端错误消息，payload.message 可给前端转换成用户提示
+	MsgTypeAiStatus = "ai_status" // 服务端回复 AI 语音助手的当前开关状态
+	MsgTypeError    = "error"     // 服务端错误消息，payload.message 可给前端转换成用户提示
 )

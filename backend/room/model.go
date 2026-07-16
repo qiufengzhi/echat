@@ -122,6 +122,16 @@ func SFUPayloadFromICECandidateInit(candidate webrtc.ICECandidateInit) SFUICEPay
 	return p
 }
 
+// AiToggleReq  AI 助手开关req
+type AiToggleReq struct {
+	Enable bool `json:"enable"` // 是否启用 AI 助手
+}
+
+// AiToggleRes 是服务端回复客户端当前 AI 语音助手状态的载荷
+type AiToggleRes struct {
+	Enable bool `json:"enable"` // 当前 AI 语音助手的实际开关状态
+}
+
 // Message 是前后端 WebSocket 共用的信令信封，具体 payload 结构由 Type 决定
 type Message struct {
 	Type    string          `json:"type"`              // 消息类型，如 join / offer / host_changed 等

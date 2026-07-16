@@ -186,8 +186,8 @@ func NewRecognizer(cfg AliyunASRConfig) (*Recognizer, error) {
 		logger:    nls.NewNlsLogger(os.Stderr, "[aliyun-asr] ", log.LstdFlags|log.Lmicroseconds),
 		outputFan: make(chan sessionResult, 64),
 	}
-	r.logger.SetLogSil(false)
-	r.logger.SetDebug(true)
+	r.logger.SetLogSil(true) // 禁止 SDK 输出日志到 stderr
+	r.logger.SetDebug(false) // 关闭 debug 级别日志
 	return r, nil
 }
 
@@ -313,8 +313,8 @@ func (r *Recognizer) getOrCreateSession(sessionID, roomID, clientID string) *asr
 		lastAudio: time.Now(),
 	}
 	s.logger = nls.NewNlsLogger(os.Stderr, "[aliyun-asr]["+sessionID+"] ", log.LstdFlags|log.Lmicroseconds)
-	s.logger.SetLogSil(false)
-	s.logger.SetDebug(true)
+	s.logger.SetLogSil(true) // 禁止 SDK 输出日志到 stderr
+	s.logger.SetDebug(false) // 关闭 debug 级别日志
 
 	// 创建 SDK SpeechTranscription 实例
 	config, err := nls.NewConnectionConfigWithAKInfoDefault(r.cfg.URL, r.cfg.AppKey,
@@ -425,14 +425,14 @@ func (s *asrSession) onSentenceEnd(text string) {
 // onResultChanged 中间结果变化回调，text 是当前识别到的部分文本。
 func (s *asrSession) onResultChanged(text string) {
 	s.logger.Printf("[asr][%s] ResultChanged: %s", s.id, text)
-	s.out <- sessionResult{
-		SessionID: s.id,
-		RoomID:    s.roomID,
-		ClientID:  s.clientID,
-		Text:      text,
-		IsFinal:   false,
-		Seq:       0,
-	}
+	//s.out <- sessionResult{
+	//	SessionID: s.id,
+	//	RoomID:    s.roomID,
+	//	ClientID:  s.clientID,
+	//	Text:      text,
+	//	IsFinal:   false,
+	//	Seq:       0,
+	//}
 }
 
 // onCompleted 识别完成回调。

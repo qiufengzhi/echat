@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { SignalingClient } from '../services/signalingClient'
 import { handleWebRTCSignaling } from '../services/webrtcSignalingHandler'
 import type {
+  AIStatusPayload,
   HostChangedPayload,
   RoomReadyPayload,
   SignalingMessage,
@@ -65,6 +66,7 @@ interface VoiceRoomState {
   isConnected: boolean // WebRTC 是否已经成功建立音频连接
   isMuted: boolean // 本地麦克风是否被静音
   isSpeakerOn: boolean // 页面扬声器播放开关的 UI 状态
+  isAIEnabled: boolean // AI 语音助手是否已开启，由服务端 ai_status 回复确认
   error: string | null // 当前要展示给用户的错误提示，null 表示没有错误
   availableMicrophones: AudioDevice[] // 可用的麦克风设备列表
   availableSpeakers: AudioDevice[] // 可用的扬声器设备列表
@@ -77,6 +79,7 @@ interface UseVoiceRoomReturn extends VoiceRoomState {
   leaveRoom: (nextHostId?: string) => void // 离开房间并释放资源，房主可传下一任房主 ID
   toggleMute: () => void // 切换本地麦克风静音状态
   toggleSpeaker: () => void // 切换扬声器播放开关状态
+  toggleAI: () => void // 切换 AI 语音助手开关，仅房主调用，服务端以 ai_status 回复确认
   refreshAudioDevices: () => Promise<void> // 刷新可用音频设备列表，供 SettingsModal 设备下拉框使用
   switchMicrophone: (deviceId: string) => Promise<void> // 切换到指定麦克风设备
 }
@@ -92,6 +95,7 @@ function createEmptyVoiceRoomState(): VoiceRoomState {
     isConnected: false,
     isMuted: false,
     isSpeakerOn: true,
+    isAIEnabled: false,
     error: null,
     availableMicrophones: [],
     availableSpeakers: [],
@@ -443,6 +447,17 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
 
       // host_changed 是显式房主变更事件，即使成员列表没变化，也要刷新房主权限
       syncHostState(payload.host_id)
+      // 房主变更后重置 AI 状态，新房主需要重新决定是否开启
+      setState(prev => ({ ...prev, isAIEnabled: false }))
+      return
+    }
+
+    if (data.type === 'ai_status') {
+      const payload = data.payload as AIStatusPayload | undefined
+      if (typeof payload?.enable !== 'boolean') return
+
+      // 服务端回复 AI 语音助手当前状态，前端据此更新按钮显示
+      setState(prev => ({ ...prev, isAIEnabled: payload.enable }))
     }
   }, [syncHostState])
 
@@ -587,6 +602,17 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
     setState(prev => ({ ...prev, isSpeakerOn: !prev.isSpeakerOn }))
   }, [])
 
+  // toggleAI 切换 AI 语音助手开关，通过信令发到后端，服务端以 ai_status 回复实际状态
+  const toggleAI = useCallback(() => {
+    // 这里需要通过 ref 拿最新值，避免闭包过期；直接在 setState 回调里确保拿到最新
+    setState(prev => {
+      const nextEnabled = !prev.isAIEnabled
+      signalingClientRef.current?.sendAIToggle(nextEnabled)
+      return prev
+      // 不在这里直接改 isAIEnabled，等 ai_status 回执再同步，确保和后端一致
+    })
+  }, [])
+
   // 页面关闭或路由离开时释放所有资源
   useEffect(() => {
     return () => {
@@ -611,6 +637,7 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
     leaveRoom,
     toggleMute,
     toggleSpeaker,
+    toggleAI,
     refreshAudioDevices,
     switchMicrophone,
   }

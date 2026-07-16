@@ -191,11 +191,13 @@ function App() {
           isConnected={voiceRoom.isConnected}
           isMuted={voiceRoom.isMuted}
           isSpeakerOn={voiceRoom.isSpeakerOn}
+          isAIEnabled={voiceRoom.isAIEnabled}
           error={voiceRoom.error}
           isMembersOpen={isMembersOpen}
           onCloseMembers={() => setIsMembersOpen(false)}
           onToggleMute={voiceRoom.toggleMute}
           onToggleSpeaker={voiceRoom.toggleSpeaker}
+          onToggleAI={voiceRoom.toggleAI}
           onOpenMembers={() => setIsMembersOpen(true)}
           onOpenInvite={() => setIsInviteOpen(true)}
           onOpenSettings={() => setIsSettingsOpen(true)}

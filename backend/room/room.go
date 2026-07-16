@@ -1,6 +1,7 @@
 package room
 
 import (
+	"echat-backend/global"
 	"encoding/json"
 	"errors"
 	"log"
@@ -76,7 +77,10 @@ func HandleConnection(conn *websocket.Conn) {
 	log.Printf("[sig] 客户端已连接: %s", userID)
 
 	go writePump(client) // 统一串行写 WebSocket，避免并发写连接
-	readPump(client)     // 当前协程负责读取并按消息顺序分发
+	readPump(client)     // 当前协程负责读取并按消息顺序分发。阻塞
+
+	// 正常情况下，readPump 会一直阻塞在 conn.ReadMessage()
+	// 连接断开时，readPump 会退出循环并触发 disconnect
 	disconnect(client, "")
 }
 
@@ -160,7 +164,24 @@ func handleMessage(client *Client, msg *Message) {
 		handleLeave(client, msg.Payload)
 	case MsgTypePing: // 心跳响应
 		sendToClient(client, MsgTypePong, nil, client.RoomID)
+	case MsgTypeAiToggle:
+		handleAiToggle(client, msg)
 	}
+}
+
+// handleAiToggle 处理 AI 助手开关请求，存储开关状态后回复 ai_status 确认
+func handleAiToggle(client *Client, msg *Message) {
+	var req AiToggleReq
+	if err := json.Unmarshal(msg.Payload, &req); err != nil {
+		sendError(client, "invalid payload")
+		return
+	}
+	global.StartAiAssistant.Store(req.Enable)
+
+	// 回复客户端当前 AI 语音助手的实际开关状态，前端据此更新按钮亮灭
+	sendToClient(client, MsgTypeAiStatus, AiToggleRes{
+		Enable: req.Enable,
+	}, client.RoomID)
 }
 
 // handleJoin 把客户端加入指定房间，创建 SFU PeerConnection（不生成 Offer）
