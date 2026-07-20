@@ -50,6 +50,7 @@ type asrSession struct {
 	logger    *nls.NlsLogger           // 带 session_id 前缀的日志器
 	out       chan sessionResult       // SDK 回调收到的识别文本写入此 channel，由 Recognizer 的 outputFan 转发到 AudioOut
 	lastAudio time.Time                // 最后一次收到音频的时间，用于空闲超时清理
+	closeFunc func()                   // 关闭此 session 的回调函数
 	mu        sync.Mutex               // 保护 lastAudio 的并发访问
 }
 
@@ -67,9 +68,9 @@ type Recognizer struct {
 	AudioOut chan *asrpb.TranscriptAudioChunk
 
 	// ---- 内部状态 ----
-	sessions  map[string]*asrSession // 活跃 session map，key=session_id
-	mu        sync.Mutex             // 保护 sessions map 的并发访问
-	stopCh    chan struct{}          // 通知 idleCleaner 协程退出
-	logger    *nls.NlsLogger         // SDK 日志器
-	outputFan chan sessionResult     // 汇总各 session 结果，单协程写入 AudioOut
+	sessions map[string]*asrSession // 活跃 session map，key=session_id
+	mu       sync.Mutex             // 保护 sessions map 的并发访问
+	//stopCh    chan struct{}          // 通知 idleCleaner 协程退出
+	logger    *nls.NlsLogger     // SDK 日志器
+	outputFan chan sessionResult // 汇总各 session 结果，单协程写入 AudioOut
 }

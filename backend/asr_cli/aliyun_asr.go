@@ -178,11 +178,11 @@ func NewRecognizer(cfg AliyunASRConfig) (*Recognizer, error) {
 	}
 
 	r := &Recognizer{
-		cfg:       cfg,
-		AudioIn:   make(chan asrpb.AudioChunk, 64),
-		AudioOut:  make(chan *asrpb.TranscriptAudioChunk, 64),
-		sessions:  make(map[string]*asrSession),
-		stopCh:    make(chan struct{}),
+		cfg:      cfg,
+		AudioIn:  make(chan asrpb.AudioChunk, 64),
+		AudioOut: make(chan *asrpb.TranscriptAudioChunk, 64),
+		sessions: make(map[string]*asrSession),
+		//stopCh:    make(chan struct{}),
 		logger:    nls.NewNlsLogger(os.Stderr, "[aliyun-asr] ", log.LstdFlags|log.Lmicroseconds),
 		outputFan: make(chan sessionResult, 64),
 	}
@@ -288,8 +288,8 @@ func (r *Recognizer) idleCleaner() {
 				r.logger.Printf("[asr][%s] 空闲超时，自动关闭", id)
 				r.closeSession(id, true) // true = 强制 shutdown
 			}
-		case <-r.stopCh:
-			return
+			//case <-r.stopCh:
+			//	return
 		}
 	}
 }
@@ -317,7 +317,7 @@ func (r *Recognizer) getOrCreateSession(sessionID, roomID, clientID string) *asr
 	s.logger.SetDebug(false) // 关闭 debug 级别日志
 
 	// 创建 SDK SpeechTranscription 实例
-	config, err := nls.NewConnectionConfigWithAKInfoDefault(r.cfg.URL, r.cfg.AppKey,
+	cg, err := nls.NewConnectionConfigWithAKInfoDefault(r.cfg.URL, r.cfg.AppKey,
 		r.cfg.AccessKeyID, r.cfg.AccessKeySecret)
 	if err != nil {
 		r.logger.Printf("[asr][%s] 创建连接配置失败: %v", sessionID, err)
@@ -325,7 +325,7 @@ func (r *Recognizer) getOrCreateSession(sessionID, roomID, clientID string) *asr
 	}
 
 	trans, err := nls.NewSpeechTranscription(
-		config, s.logger,
+		cg, s.logger,
 		func(text string, param interface{}) { s.onTaskFailed(text) },    // 识别过程中的错误处理回调参数
 		func(text string, param interface{}) { s.onStarted(text) },       // 建连完成回调参数
 		func(text string, param interface{}) { s.onSentenceBegin(text) }, // 一句话开始
@@ -340,6 +340,11 @@ func (r *Recognizer) getOrCreateSession(sessionID, roomID, clientID string) *asr
 		return nil
 	}
 	s.trans = trans
+
+	// 关闭 session 的回调函数
+	s.closeFunc = func() {
+		r.closeSession(sessionID, true)
+	}
 
 	// 启动识别
 	if err = s.start(&r.cfg); err != nil {
@@ -443,4 +448,7 @@ func (s *asrSession) onCompleted(text string) {
 // onClosed 连接断开回调。
 func (s *asrSession) onClosed() {
 	s.logger.Printf("[asr][%s] 连接已断开", s.id)
+
+	// 关闭 session
+	go s.closeFunc()
 }
