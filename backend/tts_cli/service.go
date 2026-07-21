@@ -46,14 +46,8 @@ func init() {
 	}
 }
 
-// ProcessText 处理 LLM 的流式响应
-// 将 token 累积到缓冲区，遇到句结束符时送入 TTS
-func (ss *Service) ProcessText(resp *llm.LLMResponse) {
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
-
+func (ss *Service) createSessionID(resp *llm.LLMResponse) {
 	sessionID := resp.SessionId
-
 	// 如果该 session 还没有缓冲区，创建一个
 	if _, ok := ss.buffer[sessionID]; !ok {
 		sp, exists := provider.GetSession(sessionID)
@@ -68,6 +62,18 @@ func (ss *Service) ProcessText(resp *llm.LLMResponse) {
 			sp:       sp,
 		}
 	}
+}
+
+// ProcessText 处理 LLM 的流式响应
+// 将 token 累积到缓冲区，遇到句结束符时送入 TTS
+func (ss *Service) ProcessText(resp *llm.LLMResponse) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+
+	sessionID := resp.SessionId
+
+	// 创建会话
+	ss.createSessionID(resp)
 
 	sb := ss.buffer[sessionID]
 
@@ -129,8 +135,11 @@ func (ss *Service) BargeIn(sessionID string) {
 }
 
 // GetAudio 获取合成的音频输出通道
-func (ss *Service) GetAudio(sessionID string) <-chan []byte {
-	return ss.buffer[sessionID].sp.AudioCh()
+func (ss *Service) GetAudio(resp *llm.LLMResponse) <-chan []byte {
+	// 获取会话
+	ss.createSessionID(resp)
+	// 返回音频输出通道
+	return ss.buffer[resp.SessionId].sp.AudioCh()
 }
 
 // splitAtSentenceEnd 在文本中查找第一个句结束符，将文本分割为句子和剩余部分

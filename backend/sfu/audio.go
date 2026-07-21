@@ -6,13 +6,30 @@ import (
 	"github.com/pion/opus"
 )
 
-// minOpusPacketLen Opus RTP payload 最小长度：至少需要一个 TOC 字节（Table of Contents header）。
-// 低于此长度的包通常是 DTX（不连续传输）静音包或舒适噪声包，无需解码即可安全跳过。
+// minOpusPacketLen Opus RTP payload 最小长度：至少需要一个 TOC 字节（Table of Contents header）
+// 低于此长度的包通常是 DTX（不连续传输）静音包或舒适噪声包，无需解码即可安全跳过
 const minOpusPacketLen = 1
 
-// decodeOpusToInt16 将 Opus 编码的 RTP payload 解码为 PCM16 采样。
-// 解码器为单声道，sampleRate 通常为 16000。
-// 如果 payload 过短（DTX 静音包等），返回空切片而非错误，避免日志噪声。
+// opusFrameSamples 单个 Opus 帧的采样数：20ms @ 16kHz = 320 samples
+const opusFrameSamples = 320
+
+// OpusEncoder 将 PCM16 采样编码为 Opus 字节
+// 通过 build tags 在 CGo 和非 CGo 环境下提供不同实现
+type OpusEncoder interface {
+	// Encode 将单声道 int16 PCM 采样编码为 Opus 字节，返回编码后的 payload
+	Encode(pcm []int16) ([]byte, error)
+	// Close 释放编码器资源
+	Close() error
+}
+
+// newOpusEncoder 创建 Opus 编码器，由 build-tag 文件提供具体实现
+func newOpusEncoder() (OpusEncoder, error) {
+	return newOpusEncoderImpl()
+}
+
+// decodeOpusToInt16 将 Opus 编码的 RTP payload 解码为 PCM16 采样
+// 解码器为单声道，sampleRate 通常为 16000
+// 如果 payload 过短（DTX 静音包等），返回空切片而非错误，避免日志噪声
 func decodeOpusToInt16(opusData []byte, sampleRate int) ([]int16, error) {
 	// DTX / 舒适噪声包：payload 太短无法包含 TOC，直接返回空 PCM
 	if len(opusData) < minOpusPacketLen {
@@ -34,7 +51,7 @@ func decodeOpusToInt16(opusData []byte, sampleRate int) ([]int16, error) {
 	return pcm[:n], nil
 }
 
-// int16ToLEBytes 将 []int16 转为小端序字节切片，供 ASR 服务使用。
+// int16ToLEBytes 将 []int16 转为小端序字节切片，供 ASR 服务使用
 func int16ToLEBytes(samples []int16) []byte {
 	buf := make([]byte, len(samples)*2)
 	for i, v := range samples {
@@ -42,4 +59,14 @@ func int16ToLEBytes(samples []int16) []byte {
 		buf[i*2+1] = byte(v >> 8)
 	}
 	return buf
+}
+
+// leBytesToInt16 将小端序 PCM16 字节切片转为 []int16 采样
+// 是 int16ToLEBytes 的逆操作，供 TTS 合成输出编码为 Opus 时使用
+func leBytesToInt16(data []byte) []int16 {
+	samples := make([]int16, len(data)/2)
+	for i := range samples {
+		samples[i] = int16(data[i*2]) | int16(data[i*2+1])<<8
+	}
+	return samples
 }

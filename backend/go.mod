@@ -6,7 +6,9 @@ require (
 	github.com/aliyun/alibabacloud-nls-go-sdk v1.1.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/hraban/opus v0.0.0-20260708213942-bde8e4304501
 	github.com/pion/opus v0.1.0
+	github.com/pion/rtp v1.10.2
 	github.com/pion/webrtc/v4 v4.2.15
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
@@ -27,7 +29,6 @@ require (
 	github.com/pion/mdns/v2 v2.1.0 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
 	github.com/pion/rtcp v1.2.16 // indirect
-	github.com/pion/rtp v1.10.2 // indirect
 	github.com/pion/sctp v1.10.0 // indirect
 	github.com/pion/sdp/v3 v3.0.18 // indirect
 	github.com/pion/srtp/v3 v3.0.11 // indirect

@@ -30,14 +30,15 @@ import (
 	"echat-backend/llm_cli"
 	asrpb "echat-backend/proto/asr"
 	llmpb "echat-backend/proto/llm"
+	"echat-backend/tts_cli"
 	"fmt"
-	"github.com/pion/rtp"
 	"log"
 	"net"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -80,6 +81,10 @@ type SFUPeer struct {
 	// 该客户端音频被转发给其他客户端时的本地中继音轨
 	// 键是订阅者（接收方）的 clientID，值是对应中继音轨，该房间内其他所有用户
 	outgoingRelays map[string]*webrtc.TrackLocalStaticRTP
+
+	// AI TTS 合成语音输出轨，写入后客户端通过 ontrack 收到
+	// 由 getAITtsTrack 首次使用时懒创建并 AddTrack 到 PC
+	aiTtsTrack *webrtc.TrackLocalStaticRTP
 
 	// 停止中继转发协程的信号，在客户端离开或断连时关闭
 	stopRelay chan struct{}
@@ -501,6 +506,42 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 	go r.forwardRtp(sourceID, remoteTrack)
 }
 
+// getAITtsTrack 懒初始化 AI TTS 输出轨，返回该客户端的 AI 语音播放通道
+// 首次调用时创建 TrackLocalStaticRTP 并 AddTrack 到 PeerConnection，触发重协商
+// 后续调用直接复用已创建的 track
+func (r *SFURoom) getAITtsTrack(clientID string) (*webrtc.TrackLocalStaticRTP, error) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	peer, ok := r.peers[clientID]
+	if !ok {
+		return nil, fmt.Errorf("getAITtsTrack: 客户端 %s 不在房间", clientID[:8])
+	}
+	if peer.aiTtsTrack != nil {
+		return peer.aiTtsTrack, nil
+	}
+
+	track, err := webrtc.NewTrackLocalStaticRTP(
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
+		"audio",
+		"audio_ai_"+clientID, // label 标示 AI 合成语音来源
+	)
+	if err != nil {
+		return nil, fmt.Errorf("getAITtsTrack: 创建 AI TTS 音轨失败: %w", err)
+	}
+	if _, err = peer.PC.AddTrack(track); err != nil {
+		return nil, fmt.Errorf("getAITtsTrack: 添加 AI TTS 音轨到 PC 失败: %w", err)
+	}
+
+	peer.aiTtsTrack = track
+	log.Printf("[sfu] AI TTS 音轨已创建: client=%s", clientID[:8])
+
+	// AddTrack 已自动触发 OnNegotiationNeeded 回调（见 CreateSFUPeerConn 中的注册）
+	// 该回调内完成 CreateOffer + SetLocalDescription + 信令通知，此处无需重复处理
+
+	return track, nil
+}
+
 // StartASRLogger 启动后台协程，持续从 ASR 识别器读取识别结果并打印日志
 // 必须在 asr_cli.Init() 之后调用
 func StartASRLogger() {
@@ -533,8 +574,8 @@ func getAsrRes() {
 func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
 	log.Printf("[sfu] 中继协程已启动: source=%s", sourceID[:8])
 	defer log.Printf("[sfu] 中继协程已停止: source=%s", sourceID[:8])
-
-	sessionID := fmt.Sprintf("%s-%s", sourceID, r.ID)
+	sessionID := r.ID // 房间 ID 会话id
+	var ttsOnce sync.Once
 
 	for {
 		rtpPacket, _, err := remoteTrack.ReadRTP()
@@ -543,10 +584,7 @@ func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
 			return
 		}
 
-		// 开启AI语音助手
-		go aiCall(rtpPacket, sourceID, sessionID, r)
-
-		// 转发 RTP 给房间内其他客户端
+		// 转发 RTP 给房间内所有客户端（含 source 自身的 AI TTS 轨）
 		r.lock.RLock()
 		forwardClient := make(map[string]*webrtc.TrackLocalStaticRTP)
 		if peer, ok := r.peers[sourceID]; ok {
@@ -561,25 +599,113 @@ func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
 				log.Printf("[sfu] 写入 RTP 失败: source=%s dest=%s err=%v", sourceID[:8], otherClintId, err)
 			}
 		}
+
+		// 开启AI语音助手
+		//forwardClient[sourceID] = remoteTrack
+		acr := aiCallReq{
+			sessionID: sessionID,
+			roomId:    r.ID,
+			clientId:  sourceID,
+			rtpPacket: rtpPacket,
+			clients:   forwardClient,
+		}
+		go r.aiCall(acr, &ttsOnce)
 	}
 }
 
-// aiCall 调用 AI 助手。总是开启，唤醒词唤醒需要ASR
-func aiCall(rtpPacket *rtp.Packet, sourceID string, sessionID string, r *SFURoom) {
-	// 解码 Opus → PCM，直接送阿里云 ASR
-	pcm, err := decodeOpusToInt16(rtpPacket.Payload, 16000)
-	if err != nil {
-		log.Printf("[asr] 解码失败: source=%s err=%v", sourceID[:8], err)
-	} else if len(pcm) > 0 {
-		// 仅有实际音频数据才送 ASR，DTX 静音包解码后 pcm 为空，直接跳过
-		asr_cli.GlobalRecognizer.AudioIn <- asrpb.AudioChunk{
-			SessionId:  sessionID,
-			RoomId:     r.ID,
-			ClientId:   sourceID,
-			Pcm:        int16ToLEBytes(pcm),
-			SampleRate: 16000,
+// aiCall 调用 AI 助手。先送入ASR，总是开启，唤醒词唤醒需要ASR
+func (r *SFURoom) aiCall(acr aiCallReq, ttsOnce *sync.Once) {
+	// 解码 Opus → PCM，送 ASR
+	go func() {
+		pcm, err := decodeOpusToInt16(acr.rtpPacket.Payload, 16000)
+		if err != nil {
+			log.Printf("[asr] 解码失败: source=%s err=%v", acr.clientId[:8], err)
+		} else if len(pcm) > 0 {
+			// 仅有实际音频数据才送 ASR，DTX 静音包解码后 pcm 为空，直接跳过
+			asr_cli.GlobalRecognizer.AudioIn <- asrpb.AudioChunk{
+				SessionId:  acr.sessionID,
+				RoomId:     acr.roomId,
+				ClientId:   acr.clientId,
+				Pcm:        int16ToLEBytes(pcm),
+				SampleRate: 16000,
+			}
 		}
-	}
+	}()
+
+	// 从TTS获取音频，转发给房间内所有客户端，包括说话者本人
+	// sync.Once 保证同一 session 的 TTS 转发协程只启动一次
+	// 注意：acr.clients 是首次调用时的快照，之后加入的客户端不会收到本次 AI 回复
+	ttsOnce.Do(func() {
+		aiTtsTrack, err := r.getAITtsTrack(acr.clientId)
+		if err != nil {
+			log.Printf("[sfu] 获取AI TTS音轨失败: source=%s err=%v", acr.clientId[:8], err)
+			return
+		}
+
+		// 创建 Opus 编码器：16kHz 单声道 VoIP 模式，整个 TTS 会话复用同一个实例
+		enc, err := newOpusEncoder()
+		if err != nil {
+			log.Printf("[sfu] 创建Opus编码器失败: source=%s err=%v", acr.clientId[:8], err)
+			return
+		}
+		defer enc.Close()
+
+		var pcmBuf []int16 // PCM 采样缓冲区，用于帧对齐（TTS 输出可能不对齐 20ms 帧边界）
+		var seq uint16     // RTP 包序号
+		var ts uint32      // RTP 时间戳，按采样数递增
+
+		lrs := llmpb.LLMResponse{
+			SessionId: acr.roomId,
+			RoomId:    acr.roomId,
+			ClientId:  acr.clientId,
+		}
+
+		for rawPCM := range tts_cli.GlobalTTSService.GetAudio(&lrs) {
+			// 将 raw PCM16 LE 字节流转为 int16 采样，并入帧对齐缓冲区
+			samples := leBytesToInt16(rawPCM)
+			pcmBuf = append(pcmBuf, samples...)
+
+			// 按 opusFrameSamples（320 samples = 20ms）逐帧编码并写入
+			for len(pcmBuf) >= opusFrameSamples {
+				frame := pcmBuf[:opusFrameSamples]
+				pcmBuf = pcmBuf[opusFrameSamples:]
+
+				opusPayload, err := enc.Encode(frame)
+				if err != nil {
+					log.Printf("[sfu] Opus编码失败: source=%s err=%v", acr.clientId[:8], err)
+					continue
+				}
+
+				// 构建 RTP 包，Version/PayloadType/SSRC 由 WriteRTP 内部根据 track 绑定覆写
+				pkt := &rtp.Packet{
+					Header: rtp.Header{
+						Version:        2,
+						SequenceNumber: seq,
+						Timestamp:      ts,
+					},
+					Payload: opusPayload,
+				}
+
+				// 写入说话者本人的 AI TTS 轨，客户端通过 ontrack 收到 AI 语音
+				if err = aiTtsTrack.WriteRTP(pkt); err != nil {
+					log.Printf("[sfu] 写入AI TTS轨失败: source=%s err=%v", acr.clientId[:8], err)
+				}
+
+				// 写入房间内其他客户端的 relay track，让所有人都能听到 AI 回复
+				for clientID, relay := range acr.clients {
+					if err = relay.WriteRTP(pkt); err != nil {
+						log.Printf("[sfu] 写入AI中继轨失败: dest=%s err=%v", clientID[:8], err)
+					}
+				}
+
+				seq++
+				ts += opusFrameSamples
+			}
+		}
+
+		log.Printf("[sfu] TTS 音频流结束: source=%s", acr.clientId[:8])
+	})
+
 }
 
 // stopForwarding 关闭转发协程，确保协程退出
