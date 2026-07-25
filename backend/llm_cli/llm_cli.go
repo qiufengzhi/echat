@@ -2,13 +2,12 @@ package llm_cli
 
 import (
 	"context"
+	"echat-backend/config"
 	"echat-backend/global"
+	llmpb "echat-backend/proto/llm"
 	"echat-backend/tts_cli"
 	"io"
 	"log"
-
-	"echat-backend/config"
-	llmpb "echat-backend/proto/llm"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

@@ -41,8 +41,8 @@ var provider Provider
 // ---------- SessionPipeline 会话管道 ----------
 
 const (
-	defaultSentenceBufSize = 32 // 句子缓冲大小：容纳断句器提前产出的句子，填满后丢弃而非阻塞
-	defaultAudioBufSize    = 32 // 音频缓冲大小：容纳合成中的音频块，避免播放卡顿
+	defaultSentenceBufSize = 32  // 句子缓冲大小：容纳断句器提前产出的句子，填满后丢弃而非阻塞
+	defaultAudioBufSize    = 256 // 音频缓冲大小：容纳合成中的音频块，避免播放卡顿和讯飞WS阻塞
 )
 
 // SessionPipeline 每个会话的独立 TTS 管道
@@ -99,6 +99,19 @@ func (sp *SessionPipeline) IsActive() bool {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 	return sp.isActive
+}
+
+// CloseSentenceCh 关闭句子输入通道，通知 runSession 不再有新句子
+// 幂等：多次调用不会 panic，由 isActive 保护
+func (sp *SessionPipeline) CloseSentenceCh() {
+	sp.mu.Lock()
+	if !sp.isActive {
+		sp.mu.Unlock()
+		return
+	}
+	sp.isActive = false
+	sp.mu.Unlock()
+	close(sp.sentenceCh)
 }
 
 // ---------- Init 根据配置初始化对应提供商 ----------

@@ -24,6 +24,7 @@
 package sfu
 
 import (
+	"bytes"
 	"echat-backend/asr_cli"
 	"echat-backend/config"
 	"echat-backend/global"
@@ -31,13 +32,16 @@ import (
 	asrpb "echat-backend/proto/asr"
 	llmpb "echat-backend/proto/llm"
 	"echat-backend/tts_cli"
+	"encoding/binary"
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/gunter-q12/resample"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 )
@@ -522,7 +526,7 @@ func (r *SFURoom) getAITtsTrack(clientID string) (*webrtc.TrackLocalStaticRTP, e
 	}
 
 	track, err := webrtc.NewTrackLocalStaticRTP(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
 		"audio",
 		"audio_ai_"+clientID, // label 标示 AI 合成语音来源
 	)
@@ -556,7 +560,7 @@ func getAsrRes() {
 		if !global.StartAiAssistant.Load() {
 			continue
 		}
-
+		log.Printf("[asr] 收到识别结果: user=%s text=%q isFinal=%v seq=%d", res.ClientId, res.Text, res.IsFinal, res.Seq)
 		// 将识别结果送 LLM
 		llm_cli.LLMServiceClient.In <- &llmpb.LLMRequest{
 			SessionId: res.SessionId,
@@ -566,7 +570,6 @@ func getAsrRes() {
 			IsLast:    res.IsFinal,
 			Seq:       res.Seq,
 		}
-		//log.Printf("[asr] 收到识别结果: user=%s text=%q isFinal=%v seq=%d", res.ClientId, res.Text, res.IsFinal, res.Seq)
 	}
 }
 
@@ -574,7 +577,9 @@ func getAsrRes() {
 func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
 	log.Printf("[sfu] 中继协程已启动: source=%s", sourceID[:8])
 	defer log.Printf("[sfu] 中继协程已停止: source=%s", sourceID[:8])
-	sessionID := r.ID // 房间 ID 会话id
+	// sessionID 使用 clientID-roomID 格式，保持与 ASR → LLM → TTS 管道一致
+	// 确保 GetAudio 和 ProcessText 使用同一 session，避免音频数据写入错误会话
+	sessionID := fmt.Sprintf("%s-%s", sourceID, r.ID)
 	var ttsOnce sync.Once
 
 	for {
@@ -584,7 +589,7 @@ func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
 			return
 		}
 
-		// 转发 RTP 给房间内所有客户端（含 source 自身的 AI TTS 轨）
+		// 转发 RTP 给房间内所有客户端
 		r.lock.RLock()
 		forwardClient := make(map[string]*webrtc.TrackLocalStaticRTP)
 		if peer, ok := r.peers[sourceID]; ok {
@@ -642,33 +647,172 @@ func (r *SFURoom) aiCall(acr aiCallReq, ttsOnce *sync.Once) {
 			return
 		}
 
-		// 创建 Opus 编码器：16kHz 单声道 VoIP 模式，整个 TTS 会话复用同一个实例
-		enc, err := newOpusEncoder()
+		// 创建 Opus 编码器：48kHz 单声道 VoIP 模式，整个 TTS 会话复用同一个实例
+		// 注意：非 CGo 编码器（ccgo 转译 libopus）在 16kHz 下有已知缺陷，故统一使用 48kHz
+		// CGO_ENABLED=1 编译时使用原生 libopus，编码质量最佳
+		enc, err := newOpusEncoderPreset()
 		if err != nil {
 			log.Printf("[sfu] 创建Opus编码器失败: source=%s err=%v", acr.clientId[:8], err)
 			return
 		}
 		defer enc.Close()
 
-		var pcmBuf []int16 // PCM 采样缓冲区，用于帧对齐（TTS 输出可能不对齐 20ms 帧边界）
-		var seq uint16     // RTP 包序号
-		var ts uint32      // RTP 时间戳，按采样数递增
+		var pcmBuf []int16    // PCM 采样缓冲区，用于帧对齐（TTS 输出可能不对齐 20ms 帧边界）
+		var seq uint16        // RTP 包序号
+		var ts uint32         // RTP 时间戳，按采样数递增
+		var totalPCM int      // 调试：累计收到的 TTS PCM 字节数（16kHz 原始）
+		var framesEncoded int // 调试：累计编码发送的 Opus 帧数
+		var firstChunk bool = true
 
 		lrs := llmpb.LLMResponse{
-			SessionId: acr.roomId,
+			SessionId: acr.sessionID, // 使用 forwardRtp 的一致 sessionID，保证和 LLM 返回的 SessionId 一致
 			RoomId:    acr.roomId,
 			ClientId:  acr.clientId,
 		}
 
-		for rawPCM := range tts_cli.GlobalTTSService.GetAudio(&lrs) {
-			// 将 raw PCM16 LE 字节流转为 int16 采样，并入帧对齐缓冲区
-			samples := leBytesToInt16(rawPCM)
-			pcmBuf = append(pcmBuf, samples...)
+		audioCh := tts_cli.GlobalTTSService.GetAudio(&lrs)
+		log.Printf("[sfu] TTS音频循环已启动: source=%s session=%s", acr.clientId[:8], acr.roomId)
 
-			// 按 opusFrameSamples（320 samples = 20ms）逐帧编码并写入
-			for len(pcmBuf) >= opusFrameSamples {
-				frame := pcmBuf[:opusFrameSamples]
-				pcmBuf = pcmBuf[opusFrameSamples:]
+		// 调试：导出原始 PCM，可用 ffplay -f s16le -ar 16000 -ac 1 文件名 播放
+		dumpPath := "tts_dump_" + acr.clientId[:8] + ".pcm"
+		dumpFile, dumpErr := os.Create(dumpPath)
+		if dumpErr != nil {
+			log.Printf("[sfu] 创建TTS dump文件失败: %v", dumpErr)
+		}
+		if dumpFile != nil {
+			defer dumpFile.Close()
+		}
+		var dumpTotal int
+
+		// 创建 16kHz→48kHz 重采样器（polyphase FIR，纯 Go，替代手写线性插值）
+		var upsampledBuf bytes.Buffer
+		resampler, rsErr := resample.New(&upsampledBuf, resample.FormatInt16, 16000, 48000, 1, resample.WithKaiserFastFilter())
+		if rsErr != nil {
+			log.Printf("[sfu] 创建重采样器失败: %v", rsErr)
+			return
+		}
+
+		// rawBuf 累积原始 16kHz PCM，达到阈值后批量重采样
+		// 每次 resampler.Write 内部会新建滤波器状态，逐 chunk 调用导致边界失真
+		// 批量累积后再重采样可大幅减少调用次数，消除边界失真累积
+		var rawBuf []byte
+		// overlapSamples 重采样历史重叠采样数，为 Kaiser 滤波器提供历史上下文
+		// 64 采样 = 128 字节 @ int16，可覆盖 ~32 抽头的 Kaiser 窗滤波器左翼
+		// 重采样时拼接在批次前面，输出后丢弃重叠部分，消除批次边界失真
+		const overlapSamples = 64
+		const overlapBytes = overlapSamples * 2 // int16 = 2 bytes per sample
+		var history []byte                      // 上一批次末尾的原始采样，供下次重采样做滤波器上下文
+		// rawResampleThreshold 累积 200ms 原始音频后触发批量重采样
+		// 6400 字节 = 3200 samples @ 16kHz → 重采样后 9600 samples @ 48kHz = 10 个 Opus 帧
+		const rawResampleThreshold = 6400
+		// 上采样比例：48000 / 16000 = 3x
+		const upsampleRatio = 3
+		// 诊断计数器
+		var totalResampledBytes int // 重采样后输出的总字节数（48kHz PCM）
+		for {
+			timeout := time.After(2 * time.Second)
+			select {
+			case rawPCM, ok := <-audioCh:
+				if !ok {
+					goto audioLoopDone
+				}
+				totalPCM += len(rawPCM)
+				if dumpFile != nil {
+					dumpFile.Write(rawPCM)
+					dumpTotal += len(rawPCM)
+				}
+
+				// 首个 chunk：打印字节序诊断信息（仅首次）
+				if firstChunk {
+					firstChunk = false
+					hexPreview := ""
+					for i := 0; i < 20 && i < len(rawPCM); i++ {
+						hexPreview += fmt.Sprintf("%02x ", rawPCM[i])
+					}
+					samplesLE := leBytesToInt16(rawPCM)
+					lePreview := ""
+					for i := 0; i < 10 && i < len(samplesLE); i++ {
+						lePreview += fmt.Sprintf("%d,", samplesLE[i])
+					}
+					bePreview := ""
+					for i := 0; i < 10 && i < len(samplesLE); i++ {
+						beVal := int16(binary.BigEndian.Uint16(rawPCM[i*2:]))
+						bePreview += fmt.Sprintf("%d,", beVal)
+					}
+					log.Printf("[sfu] TTS首个音频块: %d 字节", len(rawPCM))
+					log.Printf("[sfu]   原始hex: [%s]", hexPreview)
+					log.Printf("[sfu]   小端(LE): [%s]", lePreview)
+					log.Printf("[sfu]   大端(BE): [%s]", bePreview)
+				}
+
+				// 累积原始 PCM，达到阈值后批量重采样
+				rawBuf = append(rawBuf, rawPCM...)
+				if len(rawBuf) >= rawResampleThreshold {
+					upsampledBuf.Reset()
+					// 拼接历史上下文 → 重采样 → 丢弃重叠输出，保持滤波器连续性
+					input := make([]byte, len(history)+len(rawBuf))
+					copy(input, history)
+					copy(input[len(history):], rawBuf)
+					if _, rsErr := resampler.Write(input); rsErr != nil {
+						log.Printf("[sfu] 重采样失败: %v", rsErr)
+						rawBuf = rawBuf[:0]
+						continue
+					}
+					output := upsampledBuf.Bytes()
+					// 丢弃重叠输出（与上一批次末尾重叠，避免重复播放）
+					overlapOutBytes := len(history) * upsampleRatio
+					if overlapOutBytes < len(output) {
+						output = output[overlapOutBytes:]
+					} else {
+						output = nil
+					}
+					if len(output) > 0 {
+						upsampled := leBytesToInt16(output)
+						pcmBuf = append(pcmBuf, upsampled...)
+						totalResampledBytes += len(output)
+					}
+					// 保存末尾样本作为下一批次的历史上下文
+					if len(rawBuf) > overlapBytes {
+						history = append(history[:0], rawBuf[len(rawBuf)-overlapBytes:]...)
+					} else {
+						history = append(history[:0], rawBuf...)
+					}
+					rawBuf = rawBuf[:0]
+				}
+			case <-timeout:
+				// 2s 空闲，刷新 rawBuf 中累积的原始 PCM
+				// 重置历史上下文，因为超时意味着句子间的自然停顿
+				if len(rawBuf) > 0 {
+					upsampledBuf.Reset()
+					input := make([]byte, len(history)+len(rawBuf))
+					copy(input, history)
+					copy(input[len(history):], rawBuf)
+					if _, rsErr := resampler.Write(input); rsErr != nil {
+						log.Printf("[sfu] 重采样失败(timeout): %v", rsErr)
+					} else {
+						output := upsampledBuf.Bytes()
+						overlapOutBytes := len(history) * upsampleRatio
+						if overlapOutBytes < len(output) {
+							output = output[overlapOutBytes:]
+						} else {
+							output = nil
+						}
+						if len(output) > 0 {
+							upsampled := leBytesToInt16(output)
+							pcmBuf = append(pcmBuf, upsampled...)
+							totalResampledBytes += len(output)
+						}
+					}
+					history = history[:0] // 超时后重置历史：句子间有自然停顿
+					rawBuf = rawBuf[:0]
+				}
+			}
+
+			// 编码所有完整帧（960 samples = 20ms @ 48kHz）
+			// 不足一帧的残采样保留在 pcmBuf，不补零避免破坏 Opus 编码器预测状态
+			for len(pcmBuf) >= opusEncoderFrameSamples {
+				frame := pcmBuf[:opusEncoderFrameSamples]
+				pcmBuf = pcmBuf[opusEncoderFrameSamples:]
 
 				opusPayload, err := enc.Encode(frame)
 				if err != nil {
@@ -680,6 +824,7 @@ func (r *SFURoom) aiCall(acr aiCallReq, ttsOnce *sync.Once) {
 				pkt := &rtp.Packet{
 					Header: rtp.Header{
 						Version:        2,
+						Marker:         seq == 0, // RFC 7587: talkspurt first packet
 						SequenceNumber: seq,
 						Timestamp:      ts,
 					},
@@ -699,11 +844,20 @@ func (r *SFURoom) aiCall(acr aiCallReq, ttsOnce *sync.Once) {
 				}
 
 				seq++
-				ts += opusFrameSamples
+				framesEncoded++
+				ts += opusEncoderFrameSamples // Opus RTP 时钟 48000Hz，每 20ms 帧 = 960 ticks
 			}
 		}
+	audioLoopDone:
 
-		log.Printf("[sfu] TTS 音频流结束: source=%s", acr.clientId[:8])
+		// 调试：确认 PCM dump 已写入
+		if dumpFile != nil && dumpTotal > 0 {
+			log.Printf("[sfu] TTS dump 已写入: %s (%d 字节) 播放: ffplay -f s16le -ar 16000 -ac 1 %s",
+				dumpPath, dumpTotal, dumpPath)
+		}
+
+		log.Printf("[sfu] TTS 音频流结束: source=%s totalPCM=%d resampledBytes=%d seq=%d framesEncoded=%d tailPCM=%d",
+			acr.clientId[:8], totalPCM, totalResampledBytes, seq, framesEncoded, len(pcmBuf))
 	})
 
 }
@@ -736,4 +890,39 @@ func (s *SFUServer) CleanupRoom(roomID string) {
 	r.lock.Unlock()
 
 	s.RemoveRoom(roomID)
+}
+
+// writeWav 将原始 PCM 数据写入 WAV 文件（临时调试用）
+func writeWav(f *os.File, pcmData []byte, sampleRate, numChannels, bitsPerSample int) {
+	dataSize := len(pcmData)
+	byteRate := sampleRate * numChannels * bitsPerSample / 8
+	blockAlign := numChannels * bitsPerSample / 8
+
+	// RIFF header
+	f.Write([]byte("RIFF"))
+	writeU32LE(f, uint32(36+dataSize))
+	f.Write([]byte("WAVE"))
+
+	// fmt chunk
+	f.Write([]byte("fmt "))
+	writeU32LE(f, 16) // chunk size
+	writeU16LE(f, 1)  // PCM format
+	writeU16LE(f, uint16(numChannels))
+	writeU32LE(f, uint32(sampleRate))
+	writeU32LE(f, uint32(byteRate))
+	writeU16LE(f, uint16(blockAlign))
+	writeU16LE(f, uint16(bitsPerSample))
+
+	// data chunk
+	f.Write([]byte("data"))
+	writeU32LE(f, uint32(dataSize))
+	f.Write(pcmData)
+}
+
+func writeU32LE(f *os.File, v uint32) {
+	f.Write([]byte{byte(v), byte(v >> 8), byte(v >> 16), byte(v >> 24)})
+}
+
+func writeU16LE(f *os.File, v uint16) {
+	f.Write([]byte{byte(v), byte(v >> 8)})
 }

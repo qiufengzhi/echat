@@ -14,8 +14,8 @@ ENV GOPROXY=https://goproxy.cn,direct
 ENV GOSUMDB=off
 RUN go mod tidy
 
-# 构建（需开启 CGo，hraban/opus 封装 libopus C 库）
-RUN CGO_ENABLED=1 GOOS=linux go build -o server .
+# 构建（-tags opus_native 启用原生 libopus 编码器，需 CGo + opus-dev）
+RUN CGO_ENABLED=1 GOOS=linux go build -tags opus_native -o server .
 
 # 运行阶段
 FROM alpine:latest

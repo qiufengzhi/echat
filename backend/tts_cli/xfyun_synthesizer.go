@@ -263,6 +263,9 @@ func (s *XfyunSynthesizer) runSession(sp *SessionPipeline, sessionID string) {
 // 发送合成请求后流式读取音频块写入管道
 func (s *XfyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence string, sessionID string) {
 	sentence = strings.TrimSpace(sentence)
+	// 清理非法 UTF-8 字节：LLM 流式输出可能把多字节字符（如中文）拆在两个 gRPC 消息里，
+	// 导致首尾出现无效字节，讯飞收到无法合成，产出噪音
+	sentence = strings.ToValidUTF8(sentence, "")
 	if sentence == "" {
 		return
 	}
@@ -291,6 +294,7 @@ func (s *XfyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence stri
 		log.Printf("[tts:xfyun][%s] 构建请求失败: %v", sessionID, err)
 		return
 	}
+	log.Printf("[tts:xfyun][%s] 发送请求 JSON: %s", sessionID, string(reqJSON))
 	if err = conn.WriteMessage(websocket.TextMessage, reqJSON); err != nil {
 		log.Printf("[tts:xfyun][%s] 发送请求失败: %v", sessionID, err)
 		return
@@ -321,16 +325,17 @@ func (s *XfyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence stri
 
 		var resp xfResponse
 		if err = json.Unmarshal(message, &resp); err != nil {
-			log.Printf("[tts:xfyun][%s] 解析响应失败: %v", sessionID, err)
+			log.Printf("[tts:xfyun][%s] 解析响应失败: %v raw=%s", sessionID, err, string(message))
 			return
 		}
 
 		if resp.Code != 0 {
-			log.Printf("[tts:xfyun][%s] 业务错误: code=%d, message=%s", sessionID, resp.Code, resp.Message)
+			log.Printf("[tts:xfyun][%s] 业务错误: code=%d, message=%s, sid=%s", sessionID, resp.Code, resp.Message, resp.SID)
 			return
 		}
 
 		if resp.Data == nil {
+			log.Printf("[tts:xfyun][%s] 响应 data 为空, raw=%s", sessionID, string(message))
 			continue
 		}
 
@@ -350,6 +355,8 @@ func (s *XfyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence stri
 					return
 				}
 			}
+		} else {
+			log.Printf("[tts:xfyun][%s] 响应audio为空, status=%d, ced=%s", sessionID, resp.Data.Status, resp.Data.CED)
 		}
 
 		// status=2 合成结束
@@ -412,7 +419,7 @@ func (s *XfyunSynthesizer) buildRequest(text string) ([]byte, error) {
 			Speed:  s.cfg.Speed,
 			Volume: s.cfg.Volume,
 			Pitch:  s.cfg.Pitch,
-			Tte:    "UTF8",
+			Tte:    "utf8",
 		},
 		Data: xfData{
 			Status: 2, // 一次性传输全部文本

@@ -8,12 +8,26 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"echat-backend/proto/llm"
 )
 
 // sentenceEndChars 句子结束符，遇到这些字符时断句
 var sentenceEndChars = []string{"。", "！", "？", ".", "!", "?"}
+
+// skipLeadingPartialRunes 跳过字符串开头的非法 UTF-8 字节（多字节字符被 gRPC 流拆分时
+// 会形成前导 continuation bytes，这些字节不构成有效字符，保留会导致讯飞合成噪音）
+func skipLeadingPartialRunes(s string) string {
+	for len(s) > 0 {
+		r, size := utf8.DecodeRuneInString(s)
+		if r != utf8.RuneError || size > 1 {
+			break
+		}
+		s = s[1:]
+	}
+	return s
+}
 
 // Service TTS 服务入口，串联断句、合成与打断
 //
@@ -77,8 +91,8 @@ func (ss *Service) ProcessText(resp *llm.LLMResponse) {
 
 	sb := ss.buffer[sessionID]
 
-	// 将当前 token 添加到缓冲区
-	sb.text.WriteString(resp.ResponseText)
+	// 跳过前导非法 UTF-8 字节（上一段字符被 gRPC 流拆分的尾巴），再累积
+	sb.text.WriteString(skipLeadingPartialRunes(resp.ResponseText))
 
 	// 循环检查是否可以断句
 	for {
@@ -87,7 +101,7 @@ func (ss *Service) ProcessText(resp *llm.LLMResponse) {
 			break // 没有找到句结束符，继续累积
 		}
 
-		// 将完整句子送入 TTS
+		// 将完整句子送入 TTS（synthesizeSentence 里还会再做 ToValidUTF8 兜底）
 		if strings.TrimSpace(sentence) != "" {
 			if sb.sp.SendSentence(sentence) {
 				ss.logger.Printf("[tts:service][%s] 送入 TTS: %s", sessionID, sentence)
@@ -96,9 +110,9 @@ func (ss *Service) ProcessText(resp *llm.LLMResponse) {
 			}
 		}
 
-		// 重置缓冲区，保留剩余文本
+		// 重置缓冲区，保留剩余文本（去除前导非法字节）
 		sb.text.Reset()
-		sb.text.WriteString(remainder)
+		sb.text.WriteString(skipLeadingPartialRunes(remainder))
 	}
 
 	// LLM 回复结束，将剩余文本作为最后一句送入 TTS
@@ -134,8 +148,10 @@ func (ss *Service) BargeIn(sessionID string) {
 	ss.logger.Printf("[tts:service][%s] 用户打断，已清理所有数据", sessionID)
 }
 
-// GetAudio 获取合成的音频输出通道
+// GetAudio 获取合成的音频输出通道（线程安全）
 func (ss *Service) GetAudio(resp *llm.LLMResponse) <-chan []byte {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
 	// 获取会话
 	ss.createSessionID(resp)
 	// 返回音频输出通道
