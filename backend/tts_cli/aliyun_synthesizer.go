@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -69,9 +68,9 @@ func initAliyun(cfg config.TTSConfig) {
 	var err error
 	provider, err = NewAliyunSynthesizer(aliyunCfg)
 	if err != nil {
-		log.Fatalf("创建阿里云 TTS 合成器失败: %v", err)
+		logger.Fatalw("创建阿里云 TTS 合成器失败", "error", err)
 	}
-	log.Printf("[tts] 阿里云 TTS 已初始化 (voice=%s, sample_rate=%d)", aliyunCfg.Voice, aliyunCfg.SampleRate)
+	logger.Infow("阿里云 TTS 已初始化", "voice", aliyunCfg.Voice, "sampleRate", aliyunCfg.SampleRate)
 }
 
 // NewAliyunSynthesizer 创建一个阿里云 TTS 合成器
@@ -110,7 +109,7 @@ func (s *AliyunSynthesizer) CreateSession(sessionID string) *SessionPipeline {
 	s.sessions[sessionID] = sp
 	go s.runSession(sp, sessionID)
 
-	log.Printf("[tts:aliyun][%s] 创建会话管道", sessionID)
+	logger.Infow("创建会话管道", "sessionID", sessionID)
 	return sp
 }
 
@@ -133,7 +132,7 @@ func (s *AliyunSynthesizer) RemoveSession(sessionID string) {
 
 	if ok {
 		sp.Cancel()
-		log.Printf("[tts:aliyun][%s] 移除会话管道", sessionID)
+		logger.Infow("移除会话管道", "sessionID", sessionID)
 	}
 }
 
@@ -148,12 +147,12 @@ func (s *AliyunSynthesizer) runSession(sp *SessionPipeline, sessionID string) {
 		select {
 		case sentence, ok := <-sp.sentenceCh:
 			if !ok {
-				log.Printf("[tts:aliyun][%s] 句子通道已关闭", sessionID)
+				logger.Infow("句子通道已关闭", "sessionID", sessionID)
 				return
 			}
 			s.synthesizeSentence(sp, sentence, sessionID)
 		case <-sp.ctx.Done():
-			log.Printf("[tts:aliyun][%s] 会话已取消", sessionID)
+			logger.Infow("会话已取消", "sessionID", sessionID)
 			return
 		}
 	}
@@ -168,7 +167,7 @@ func (s *AliyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence str
 		return
 	}
 
-	log.Printf("[tts:aliyun][%s] 开始合成句子: %s", sessionID, sentence)
+	logger.Infow("开始合成句子", "sessionID", sessionID, "sentence", sentence)
 
 	query := url.Values{}
 	query.Set("appkey", s.cfg.AppKey)
@@ -184,26 +183,26 @@ func (s *AliyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence str
 		strings.NewReader(query.Encode()),
 	)
 	if err != nil {
-		log.Printf("[tts:aliyun][%s] 创建请求失败: %v", sessionID, err)
+		logger.Warnw("创建请求失败", "sessionID", sessionID, "error", err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	log.Printf("[tts:aliyun][%s] 发送请求到阿里云 TTS API", sessionID)
+	logger.Infow("发送请求到阿里云 TTS API", "sessionID", sessionID)
 	resp, err := s.client.Do(req)
 	if err != nil {
-		log.Printf("[tts:aliyun][%s] 请求失败: %v", sessionID, err)
+		logger.Warnw("请求失败", "sessionID", sessionID, "error", err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		log.Printf("[tts:aliyun][%s] API 返回错误: %s, body=%s", sessionID, resp.Status, string(body))
+		logger.Warnw("API 返回错误", "sessionID", sessionID, "status", resp.Status, "body", string(body))
 		return
 	}
 
-	log.Printf("[tts:aliyun][%s] API 返回成功，开始读取流式音频", sessionID)
+	logger.Infow("API 返回成功，开始读取流式音频", "sessionID", sessionID)
 
 	buf := make([]byte, 4096)
 	totalBytes := 0
@@ -217,7 +216,7 @@ func (s *AliyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence str
 			select {
 			case sp.audioOutCh <- data:
 			case <-sp.ctx.Done():
-				log.Printf("[tts:aliyun][%s] 合成被取消，已读取 %d 字节", sessionID, totalBytes)
+				logger.Infow("合成被取消", "sessionID", sessionID, "bytesRead", totalBytes)
 				return
 			}
 		}
@@ -225,12 +224,12 @@ func (s *AliyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence str
 			break
 		}
 		if err != nil {
-			log.Printf("[tts:aliyun][%s] 读取音频失败: %v", sessionID, err)
+			logger.Warnw("读取音频失败", "sessionID", sessionID, "error", err)
 			break
 		}
 	}
 
-	log.Printf("[tts:aliyun][%s] 合成完成，共 %d 字节 PCM 音频", sessionID, totalBytes)
+	logger.Infow("合成完成", "sessionID", sessionID, "totalBytes", totalBytes)
 }
 
 // sign 生成阿里云 API 签名

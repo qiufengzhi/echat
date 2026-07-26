@@ -2,8 +2,8 @@ package asr_cli
 
 import (
 	"context"
+	"echat-backend/logging"
 	"io"
-	"log"
 	"os"
 
 	asrpb "echat-backend/proto/asr"
@@ -13,6 +13,7 @@ import (
 )
 
 var AsrServiceClient AsrService
+var logger = logging.New("asr")
 
 // AsrService 封装与 Python ASR gRPC 服务的双向流连接
 type AsrService struct {
@@ -24,13 +25,13 @@ type AsrService struct {
 func init() {
 	return
 	addr := getEnv("ASR_ADDR", "127.0.0.1:50051")
-	log.Printf("连接 ASR 服务: %s", addr)
+	logger.Infow("连接 ASR 服务", "addr", addr)
 
 	conn, err := grpc.NewClient(addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
-		log.Fatalf("连接失败: %v", err)
+		logger.Fatalw("连接失败", "error", err)
 	}
 
 	AsrServiceClient.In = make(chan asrpb.AudioChunk, 64)
@@ -41,7 +42,7 @@ func init() {
 	// 打开双向流
 	stream, err := AsrServiceClient.client.RecognizeAudioStream(context.Background())
 	if err != nil {
-		log.Fatalf("打开流失败: %v", err)
+		logger.Fatalw("打开流失败", "error", err)
 	}
 
 	// 接收协程：持续从 ASR 服务读取识别结果
@@ -52,7 +53,7 @@ func init() {
 				return
 			}
 			if err != nil {
-				log.Printf("接收错误: %v", err)
+				logger.Warnw("接收错误", "error", err)
 				return
 			}
 			AsrServiceClient.Out <- resp
@@ -63,7 +64,7 @@ func init() {
 	go func() {
 		for audio := range AsrServiceClient.In {
 			if err = stream.Send(&audio); err != nil {
-				log.Printf("[asr_cli] 发送错误: %v", err)
+				logger.Warnw("发送错误", "error", err)
 				break
 			}
 		}

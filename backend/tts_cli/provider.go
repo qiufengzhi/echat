@@ -11,11 +11,13 @@ package tts_cli
 
 import (
 	"context"
-	"log"
 	"sync"
 
 	"echat-backend/config"
+	"echat-backend/logging"
 )
+
+var logger = logging.New("tts")
 
 // ---------- Provider 接口 ----------
 
@@ -130,6 +132,6 @@ func Init() {
 		initXfyun(cfg)
 	default:
 		// provider 为空或未知值，禁用 TTS
-		log.Printf("[tts] 未启用 (provider=%q)，支持 aliyun / xfyun", cfg.Provider)
+		logger.Warnw("TTS 未启用，支持 aliyun / xfyun", "provider", cfg.Provider)
 	}
 }

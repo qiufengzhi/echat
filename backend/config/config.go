@@ -22,6 +22,7 @@ type Config struct {
 	LLM    LLMConfig    `yaml:"llm"`    // LLM 服务配置
 	TTS    TTSConfig    `yaml:"tts"`    // 语音合成配置
 	Room   RoomConfig   `yaml:"room"`   // 房间与 WebSocket 配置
+	Log    LogConfig    `yaml:"log"`    // 日志配置
 }
 
 // ServerConfig HTTP/HTTPS 服务配置
@@ -98,6 +99,31 @@ type RoomConfig struct {
 	WSCheckOrigin bool   `yaml:"ws_check_origin"` // 是否校验 WebSocket 来源
 }
 
+// LogConfig 日志配置
+//
+// Level 控制输出级别，只输出 >= 该级别的日志：
+//
+//	debug - 调试信息：ICE candidate、SDP 内容、TTS 字节序诊断、中间识别结果等，仅开发时用
+//	info  - 正常业务流程：连接/断连、房间创建销毁、识别结果、合成完成等，生产推荐
+//	warn  - 异常但可恢复：编码失败、网络超时、慢客户端消息丢弃等
+//	error - 仅严重错误（当前项目暂未使用）
+//
+// Format 控制输出格式：
+//
+//	console - 开发模式：彩色文本、带调用位置（文件:行号），人类友好
+//	json   - 生产模式：JSON 格式输出，便于日志采集/检索/聚合
+//
+// EnableConsole 控制是否输出到终端 stderr，默认 true
+// EnableFile 控制是否输出到按天日志文件，默认 true
+// FileDir 日志文件目录，默认 "logs"，每天一个 echat-YYYY-MM-DD.log，保留 30 天
+type LogConfig struct {
+	Level         string `yaml:"level"`          // 日志级别：debug | info | warn | error，默认 "info"
+	Format        string `yaml:"format"`         // 输出格式：console | json，默认 "console"
+	EnableConsole bool   `yaml:"enable_console"` // 输出到终端 stderr，默认 true
+	EnableFile    bool   `yaml:"enable_file"`    // 输出到按天日志文件，默认 true
+	FileDir       string `yaml:"file_dir"`       // 日志文件目录，默认 "logs"
+}
+
 // ---------- 全局实例 ----------
 
 var globalCfg *Config // Load() 成功后存储，供 Get() 取用
@@ -154,6 +180,13 @@ func DefaultConfig() *Config {
 			WSReadBuffer:  1024,
 			WSWriteBuffer: 1024,
 			WSCheckOrigin: true,
+		},
+		Log: LogConfig{
+			Level:         "info",
+			Format:        "console",
+			EnableConsole: true,
+			EnableFile:    true,
+			FileDir:       "logs",
 		},
 	}
 }
@@ -312,5 +345,22 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("ROOM_WS_CHECK_ORIGIN"); v != "" {
 		cfg.Room.WSCheckOrigin = strings.EqualFold(v, "true")
+	}
+
+	// --- Log ---
+	if v := os.Getenv("LOG_LEVEL"); v != "" {
+		cfg.Log.Level = v
+	}
+	if v := os.Getenv("LOG_FORMAT"); v != "" {
+		cfg.Log.Format = v
+	}
+	if v := os.Getenv("LOG_ENABLE_CONSOLE"); v != "" {
+		cfg.Log.EnableConsole = strings.EqualFold(v, "true")
+	}
+	if v := os.Getenv("LOG_ENABLE_FILE"); v != "" {
+		cfg.Log.EnableFile = strings.EqualFold(v, "true")
+	}
+	if v := os.Getenv("LOG_FILE_DIR"); v != "" {
+		cfg.Log.FileDir = v
 	}
 }

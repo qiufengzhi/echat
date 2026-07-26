@@ -8,7 +8,7 @@
 //	│          │ ◄────── sfu_ice   ──────► │                  │
 //	│ 发布音轨 ─┼─── WebRTC ──────────────►│                  │
 //	└──────────┘                           │  每个客户端一个   │
-//	                                       │  PeerConnection   │
+//	                                       │  PeerConnection  │
 //	┌──────────┐                           │                  │
 //	│ 浏览器 B  │ ────── sfu_offer ───────►│  收到 A 的音轨   │
 //	│          │ ◄────── sfu_answer ──────►│  → 转发给 B      │
@@ -29,12 +29,12 @@ import (
 	"echat-backend/config"
 	"echat-backend/global"
 	"echat-backend/llm_cli"
+	"echat-backend/logging"
 	asrpb "echat-backend/proto/asr"
 	llmpb "echat-backend/proto/llm"
 	"echat-backend/tts_cli"
 	"encoding/binary"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"strings"
@@ -45,6 +45,8 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 )
+
+var logger = logging.New("sfu")
 
 // ICECandidateCallback 是 SFU -> 信令层 的 ICE Candidate 回调
 // 信令层收到后通过 WebSocket 转发给对应客户端
@@ -112,7 +114,7 @@ func resolveNAT1To1IPs(raw string) []string {
 		// 域名 → 解析为 IP
 		ips, err := net.LookupIP(addr)
 		if err != nil {
-			log.Printf("[sfu] 域名解析失败: %s, err=%v", addr, err)
+			logger.Warnw("域名解析失败", "addr", addr, "error", err)
 			continue
 		}
 		for _, resolvedIP := range ips {
@@ -149,7 +151,7 @@ func (s *SFUServer) GetOrCreateRoom(roomID string) *SFURoom {
 		peers: make(map[string]*SFUPeer),
 	}
 	s.rooms[roomID] = room
-	log.Printf("[sfu] 房间已创建: %s", roomID)
+	logger.Infow("房间已创建", "roomID", roomID)
 	return room
 }
 
@@ -160,7 +162,7 @@ func (s *SFUServer) RemoveRoom(roomID string) {
 
 	if _, ok := s.rooms[roomID]; ok {
 		delete(s.rooms, roomID)
-		log.Printf("[sfu] 房间已删除: %s", roomID)
+		logger.Infow("房间已删除", "roomID", roomID)
 	}
 }
 
@@ -225,45 +227,45 @@ func (r *SFURoom) Join(clientID string) error {
 	// ICE Candidate 收集 -> 通知信令层转发给客户端
 	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
 		if candidate == nil {
-			log.Printf("[sfu] ICE 收集完成: client=%s", clientID[:8])
+			logger.Debugw("ICE 收集完成", "clientID", clientID[:8])
 			return
 		}
 		if r.onICECandidate == nil {
-			log.Printf("[sfu] ICE callback 未设置，candidate 已丢弃: client=%s", clientID[:8])
+			logger.Warnw("ICE callback 未设置，candidate 已丢弃", "clientID", clientID[:8])
 			return
 		}
 		candJSON := candidate.ToJSON()
-		log.Printf("[sfu] 收集到 ICE candidate: client=%s candidate=%s", clientID[:8], candJSON.Candidate)
+		logger.Debugw("收集到 ICE candidate", "clientID", clientID[:8], "candidate", candJSON.Candidate)
 		r.onICECandidate(clientID, candJSON)
 	})
 
 	// 当 AddTrack 被调用后，pion 会触发 OnNegotiationNeeded，此时需要向客户端发送 renegotiation Offer
 	pc.OnNegotiationNeeded(func() {
 		if r.onRenegotiation == nil {
-			log.Printf("[sfu] renegotiation 触发但无回调: client=%s", clientID[:8])
+			logger.Warnw("renegotiation 触发但无回调", "clientID", clientID[:8])
 			return
 		}
 		offer, err := pc.CreateOffer(nil)
 		if err != nil {
-			log.Printf("[sfu] 创建 renegotiation Offer 失败: client=%s err=%v", clientID[:8], err)
+			logger.Warnw("创建 renegotiation Offer 失败", "clientID", clientID[:8], "error", err)
 			return
 		}
 		if err = pc.SetLocalDescription(offer); err != nil {
-			log.Printf("[sfu] 设置 renegotiation Offer 失败: client=%s err=%v", clientID[:8], err)
+			logger.Warnw("设置 renegotiation Offer 失败", "clientID", clientID[:8], "error", err)
 			return
 		}
-		log.Printf("[sfu] renegotiation Offer 已创建: client=%s", clientID[:8])
+		logger.Debugw("renegotiation Offer 已创建", "clientID", clientID[:8])
 		r.onRenegotiation(clientID, offer.SDP)
 	})
 
 	// ICE 连接状态日志
 	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
-		log.Printf("[sfu] ICE 状态: client=%s state=%s", clientID[:8], state.String())
+		logger.Infow("ICE 状态变化", "clientID", clientID[:8], "state", state.String())
 	})
 
 	// PeerConnection 整体状态变化
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		log.Printf("[sfu] PC 状态: client=%s state=%s", clientID[:8], state.String())
+		logger.Infow("PC 状态变化", "clientID", clientID[:8], "state", state.String())
 		if state == webrtc.PeerConnectionStateDisconnected ||
 			state == webrtc.PeerConnectionStateFailed {
 			// 连接意外断开，清理转发资源
@@ -274,12 +276,11 @@ func (r *SFURoom) Join(clientID string) error {
 	// 当客户端开始发送音频时，SFU 接收音轨并转发给其他客户端
 	pc.OnTrack(func(remoteTrack *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		if remoteTrack.Kind() != webrtc.RTPCodecTypeAudio {
-			log.Printf("[sfu] 跳过非音频轨: %s", clientID[:8])
+			logger.Debugw("跳过非音频轨", "clientID", clientID[:8])
 			return
 		}
 
-		log.Printf("[sfu] 收到音频轨: client=%s codec=%s",
-			clientID[:8], remoteTrack.Codec().MimeType)
+		logger.Infow("收到音频轨", "clientID", clientID[:8], "codec", remoteTrack.Codec().MimeType)
 
 		peer.publishedAudioTrack = remoteTrack
 		// 在锁外启动转发，避免持有锁时调用 AddTrack（AddTrack 也可能触发 ICE 回调）
@@ -287,7 +288,7 @@ func (r *SFURoom) Join(clientID string) error {
 	})
 
 	r.peers[clientID] = peer
-	log.Printf("[sfu] 对端加入: client=%s room=%s", clientID[:8], r.ID)
+	logger.Infow("对端加入", "clientID", clientID[:8], "roomID", r.ID)
 	return nil
 }
 
@@ -320,8 +321,8 @@ func (r *SFURoom) AcceptOffer(clientID string, offerSDP string) (answerSDP strin
 		return "", fmt.Errorf("set local description: %w", err)
 	}
 
-	log.Printf("[sfu] 接受 Offer 已回复 Answer: client=%s", clientID[:8])
-	log.Printf("[sfu] Answer SDP 内容:\n%s", answer.SDP)
+	logger.Infow("接受 Offer 已回复 Answer", "clientID", clientID[:8])
+	logger.Debugw("Answer SDP 内容", "clientID", clientID[:8], "sdp", answer.SDP)
 	return answer.SDP, nil
 }
 
@@ -351,7 +352,7 @@ func (r *SFURoom) Leave(clientID string) {
 	delete(r.peers, clientID)
 	r.lock.Unlock()
 
-	log.Printf("[sfu] 对端离开: client=%s", clientID[:8])
+	logger.Infow("对端离开", "clientID", clientID[:8])
 
 	// 停止转发协程
 	peer.stopForwarding()
@@ -376,11 +377,11 @@ func (r *SFURoom) Leave(clientID string) {
 
 	// 关闭 PeerConnection
 	if err := peer.PC.Close(); err != nil {
-		log.Printf("[sfu] 关闭 PC 失败: client=%s err=%v", clientID[:8], err)
+		logger.Warnw("关闭 PC 失败", "clientID", clientID[:8], "error", err)
 	}
 
 	if empty {
-		log.Printf("[sfu] 房间已空: %s", r.ID)
+		logger.Infow("房间已空", "roomID", r.ID)
 	}
 }
 
@@ -415,7 +416,7 @@ func (r *SFURoom) AcceptRenegotiationAnswer(clientID string, answerSDP string) e
 		return fmt.Errorf("set remote description: %w", err)
 	}
 
-	log.Printf("[sfu] renegotiation answer 已处理: client=%s", clientID[:8])
+	logger.Infow("renegotiation answer 已处理", "clientID", clientID[:8])
 	return nil
 }
 
@@ -460,20 +461,18 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 			"audio_"+sourceID, // label 格式为 "audio_<userId>"，前端据此识别声音来源
 		)
 		if err != nil {
-			log.Printf("[sfu] 创建中继轨失败: source=%s sub=%s err=%v",
-				sourceID[:8], subscriberID[:8], err)
+			logger.Warnw("创建中继轨失败", "source", sourceID[:8], "subscriber", subscriberID[:8], "error", err)
 			continue
 		}
 
 		if _, err = subscriber.PC.AddTrack(relayTrack); err != nil {
-			log.Printf("[sfu] 添加中继轨失败: source=%s sub=%s err=%v",
-				sourceID[:8], subscriberID[:8], err)
+			logger.Warnw("添加中继轨失败", "source", sourceID[:8], "subscriber", subscriberID[:8], "error", err)
 			continue
 		}
 
 		// 将房间内其他人的音轨通过中继轨加入 source
 		sourcePeer.outgoingRelays[subscriberID] = relayTrack
-		log.Printf("[sfu] 中继已添加: %s -> %s", sourceID[:8], subscriberID[:8])
+		logger.Infow("中继已添加", "from", sourceID[:8], "to", subscriberID[:8])
 	}
 
 	// 为当前 source 创建其他已有客户端的中继音轨，让 source 能听到其他人
@@ -488,20 +487,18 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 			"audio_"+otherID, // label 格式为 "audio_<userId>"，前端据此识别声音来源
 		)
 		if err != nil {
-			log.Printf("[sfu] 为新对端创建中继轨失败: source=%s other=%s err=%v",
-				sourceID[:8], otherID[:8], err)
+			logger.Warnw("为新对端创建中继轨失败", "source", sourceID[:8], "other", otherID[:8], "error", err)
 			continue
 		}
 
 		if _, err = sourcePeer.PC.AddTrack(relayTrack); err != nil {
-			log.Printf("[sfu] 为新对端添加中继轨失败: source=%s other=%s err=%v",
-				sourceID[:8], otherID[:8], err)
+			logger.Warnw("为新对端添加中继轨失败", "source", sourceID[:8], "other", otherID[:8], "error", err)
 			continue
 		}
 
 		// 将 other 的音频转发给 source
 		otherPeer.outgoingRelays[sourceID] = relayTrack
-		log.Printf("[sfu] 中继已添加(新对端): %s <- %s", sourceID[:8], otherID[:8])
+		logger.Infow("中继已添加(新对端)", "from", otherID[:8], "to", sourceID[:8])
 	}
 
 	r.lock.Unlock()
@@ -538,7 +535,7 @@ func (r *SFURoom) getAITtsTrack(clientID string) (*webrtc.TrackLocalStaticRTP, e
 	}
 
 	peer.aiTtsTrack = track
-	log.Printf("[sfu] AI TTS 音轨已创建: client=%s", clientID[:8])
+	logger.Infow("AI TTS 音轨已创建", "clientID", clientID[:8])
 
 	// AddTrack 已自动触发 OnNegotiationNeeded 回调（见 CreateSFUPeerConn 中的注册）
 	// 该回调内完成 CreateOffer + SetLocalDescription + 信令通知，此处无需重复处理
@@ -560,7 +557,7 @@ func getAsrRes() {
 		if !global.StartAiAssistant.Load() {
 			continue
 		}
-		log.Printf("[asr] 收到识别结果: user=%s text=%q isFinal=%v seq=%d", res.ClientId, res.Text, res.IsFinal, res.Seq)
+		logger.Infow("收到识别结果", "userID", res.ClientId, "text", res.Text, "isFinal", res.IsFinal, "seq", res.Seq)
 		// 将识别结果送 LLM
 		llm_cli.LLMServiceClient.In <- &llmpb.LLMRequest{
 			SessionId: res.SessionId,
@@ -575,8 +572,8 @@ func getAsrRes() {
 
 // forwardRtp 接收到客户端的语音包，从 remoteTrack 读取 RTP 包，转发给房间其他客户端，同时送阿里云 ASR 做语音识别
 func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
-	log.Printf("[sfu] 中继协程已启动: source=%s", sourceID[:8])
-	defer log.Printf("[sfu] 中继协程已停止: source=%s", sourceID[:8])
+	logger.Infow("中继协程已启动", "source", sourceID[:8])
+	defer logger.Infow("中继协程已停止", "source", sourceID[:8])
 	// sessionID 使用 clientID-roomID 格式，保持与 ASR → LLM → TTS 管道一致
 	// 确保 GetAudio 和 ProcessText 使用同一 session，避免音频数据写入错误会话
 	sessionID := fmt.Sprintf("%s-%s", sourceID, r.ID)
@@ -585,7 +582,7 @@ func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
 	for {
 		rtpPacket, _, err := remoteTrack.ReadRTP()
 		if err != nil {
-			log.Printf("[sfu] 读取 RTP 失败: source=%s err=%v", sourceID[:8], err)
+			logger.Warnw("读取 RTP 失败", "source", sourceID[:8], "error", err)
 			return
 		}
 
@@ -601,12 +598,11 @@ func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
 
 		for otherClintId, relay := range forwardClient {
 			if err = relay.WriteRTP(rtpPacket); err != nil {
-				log.Printf("[sfu] 写入 RTP 失败: source=%s dest=%s err=%v", sourceID[:8], otherClintId, err)
+				logger.Warnw("写入 RTP 失败", "source", sourceID[:8], "dest", otherClintId, "error", err)
 			}
 		}
 
 		// 开启AI语音助手
-		//forwardClient[sourceID] = remoteTrack
 		acr := aiCallReq{
 			sessionID: sessionID,
 			roomId:    r.ID,
@@ -624,7 +620,7 @@ func (r *SFURoom) aiCall(acr aiCallReq, ttsOnce *sync.Once) {
 	go func() {
 		pcm, err := decodeOpusToInt16(acr.rtpPacket.Payload, 16000)
 		if err != nil {
-			log.Printf("[asr] 解码失败: source=%s err=%v", acr.clientId[:8], err)
+			logger.Warnw("解码失败", "source", acr.clientId[:8], "error", err)
 		} else if len(pcm) > 0 {
 			// 仅有实际音频数据才送 ASR，DTX 静音包解码后 pcm 为空，直接跳过
 			asr_cli.GlobalRecognizer.AudioIn <- asrpb.AudioChunk{
@@ -643,7 +639,7 @@ func (r *SFURoom) aiCall(acr aiCallReq, ttsOnce *sync.Once) {
 	ttsOnce.Do(func() {
 		aiTtsTrack, err := r.getAITtsTrack(acr.clientId)
 		if err != nil {
-			log.Printf("[sfu] 获取AI TTS音轨失败: source=%s err=%v", acr.clientId[:8], err)
+			logger.Warnw("获取AI TTS音轨失败", "source", acr.clientId[:8], "error", err)
 			return
 		}
 
@@ -652,7 +648,7 @@ func (r *SFURoom) aiCall(acr aiCallReq, ttsOnce *sync.Once) {
 		// CGO_ENABLED=1 编译时使用原生 libopus，编码质量最佳
 		enc, err := newOpusEncoderPreset()
 		if err != nil {
-			log.Printf("[sfu] 创建Opus编码器失败: source=%s err=%v", acr.clientId[:8], err)
+			logger.Warnw("创建Opus编码器失败", "source", acr.clientId[:8], "error", err)
 			return
 		}
 		defer enc.Close()
@@ -671,13 +667,13 @@ func (r *SFURoom) aiCall(acr aiCallReq, ttsOnce *sync.Once) {
 		}
 
 		audioCh := tts_cli.GlobalTTSService.GetAudio(&lrs)
-		log.Printf("[sfu] TTS音频循环已启动: source=%s session=%s", acr.clientId[:8], acr.roomId)
+		logger.Infow("TTS音频循环已启动", "source", acr.clientId[:8], "roomID", acr.roomId)
 
 		// 调试：导出原始 PCM，可用 ffplay -f s16le -ar 16000 -ac 1 文件名 播放
 		dumpPath := "tts_dump_" + acr.clientId[:8] + ".pcm"
 		dumpFile, dumpErr := os.Create(dumpPath)
 		if dumpErr != nil {
-			log.Printf("[sfu] 创建TTS dump文件失败: %v", dumpErr)
+			logger.Warnw("创建TTS dump文件失败", "source", acr.clientId[:8], "error", dumpErr)
 		}
 		if dumpFile != nil {
 			defer dumpFile.Close()
@@ -688,7 +684,7 @@ func (r *SFURoom) aiCall(acr aiCallReq, ttsOnce *sync.Once) {
 		var upsampledBuf bytes.Buffer
 		resampler, rsErr := resample.New(&upsampledBuf, resample.FormatInt16, 16000, 48000, 1, resample.WithKaiserFastFilter())
 		if rsErr != nil {
-			log.Printf("[sfu] 创建重采样器失败: %v", rsErr)
+			logger.Warnw("创建重采样器失败", "source", acr.clientId[:8], "error", rsErr)
 			return
 		}
 
@@ -739,10 +735,13 @@ func (r *SFURoom) aiCall(acr aiCallReq, ttsOnce *sync.Once) {
 						beVal := int16(binary.BigEndian.Uint16(rawPCM[i*2:]))
 						bePreview += fmt.Sprintf("%d,", beVal)
 					}
-					log.Printf("[sfu] TTS首个音频块: %d 字节", len(rawPCM))
-					log.Printf("[sfu]   原始hex: [%s]", hexPreview)
-					log.Printf("[sfu]   小端(LE): [%s]", lePreview)
-					log.Printf("[sfu]   大端(BE): [%s]", bePreview)
+					logger.Debugw("TTS首个音频块诊断",
+						"source", acr.clientId[:8],
+						"byteLen", len(rawPCM),
+						"hex", hexPreview,
+						"le", lePreview,
+						"be", bePreview,
+					)
 				}
 
 				// 累积原始 PCM，达到阈值后批量重采样
@@ -754,7 +753,7 @@ func (r *SFURoom) aiCall(acr aiCallReq, ttsOnce *sync.Once) {
 					copy(input, history)
 					copy(input[len(history):], rawBuf)
 					if _, rsErr := resampler.Write(input); rsErr != nil {
-						log.Printf("[sfu] 重采样失败: %v", rsErr)
+						logger.Warnw("重采样失败", "source", acr.clientId[:8], "error", rsErr)
 						rawBuf = rawBuf[:0]
 						continue
 					}
@@ -788,7 +787,7 @@ func (r *SFURoom) aiCall(acr aiCallReq, ttsOnce *sync.Once) {
 					copy(input, history)
 					copy(input[len(history):], rawBuf)
 					if _, rsErr := resampler.Write(input); rsErr != nil {
-						log.Printf("[sfu] 重采样失败(timeout): %v", rsErr)
+						logger.Warnw("重采样失败(timeout)", "source", acr.clientId[:8], "error", rsErr)
 					} else {
 						output := upsampledBuf.Bytes()
 						overlapOutBytes := len(history) * upsampleRatio
@@ -816,7 +815,7 @@ func (r *SFURoom) aiCall(acr aiCallReq, ttsOnce *sync.Once) {
 
 				opusPayload, err := enc.Encode(frame)
 				if err != nil {
-					log.Printf("[sfu] Opus编码失败: source=%s err=%v", acr.clientId[:8], err)
+					logger.Warnw("Opus编码失败", "source", acr.clientId[:8], "error", err)
 					continue
 				}
 
@@ -833,13 +832,13 @@ func (r *SFURoom) aiCall(acr aiCallReq, ttsOnce *sync.Once) {
 
 				// 写入说话者本人的 AI TTS 轨，客户端通过 ontrack 收到 AI 语音
 				if err = aiTtsTrack.WriteRTP(pkt); err != nil {
-					log.Printf("[sfu] 写入AI TTS轨失败: source=%s err=%v", acr.clientId[:8], err)
+					logger.Warnw("写入AI TTS轨失败", "source", acr.clientId[:8], "error", err)
 				}
 
 				// 写入房间内其他客户端的 relay track，让所有人都能听到 AI 回复
 				for clientID, relay := range acr.clients {
 					if err = relay.WriteRTP(pkt); err != nil {
-						log.Printf("[sfu] 写入AI中继轨失败: dest=%s err=%v", clientID[:8], err)
+						logger.Warnw("写入AI中继轨失败", "dest", clientID[:8], "error", err)
 					}
 				}
 
@@ -852,14 +851,21 @@ func (r *SFURoom) aiCall(acr aiCallReq, ttsOnce *sync.Once) {
 
 		// 调试：确认 PCM dump 已写入
 		if dumpFile != nil && dumpTotal > 0 {
-			log.Printf("[sfu] TTS dump 已写入: %s (%d 字节) 播放: ffplay -f s16le -ar 16000 -ac 1 %s",
-				dumpPath, dumpTotal, dumpPath)
+			logger.Infow("TTS dump 已写入",
+				"path", dumpPath, "bytes", dumpTotal,
+				"playback", "ffplay -f s16le -ar 16000 -ac 1 "+dumpPath,
+			)
 		}
 
-		log.Printf("[sfu] TTS 音频流结束: source=%s totalPCM=%d resampledBytes=%d seq=%d framesEncoded=%d tailPCM=%d",
-			acr.clientId[:8], totalPCM, totalResampledBytes, seq, framesEncoded, len(pcmBuf))
+		logger.Infow("TTS 音频流结束",
+			"source", acr.clientId[:8],
+			"totalPCM", totalPCM,
+			"resampledBytes", totalResampledBytes,
+			"seq", seq,
+			"framesEncoded", framesEncoded,
+			"tailPCM", len(pcmBuf),
+		)
 	})
-
 }
 
 // stopForwarding 关闭转发协程，确保协程退出
@@ -883,7 +889,7 @@ func (s *SFUServer) CleanupRoom(roomID string) {
 	for clientID, peer := range r.peers {
 		peer.stopForwarding()
 		if err := peer.PC.Close(); err != nil {
-			log.Printf("[sfu] 清理关闭 PC: client=%s err=%v", clientID[:8], err)
+			logger.Warnw("清理关闭 PC", "clientID", clientID[:8], "error", err)
 		}
 		delete(r.peers, clientID)
 	}

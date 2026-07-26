@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/url"
 	"strings"
 	"sync"
@@ -166,10 +165,12 @@ func initXfyun(cfg config.TTSConfig) {
 	var err error
 	provider, err = NewXfyunSynthesizer(xfCfg)
 	if err != nil {
-		log.Fatalf("创建讯飞 TTS 合成器失败: %v", err)
+		logger.Fatalw("创建讯飞 TTS 合成器失败", "error", err)
 	}
-	log.Printf("[tts] 讯飞 TTS 已初始化 (voice=%s, speed=%d, volume=%d, pitch=%d, sample_rate=%d, audio_fmt=%s)",
-		xfCfg.Voice, xfCfg.Speed, xfCfg.Volume, xfCfg.Pitch, xfCfg.SampleRate, xfCfg.AudioFmt)
+	logger.Infow("讯飞 TTS 已初始化",
+		"voice", xfCfg.Voice, "speed", xfCfg.Speed, "volume", xfCfg.Volume,
+		"pitch", xfCfg.Pitch, "sampleRate", xfCfg.SampleRate, "audioFmt", xfCfg.AudioFmt,
+	)
 }
 
 // NewXfyunSynthesizer 创建一个讯飞 TTS 合成器
@@ -206,7 +207,7 @@ func (s *XfyunSynthesizer) CreateSession(sessionID string) *SessionPipeline {
 	s.sessions[sessionID] = sp
 	go s.runSession(sp, sessionID)
 
-	log.Printf("[tts:xfyun][%s] 创建会话管道", sessionID)
+	logger.Infow("创建会话管道", "sessionID", sessionID)
 	return sp
 }
 
@@ -229,7 +230,7 @@ func (s *XfyunSynthesizer) RemoveSession(sessionID string) {
 
 	if ok {
 		sp.Cancel()
-		log.Printf("[tts:xfyun][%s] 移除会话管道", sessionID)
+		logger.Infow("移除会话管道", "sessionID", sessionID)
 	}
 }
 
@@ -244,12 +245,12 @@ func (s *XfyunSynthesizer) runSession(sp *SessionPipeline, sessionID string) {
 		select {
 		case sentence, ok := <-sp.sentenceCh:
 			if !ok {
-				log.Printf("[tts:xfyun][%s] 句子通道已关闭", sessionID)
+				logger.Infow("句子通道已关闭", "sessionID", sessionID)
 				return
 			}
 			s.synthesizeSentence(sp, sentence, sessionID)
 		case <-sp.ctx.Done():
-			log.Printf("[tts:xfyun][%s] 会话已取消", sessionID)
+			logger.Infow("会话已取消", "sessionID", sessionID)
 			return
 		}
 	}
@@ -270,12 +271,12 @@ func (s *XfyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence stri
 		return
 	}
 
-	log.Printf("[tts:xfyun][%s] 开始合成句子: %s", sessionID, sentence)
+	logger.Infow("开始合成句子", "sessionID", sessionID, "sentence", sentence)
 
 	// 构建鉴权 URL
 	wsURL, err := s.buildAuthURL()
 	if err != nil {
-		log.Printf("[tts:xfyun][%s] 构建鉴权 URL 失败: %v", sessionID, err)
+		logger.Warnw("构建鉴权 URL 失败", "sessionID", sessionID, "error", err)
 		return
 	}
 
@@ -283,7 +284,7 @@ func (s *XfyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence stri
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
 	conn, _, err := dialer.DialContext(sp.ctx, wsURL, nil)
 	if err != nil {
-		log.Printf("[tts:xfyun][%s] WebSocket 连接失败: %v", sessionID, err)
+		logger.Warnw("WebSocket 连接失败", "sessionID", sessionID, "error", err)
 		return
 	}
 	defer conn.Close()
@@ -291,23 +292,23 @@ func (s *XfyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence stri
 	// 构建并发送合成请求
 	reqJSON, err := s.buildRequest(sentence)
 	if err != nil {
-		log.Printf("[tts:xfyun][%s] 构建请求失败: %v", sessionID, err)
+		logger.Warnw("构建请求失败", "sessionID", sessionID, "error", err)
 		return
 	}
-	log.Printf("[tts:xfyun][%s] 发送请求 JSON: %s", sessionID, string(reqJSON))
+	logger.Debugw("发送请求 JSON", "sessionID", sessionID, "json", string(reqJSON))
 	if err = conn.WriteMessage(websocket.TextMessage, reqJSON); err != nil {
-		log.Printf("[tts:xfyun][%s] 发送请求失败: %v", sessionID, err)
+		logger.Warnw("发送请求失败", "sessionID", sessionID, "error", err)
 		return
 	}
 
-	log.Printf("[tts:xfyun][%s] 已发送合成请求，等待音频返回", sessionID)
+	logger.Infow("已发送合成请求，等待音频返回", "sessionID", sessionID)
 
 	// 接收循环：读取 JSON 帧，解析音频块写入管道
 	totalBytes := 0
 	for {
 		select {
 		case <-sp.ctx.Done():
-			log.Printf("[tts:xfyun][%s] 合成被取消", sessionID)
+			logger.Infow("合成被取消", "sessionID", sessionID)
 			return
 		default:
 		}
@@ -316,26 +317,26 @@ func (s *XfyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence stri
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) ||
 				strings.Contains(err.Error(), "close 1000") {
-				log.Printf("[tts:xfyun][%s] 合成完成，共 %d 字节", sessionID, totalBytes)
+				logger.Infow("合成完成", "sessionID", sessionID, "totalBytes", totalBytes)
 				return
 			}
-			log.Printf("[tts:xfyun][%s] 读取响应失败: %v", sessionID, err)
+			logger.Warnw("读取响应失败", "sessionID", sessionID, "error", err)
 			return
 		}
 
 		var resp xfResponse
 		if err = json.Unmarshal(message, &resp); err != nil {
-			log.Printf("[tts:xfyun][%s] 解析响应失败: %v raw=%s", sessionID, err, string(message))
+			logger.Warnw("解析响应失败", "sessionID", sessionID, "error", err, "raw", string(message))
 			return
 		}
 
 		if resp.Code != 0 {
-			log.Printf("[tts:xfyun][%s] 业务错误: code=%d, message=%s, sid=%s", sessionID, resp.Code, resp.Message, resp.SID)
+			logger.Warnw("业务错误", "sessionID", sessionID, "code", resp.Code, "message", resp.Message, "sid", resp.SID)
 			return
 		}
 
 		if resp.Data == nil {
-			log.Printf("[tts:xfyun][%s] 响应 data 为空, raw=%s", sessionID, string(message))
+			logger.Debugw("响应 data 为空", "sessionID", sessionID, "raw", string(message))
 			continue
 		}
 
@@ -343,7 +344,7 @@ func (s *XfyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence stri
 		if resp.Data.Audio != "" {
 			audio, err := base64.StdEncoding.DecodeString(resp.Data.Audio)
 			if err != nil {
-				log.Printf("[tts:xfyun][%s] 解码音频失败: %v", sessionID, err)
+				logger.Warnw("解码音频失败", "sessionID", sessionID, "error", err)
 				return
 			}
 			if len(audio) > 0 {
@@ -351,17 +352,17 @@ func (s *XfyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence stri
 				select {
 				case sp.audioOutCh <- audio:
 				case <-sp.ctx.Done():
-					log.Printf("[tts:xfyun][%s] 合成被取消", sessionID)
+					logger.Infow("合成被取消", "sessionID", sessionID)
 					return
 				}
 			}
 		} else {
-			log.Printf("[tts:xfyun][%s] 响应audio为空, status=%d, ced=%s", sessionID, resp.Data.Status, resp.Data.CED)
+			logger.Debugw("响应audio为空", "sessionID", sessionID, "status", resp.Data.Status, "ced", resp.Data.CED)
 		}
 
 		// status=2 合成结束
 		if resp.Data.Status == 2 {
-			log.Printf("[tts:xfyun][%s] 合成完成，共 %d 字节", sessionID, totalBytes)
+			logger.Infow("合成完成", "sessionID", sessionID, "totalBytes", totalBytes)
 			return
 		}
 	}

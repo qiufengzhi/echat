@@ -5,7 +5,6 @@
 package tts_cli
 
 import (
-	"log"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -38,7 +37,6 @@ func skipLeadingPartialRunes(s string) string {
 type Service struct {
 	buffer map[string]*sentenceBuffer // sessionID -> 缓冲区
 	mu     sync.Mutex                 // 保护 buffer map
-	logger *log.Logger                // 日志
 }
 
 // sentenceBuffer 每个 session 的文本缓冲区
@@ -56,7 +54,6 @@ var GlobalTTSService *Service
 func init() {
 	GlobalTTSService = &Service{
 		buffer: make(map[string]*sentenceBuffer),
-		logger: log.Default(),
 	}
 }
 
@@ -104,9 +101,9 @@ func (ss *Service) ProcessText(resp *llm.LLMResponse) {
 		// 将完整句子送入 TTS（synthesizeSentence 里还会再做 ToValidUTF8 兜底）
 		if strings.TrimSpace(sentence) != "" {
 			if sb.sp.SendSentence(sentence) {
-				ss.logger.Printf("[tts:service][%s] 送入 TTS: %s", sessionID, sentence)
+				logger.Infow("送入 TTS", "sessionID", sessionID, "sentence", sentence)
 			} else {
-				ss.logger.Printf("[tts:service][%s] TTS 队列已满，丢弃句子: %s", sessionID, sentence)
+				logger.Warnw("TTS 队列已满，丢弃句子", "sessionID", sessionID, "sentence", sentence)
 			}
 		}
 
@@ -119,13 +116,13 @@ func (ss *Service) ProcessText(resp *llm.LLMResponse) {
 	if resp.IsFinal {
 		if strings.TrimSpace(sb.text.String()) != "" {
 			if sb.sp.SendSentence(sb.text.String()) {
-				ss.logger.Printf("[tts:service][%s] 最后一句送入 TTS: %s", sessionID, sb.text.String())
+				logger.Infow("最后一句送入 TTS", "sessionID", sessionID, "sentence", sb.text.String())
 			} else {
-				ss.logger.Printf("[tts:service][%s] 最后一句队列已满，丢弃", sessionID)
+				logger.Warnw("最后一句队列已满，丢弃", "sessionID", sessionID)
 			}
 		}
 		delete(ss.buffer, sessionID)
-		ss.logger.Printf("[tts:service][%s] 会话结束，清理缓冲区", sessionID)
+		logger.Infow("会话结束，清理缓冲区", "sessionID", sessionID)
 	}
 }
 
@@ -145,7 +142,7 @@ func (ss *Service) BargeIn(sessionID string) {
 	}
 
 	provider.RemoveSession(sessionID)
-	ss.logger.Printf("[tts:service][%s] 用户打断，已清理所有数据", sessionID)
+	logger.Infow("用户打断，已清理所有数据", "sessionID", sessionID)
 }
 
 // GetAudio 获取合成的音频输出通道（线程安全）

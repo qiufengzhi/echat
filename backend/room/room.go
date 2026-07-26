@@ -4,7 +4,6 @@ import (
 	"echat-backend/global"
 	"encoding/json"
 	"errors"
-	"log"
 	"math/rand"
 	"slices"
 	"strings"
@@ -15,8 +14,11 @@ import (
 	"github.com/pion/webrtc/v4"
 
 	"echat-backend/config"
+	"echat-backend/logging"
 	"echat-backend/sfu"
 )
+
+var logger = logging.New("room")
 
 // sfuServer 是全局 SFU 引擎实例，管理所有房间的 WebRTC PeerConnection 和音频转发
 var sfuServer = sfu.NewSFUServer()
@@ -42,7 +44,7 @@ func createRoom(roomID string) *Room {
 		Clients: make(map[string]*Client),
 	}
 	allSignalRooms[roomID] = r
-	log.Printf("[sig] 房间已创建: %s", roomID)
+	logger.Infow("房间已创建", "roomID", roomID)
 	return r
 }
 
@@ -74,7 +76,7 @@ func HandleConnection(conn *websocket.Conn) {
 	allConnectedClients[userID] = client
 	clientLock.Unlock()
 
-	log.Printf("[sig] 客户端已连接: %s", userID)
+	logger.Infow("客户端已连接", "userID", userID)
 
 	go writePump(client) // 统一串行写 WebSocket，避免并发写连接
 	readPump(client)     // 当前协程负责读取并按消息顺序分发。阻塞
@@ -89,7 +91,7 @@ func HandleConnection(conn *websocket.Conn) {
 func readPump(client *Client) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[sig] readPump 发生 panic: %s, %v", client.ID, r)
+			logger.Warnw("readPump 发生 panic", "userID", client.ID, "panic", r)
 		}
 	}()
 
@@ -104,22 +106,20 @@ func readPump(client *Client) {
 				closeText = closeErr.Text
 			}
 			// 记录所有读循环结束原因，用来区分代理/网络断开和客户端主动 leave
-			log.Printf(
-				"[sig] WebSocket 读取结束: client_id=%s room_id=%s username=%q close_code=%d close_text=%q err=%v time=%s",
-				client.ID,
-				client.RoomID,
-				client.Username,
-				closeCode,
-				closeText,
-				err,
-				time.Now().Format(time.RFC3339),
+			logger.Infow("WebSocket 读取结束",
+				"userID", client.ID,
+				"roomID", client.RoomID,
+				"username", client.Username,
+				"closeCode", closeCode,
+				"closeText", closeText,
+				"error", err,
 			)
 			return
 		}
 
 		var msg Message
 		if err = json.Unmarshal(message, &msg); err != nil {
-			log.Printf("[sig] 无效消息: %s, %v", client.ID, err)
+			logger.Warnw("无效消息", "userID", client.ID, "error", err)
 			continue
 		}
 
@@ -218,7 +218,9 @@ func handleJoin(client *Client, msg *Message) {
 	userCount := len(r.Clients)
 	r.Lock.Unlock()
 
-	log.Printf("[sig] 用户 %s 已加入房间 %s (人数=%d 房主=%s)", username, roomID, userCount, hostID)
+	logger.Infow("用户已加入房间",
+		"username", username, "roomID", roomID, "userCount", userCount, "hostID", hostID,
+	)
 
 	// --- SFU 集成：创建 PeerConnection，但不生成 Offer ---
 	// Offer 由客户端发起，服务端收到 sfu_offer 后通过 AcceptOffer 创建 Answer
@@ -262,7 +264,7 @@ func handleJoin(client *Client, msg *Message) {
 
 	// 让 SFU 引擎为该客户端创建 PeerConnection（不生成 Offer）
 	if err := sfuRoom.Join(client.ID); err != nil {
-		log.Printf("[sig] 加入失败: %s %v", client.ID[:8], err)
+		logger.Warnw("加入失败", "userID", client.ID[:8], "error", err)
 		sendError(client, "无法创建 WebRTC 连接，请重试")
 		return
 	}
@@ -299,19 +301,19 @@ func handleSFUOffer(client *Client, payload json.RawMessage) {
 
 	var offer SFUOfferPayload
 	if err := json.Unmarshal(payload, &offer); err != nil {
-		log.Printf("[sig] sfu_offer 内容无效: %s %v", client.ID[:8], err)
+		logger.Warnw("sfu_offer 内容无效", "userID", client.ID[:8], "error", err)
 		return
 	}
 
 	sfuRoom := sfuServer.GetRoom(client.RoomID)
 	if sfuRoom == nil {
-		log.Printf("[sig] SFU 房间未找到: %s", client.RoomID)
+		logger.Warnw("SFU 房间未找到", "roomID", client.RoomID)
 		return
 	}
 
 	answerSDP, err := sfuRoom.AcceptOffer(client.ID, offer.SDP)
 	if err != nil {
-		log.Printf("[sig] 接受 Offer 失败: %s %v", client.ID[:8], err)
+		logger.Warnw("接受 Offer 失败", "userID", client.ID[:8], "error", err)
 		sendError(client, "信令协商失败")
 		return
 	}
@@ -329,18 +331,18 @@ func handleRenegotiationAnswer(client *Client, payload json.RawMessage) {
 
 	var answer RenegotiationAnswerPayload
 	if err := json.Unmarshal(payload, &answer); err != nil {
-		log.Printf("[sig] renegotiation answer 内容无效: %s %v", client.ID[:8], err)
+		logger.Warnw("renegotiation answer 内容无效", "userID", client.ID[:8], "error", err)
 		return
 	}
 
 	sfuRoom := sfuServer.GetRoom(client.RoomID)
 	if sfuRoom == nil {
-		log.Printf("[sig] SFU 房间未找到: %s", client.RoomID)
+		logger.Warnw("SFU 房间未找到", "roomID", client.RoomID)
 		return
 	}
 
 	if err := sfuRoom.AcceptRenegotiationAnswer(client.ID, answer.SDP); err != nil {
-		log.Printf("[sig] renegotiation answer 处理失败: %s %v", client.ID[:8], err)
+		logger.Warnw("renegotiation answer 处理失败", "userID", client.ID[:8], "error", err)
 		return
 	}
 }
@@ -354,18 +356,18 @@ func handleSFUICE(client *Client, payload json.RawMessage) {
 
 	var ice SFUICEPayload
 	if err := json.Unmarshal(payload, &ice); err != nil {
-		log.Printf("[sig] sfu_ice 内容无效: %s %v", client.ID[:8], err)
+		logger.Warnw("sfu_ice 内容无效", "userID", client.ID[:8], "error", err)
 		return
 	}
 
 	sfuRoom := sfuServer.GetRoom(client.RoomID)
 	if sfuRoom == nil {
-		log.Printf("[sig] SFU 房间未找到: %s", client.RoomID)
+		logger.Warnw("SFU 房间未找到", "roomID", client.RoomID)
 		return
 	}
 
 	if err := sfuRoom.AcceptICECandidate(client.ID, ice.ToWebRTCICECandidateInit()); err != nil {
-		log.Printf("[sig] ICE Candidate 添加失败: %s %v", client.ID[:8], err)
+		logger.Warnw("ICE Candidate 添加失败", "userID", client.ID[:8], "error", err)
 	}
 }
 
@@ -378,7 +380,7 @@ func handleRelay(client *Client, msgType string, payload json.RawMessage) {
 	}
 
 	broadcastRawToRoom(client.RoomID, client.ID, msgType, payload)
-	log.Printf("[sig] 已转发 %s from %s", msgType, client.ID[:8])
+	logger.Infow("已转发信令", "msgType", msgType, "from", client.ID[:8])
 }
 
 // handleLeave 处理客户端主动离开房间的请求
@@ -387,17 +389,15 @@ func handleLeave(client *Client, payload json.RawMessage) {
 	var leavePayload LeavePayload
 	if len(payload) > 0 {
 		if err := json.Unmarshal(payload, &leavePayload); err != nil {
-			log.Printf("[sig] 离开消息无效: %s %v", client.ID, err)
+			logger.Warnw("离开消息无效", "userID", client.ID, "error", err)
 		}
 	}
 
-	log.Printf(
-		"[sig] 用户请求离开: client_id=%s room_id=%s username=%q next_host=%q time=%s",
-		client.ID,
-		client.RoomID,
-		client.Username,
-		leavePayload.NextHostID,
-		time.Now().Format(time.RFC3339),
+	logger.Infow("用户请求离开",
+		"userID", client.ID,
+		"roomID", client.RoomID,
+		"username", client.Username,
+		"nextHost", leavePayload.NextHostID,
 	)
 	disconnect(client, strings.TrimSpace(leavePayload.NextHostID))
 }
@@ -468,7 +468,7 @@ func disconnect(client *Client, preferredNextHostID string) {
 					r.Lock.RUnlock()
 					if empty {
 						delete(allSignalRooms, roomID)
-						log.Printf("[sig] 房间已删除: %s", roomID)
+						logger.Infow("房间已删除", "roomID", roomID)
 					}
 				}
 				roomLock.Unlock()
@@ -483,7 +483,7 @@ func disconnect(client *Client, preferredNextHostID string) {
 		// 关闭发送队列和底层 WebSocket
 		close(client.Send)
 		_ = client.Conn.Close()
-		log.Printf("[sig] 客户端已断开: %s", client.ID[:8])
+		logger.Infow("客户端已断开", "userID", client.ID[:8])
 	})
 }
 
@@ -516,7 +516,7 @@ func sendToClient(client *Client, msgType string, payload interface{}, roomID st
 	if payload != nil {
 		data, err := json.Marshal(payload)
 		if err != nil {
-			log.Printf("[sig] payload 序列化失败: %s %v", msgType, err)
+			logger.Warnw("payload 序列化失败", "msgType", msgType, "error", err)
 			return
 		}
 		rawPayload = data
@@ -539,14 +539,14 @@ func sendError(client *Client, message string) {
 func sendRaw(client *Client, msg Message) {
 	data, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("[sig] 消息序列化失败: %v", err)
+		logger.Warnw("消息序列化失败", "error", err)
 		return
 	}
 
 	select {
 	case client.Send <- data:
 	default:
-		log.Printf("[sig] 慢客户端消息丢弃: %s", client.ID[:8])
+		logger.Warnw("慢客户端消息丢弃", "userID", client.ID[:8])
 	}
 }
 
@@ -556,7 +556,7 @@ func broadcastToRoom(roomID, senderID, msgType string, payload interface{}) {
 	if payload != nil {
 		data, err := json.Marshal(payload)
 		if err != nil {
-			log.Printf("[sig] 广播 payload 序列化失败: %s %v", msgType, err)
+			logger.Warnw("广播 payload 序列化失败", "msgType", msgType, "error", err)
 			return
 		}
 		rawPayload = data
@@ -582,7 +582,7 @@ func broadcastRawToRoom(roomID, senderID, msgType string, payload json.RawMessag
 
 	data, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("[sig] 广播消息序列化失败: %v", err)
+		logger.Warnw("广播消息序列化失败", "error", err)
 		return
 	}
 
@@ -599,7 +599,7 @@ func broadcastRawToRoom(roomID, senderID, msgType string, payload json.RawMessag
 		select {
 		case client.Send <- data:
 		default:
-			log.Printf("[sig] 房间广播消息丢弃(慢客户端): %s", client.ID[:8])
+			logger.Warnw("房间广播消息丢弃(慢客户端)", "userID", client.ID[:8])
 		}
 	}
 }
@@ -674,7 +674,7 @@ func cleanupIdleRooms() {
 			r.Lock.RUnlock()
 			if empty {
 				delete(allSignalRooms, id)
-				log.Printf("[sig] 清理空闲房间: %s", id)
+				logger.Infow("清理空闲房间", "roomID", id)
 			}
 		}
 		roomLock.Unlock()

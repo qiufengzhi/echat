@@ -20,7 +20,6 @@ package asr_cli
 
 import (
 	"errors"
-	"log"
 	"os"
 	"time"
 
@@ -114,13 +113,13 @@ func (s *asrSession) start(cfg *AliyunASRConfig) error {
 func (s *asrSession) stop() {
 	ready, err := s.trans.Stop()
 	if err != nil {
-		s.logger.Printf("[asr][%s] Stop 错误: %v", s.id, err)
+		logger.Warnw("Stop 错误", "sessionID", s.id, "error", err)
 		return
 	}
 	select {
 	case <-ready:
 	case <-time.After(10 * time.Second):
-		s.logger.Printf("[asr][%s] Stop 等待超时", s.id)
+		logger.Warnw("Stop 等待超时", "sessionID", s.id)
 	}
 }
 
@@ -138,7 +137,7 @@ var GlobalRecognizer *Recognizer
 func Init() {
 	cfg := config.Get().ASR
 	if cfg.Provider != "aliyun" {
-		log.Printf("[asr] 未启用 (provider=%q)", cfg.Provider)
+		logger.Warnw("ASR 未启用", "provider", cfg.Provider)
 		return
 	}
 
@@ -162,9 +161,9 @@ func Init() {
 	var err error
 	GlobalRecognizer, err = NewRecognizer(aliyunCfg)
 	if err != nil {
-		log.Fatalf("创建阿里云 ASR 识别器失败: %v", err)
+		logger.Fatalw("创建阿里云 ASR 识别器失败", "error", err)
 	}
-	log.Printf("[asr] 阿里云 ASR 已初始化")
+	logger.Infow("阿里云 ASR 已初始化")
 	go GlobalRecognizer.Start()
 }
 
@@ -177,17 +176,19 @@ func NewRecognizer(cfg AliyunASRConfig) (*Recognizer, error) {
 		return nil, err
 	}
 
+	// SDK 内部日志：静默，不输出到 stderr
+	sdkLogger := nls.NewNlsLogger(os.Stderr, "", 0)
+	sdkLogger.SetLogSil(true)
+	sdkLogger.SetDebug(false)
+
 	r := &Recognizer{
-		cfg:      cfg,
-		AudioIn:  make(chan asrpb.AudioChunk, 64),
-		AudioOut: make(chan *asrpb.TranscriptAudioChunk, 64),
-		sessions: make(map[string]*asrSession),
-		//stopCh:    make(chan struct{}),
-		logger:    nls.NewNlsLogger(os.Stderr, "[aliyun-asr] ", log.LstdFlags|log.Lmicroseconds),
+		cfg:       cfg,
+		AudioIn:   make(chan asrpb.AudioChunk, 64),
+		AudioOut:  make(chan *asrpb.TranscriptAudioChunk, 64),
+		sessions:  make(map[string]*asrSession),
+		sdkLogger: sdkLogger,
 		outputFan: make(chan sessionResult, 64),
 	}
-	r.logger.SetLogSil(true) // 禁止 SDK 输出日志到 stderr
-	r.logger.SetDebug(false) // 关闭 debug 级别日志
 	return r, nil
 }
 
@@ -215,7 +216,7 @@ func (r *Recognizer) Start() {
 	for chunk := range r.AudioIn {
 		// session_id 为空时跳过
 		if chunk.SessionId == "" {
-			r.logger.Println("[asr] 跳过空 session_id 的音频块")
+			logger.Warnw("跳过空 session_id 的音频块")
 			continue
 		}
 
@@ -228,7 +229,7 @@ func (r *Recognizer) Start() {
 		// 发送 PCM 数据
 		if len(chunk.Pcm) > 0 {
 			if err := s.trans.SendAudioData(chunk.Pcm); err != nil {
-				r.logger.Printf("[asr][%s] 发送音频失败: %v", chunk.SessionId, err)
+				logger.Warnw("发送音频失败", "sessionID", chunk.SessionId, "error", err)
 			}
 		}
 
@@ -239,13 +240,13 @@ func (r *Recognizer) Start() {
 
 		// is_last 时关闭该 session
 		if chunk.IsLast {
-			r.logger.Printf("[asr][%s] 收到 is_last，关闭 session", chunk.SessionId)
+			logger.Infow("收到 is_last，关闭 session", "sessionID", chunk.SessionId)
 			r.closeSession(chunk.SessionId, false) // false = 正常 stop，等待最终结果
 		}
 	}
 
 	// AudioIn 关闭 → 通知外部主循环退出
-	r.logger.Println("[asr] AudioIn 已关闭，退出 Start")
+	logger.Infow("AudioIn 已关闭，退出 Start")
 	close(r.AudioOut)
 }
 
@@ -285,11 +286,9 @@ func (r *Recognizer) idleCleaner() {
 			r.mu.Unlock()
 
 			for _, id := range toClose {
-				r.logger.Printf("[asr][%s] 空闲超时，自动关闭", id)
+				logger.Infow("空闲超时，自动关闭", "sessionID", id)
 				r.closeSession(id, true) // true = 强制 shutdown
 			}
-			//case <-r.stopCh:
-			//	return
 		}
 	}
 }
@@ -304,6 +303,11 @@ func (r *Recognizer) getOrCreateSession(sessionID, roomID, clientID string) *asr
 	}
 	r.mu.Unlock()
 
+	// 创建 SD 内部日志：静默
+	sdkSessLogger := nls.NewNlsLogger(os.Stderr, "", 0)
+	sdkSessLogger.SetLogSil(true)
+	sdkSessLogger.SetDebug(false)
+
 	// 创建新 session
 	s = &asrSession{
 		id:        sessionID,
@@ -311,21 +315,19 @@ func (r *Recognizer) getOrCreateSession(sessionID, roomID, clientID string) *asr
 		clientID:  clientID,
 		out:       r.outputFan,
 		lastAudio: time.Now(),
+		sdkLogger: sdkSessLogger,
 	}
-	s.logger = nls.NewNlsLogger(os.Stderr, "[aliyun-asr]["+sessionID+"] ", log.LstdFlags|log.Lmicroseconds)
-	s.logger.SetLogSil(true) // 禁止 SDK 输出日志到 stderr
-	s.logger.SetDebug(false) // 关闭 debug 级别日志
 
 	// 创建 SDK SpeechTranscription 实例
 	cg, err := nls.NewConnectionConfigWithAKInfoDefault(r.cfg.URL, r.cfg.AppKey,
 		r.cfg.AccessKeyID, r.cfg.AccessKeySecret)
 	if err != nil {
-		r.logger.Printf("[asr][%s] 创建连接配置失败: %v", sessionID, err)
+		logger.Warnw("创建连接配置失败", "sessionID", sessionID, "error", err)
 		return nil
 	}
 
 	trans, err := nls.NewSpeechTranscription(
-		cg, s.logger,
+		cg, sdkSessLogger,
 		func(text string, param interface{}) { s.onTaskFailed(text) },    // 识别过程中的错误处理回调参数
 		func(text string, param interface{}) { s.onStarted(text) },       // 建连完成回调参数
 		func(text string, param interface{}) { s.onSentenceBegin(text) }, // 一句话开始
@@ -336,7 +338,7 @@ func (r *Recognizer) getOrCreateSession(sessionID, roomID, clientID string) *asr
 		nil,
 	)
 	if err != nil {
-		r.logger.Printf("[asr][%s] 创建 SpeechTranscription 失败: %v", sessionID, err)
+		logger.Warnw("创建 SpeechTranscription 失败", "sessionID", sessionID, "error", err)
 		return nil
 	}
 	s.trans = trans
@@ -348,11 +350,11 @@ func (r *Recognizer) getOrCreateSession(sessionID, roomID, clientID string) *asr
 
 	// 启动识别
 	if err = s.start(&r.cfg); err != nil {
-		r.logger.Printf("[asr][%s] 启动识别失败: %v", sessionID, err)
+		logger.Warnw("启动识别失败", "sessionID", sessionID, "error", err)
 		return nil
 	}
 
-	r.logger.Printf("[asr][%s] 已创建并启动 session", sessionID)
+	logger.Infow("已创建并启动 session", "sessionID", sessionID)
 
 	// 注册到 map
 	r.mu.Lock()
@@ -385,14 +387,14 @@ func (r *Recognizer) closeSession(sessionID string, force bool) {
 	} else {
 		s.stop()
 	}
-	r.logger.Printf("[asr][%s] session 已关闭 (force=%v)", sessionID, force)
+	logger.Infow("session 已关闭", "sessionID", sessionID, "force", force)
 }
 
 // ---------- 回调函数 ----------
 
 // onTaskFailed 识别过程中的错误回调，JSON 字符串包含错误信息。
 func (s *asrSession) onTaskFailed(text string) {
-	s.logger.Printf("[asr][%s] TaskFailed: %s", s.id, text)
+	logger.Warnw("TaskFailed", "sessionID", s.id, "text", text)
 	// 将错误信息也作为结果输出，方便前端感知
 	s.out <- sessionResult{
 		SessionID: s.id,
@@ -406,17 +408,17 @@ func (s *asrSession) onTaskFailed(text string) {
 
 // onStarted 建连完成回调。
 func (s *asrSession) onStarted(text string) {
-	s.logger.Printf("[asr][%s] 连接已建立: %s", s.id, text)
+	logger.Infow("连接已建立", "sessionID", s.id, "text", text)
 }
 
 // onSentenceBegin 一句话开始回调。
 func (s *asrSession) onSentenceBegin(text string) {
-	s.logger.Printf("[asr][%s] SentenceBegin: %s", s.id, text)
+	logger.Infow("SentenceBegin", "sessionID", s.id, "text", text)
 }
 
 // onSentenceEnd 一句话结束回调，text 是该句话的最终文本。
 func (s *asrSession) onSentenceEnd(text string) {
-	s.logger.Printf("[asr][%s] SentenceEnd: %s", s.id, text)
+	logger.Infow("SentenceEnd", "sessionID", s.id, "text", text)
 	s.out <- sessionResult{
 		SessionID: s.id,
 		RoomID:    s.roomID,
@@ -429,25 +431,17 @@ func (s *asrSession) onSentenceEnd(text string) {
 
 // onResultChanged 中间结果变化回调，text 是当前识别到的部分文本。
 func (s *asrSession) onResultChanged(text string) {
-	s.logger.Printf("[asr][%s] ResultChanged: %s", s.id, text)
-	//s.out <- sessionResult{
-	//	SessionID: s.id,
-	//	RoomID:    s.roomID,
-	//	ClientID:  s.clientID,
-	//	Text:      text,
-	//	IsFinal:   false,
-	//	Seq:       0,
-	//}
+	logger.Debugw("ResultChanged", "sessionID", s.id, "text", text)
 }
 
 // onCompleted 识别完成回调。
 func (s *asrSession) onCompleted(text string) {
-	s.logger.Printf("[asr][%s] 识别完成: %s", s.id, text)
+	logger.Infow("识别完成", "sessionID", s.id, "text", text)
 }
 
 // onClosed 连接断开回调。
 func (s *asrSession) onClosed() {
-	s.logger.Printf("[asr][%s] 连接已断开", s.id)
+	logger.Infow("连接已断开", "sessionID", s.id)
 
 	// 关闭 session
 	go s.closeFunc()

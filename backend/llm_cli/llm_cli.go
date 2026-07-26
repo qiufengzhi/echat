@@ -4,16 +4,17 @@ import (
 	"context"
 	"echat-backend/config"
 	"echat-backend/global"
+	"echat-backend/logging"
 	llmpb "echat-backend/proto/llm"
 	"echat-backend/tts_cli"
 	"io"
-	"log"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
 var LLMServiceClient LLMService
+var logger = logging.New("llm")
 
 type LLMService struct {
 	client llmpb.LLMServiceClient
@@ -24,13 +25,13 @@ type LLMService struct {
 // Init 初始化 LLM rpc客户端，并启动接收回复的协程和发送请求的协程
 func Init() {
 	addr := config.Get().LLM.GrpcAddr
-	log.Printf("连接 LLM 服务: %s", addr)
+	logger.Infow("连接 LLM 服务", "addr", addr)
 
 	conn, err := grpc.NewClient(addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
-		log.Printf("连接 LLM 服务失败: %v", err)
+		logger.Warnw("连接 LLM 服务失败", "error", err)
 		return
 	}
 
@@ -41,7 +42,7 @@ func Init() {
 
 	stream, err := LLMServiceClient.client.ChatStream(context.Background())
 	if err != nil {
-		log.Printf("打开 LLM 流失败: %v", err)
+		logger.Warnw("打开 LLM 流失败", "error", err)
 		return
 	}
 
@@ -50,14 +51,14 @@ func Init() {
 		for {
 			resp, err := stream.Recv()
 			if err == io.EOF {
-				log.Printf("LLM 流已关闭")
+				logger.Infow("LLM 流已关闭")
 				return
 			}
 			if err != nil {
-				log.Printf("接收 LLM 回复错误: %v", err)
+				logger.Warnw("接收 LLM 回复错误", "error", err)
 				return
 			}
-			log.Printf("[llm_cli] 收到回复: %s", resp)
+			logger.Debugw("收到回复", "response", resp)
 			LLMServiceClient.Out <- resp
 		}
 	}()
@@ -66,7 +67,7 @@ func Init() {
 	go func() {
 		for req := range LLMServiceClient.In {
 			if err = stream.Send(req); err != nil {
-				log.Printf("[llm_cli] 发送请求错误: %v", err)
+				logger.Warnw("发送请求错误", "error", err)
 				break
 			}
 		}
