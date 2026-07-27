@@ -37,13 +37,13 @@ func newOpusEncoderPreset() (OpusEncoder, error) {
 	if err != nil {
 		return nil, err
 	}
-	// 原生 libopus：64kbps VBR + 复杂度 10，全频带透明语音质量
-	if err := enc.SetBitrate(64000); err != nil {
+	// CBR 32kbps + 复杂度 10（RFC 6716 推荐全频带语音 28-40kbps）
+	// 64kbps VBR 模式下 Chrome NetEq 抖动缓冲区会异常丢弃导致播放不完整，回退到已验证可用的配置
+	if err := enc.SetBitrate(32000); err != nil {
 		enc.Close()
 		return nil, fmt.Errorf("设置 Opus 码率失败: %w", err)
 	}
-	// VBR 可变码率让编码器在简单片段节省带宽、复杂片段分配更多比特
-	if err := enc.SetVBR(true); err != nil {
+	if err := enc.SetVBR(false); err != nil {
 		enc.Close()
 		return nil, fmt.Errorf("设置 Opus VBR 失败: %w", err)
 	}

@@ -39,11 +39,13 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gunter-q12/resample"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
+	"github.com/pion/webrtc/v4/pkg/media"
 )
 
 var logger = logging.New("sfu")
@@ -90,7 +92,8 @@ type SFUPeer struct {
 
 	// AI TTS 合成语音输出轨，写入后客户端通过 ontrack 收到
 	// 由 getAITtsTrack 首次使用时懒创建并 AddTrack 到 PC
-	aiTtsTrack *webrtc.TrackLocalStaticRTP
+	// 使用 TrackLocalStaticSample（pion 自动管理 seq/ts/marker），而非手动构造 RTP 包
+	aiTtsTrack *webrtc.TrackLocalStaticSample
 
 	// 停止中继转发协程的信号，在客户端离开或断连时关闭
 	stopRelay chan struct{}
@@ -510,7 +513,7 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 // getAITtsTrack 懒初始化 AI TTS 输出轨，返回该客户端的 AI 语音播放通道
 // 首次调用时创建 TrackLocalStaticRTP 并 AddTrack 到 PeerConnection，触发重协商
 // 后续调用直接复用已创建的 track
-func (r *SFURoom) getAITtsTrack(clientID string) (*webrtc.TrackLocalStaticRTP, error) {
+func (r *SFURoom) getAITtsTrack(clientID string) (*webrtc.TrackLocalStaticSample, error) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -522,7 +525,7 @@ func (r *SFURoom) getAITtsTrack(clientID string) (*webrtc.TrackLocalStaticRTP, e
 		return peer.aiTtsTrack, nil
 	}
 
-	track, err := webrtc.NewTrackLocalStaticRTP(
+	track, err := webrtc.NewTrackLocalStaticSample(
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
 		"audio",
 		"audio_ai_"+clientID, // label 标示 AI 合成语音来源
@@ -577,7 +580,7 @@ func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
 	// sessionID 使用 clientID-roomID 格式，保持与 ASR → LLM → TTS 管道一致
 	// 确保 GetAudio 和 ProcessText 使用同一 session，避免音频数据写入错误会话
 	sessionID := fmt.Sprintf("%s-%s", sourceID, r.ID)
-	var ttsOnce sync.Once
+	var ttsStarted atomic.Bool
 
 	for {
 		rtpPacket, _, err := remoteTrack.ReadRTP()
@@ -602,270 +605,332 @@ func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
 			}
 		}
 
-		// 开启AI语音助手
-		acr := aiCallReq{
-			sessionID: sessionID,
-			roomId:    r.ID,
-			clientId:  sourceID,
-			rtpPacket: rtpPacket,
-			clients:   forwardClient,
+		// 解码 Opus → PCM，送 ASR（每个 RTP 包都需要）
+		go func() {
+			pcm, err := decodeOpusToInt16(rtpPacket.Payload, 16000)
+			if err != nil {
+				logger.Warnw("解码失败", "source", sourceID[:8], "error", err)
+			} else if len(pcm) > 0 {
+				// 仅有实际音频数据才送 ASR，DTX 静音包解码后 pcm 为空，直接跳过
+				asr_cli.GlobalRecognizer.AudioIn <- asrpb.AudioChunk{
+					SessionId:  sessionID,
+					RoomId:     r.ID,
+					ClientId:   sourceID,
+					Pcm:        int16ToLEBytes(pcm),
+					SampleRate: 16000,
+				}
+			}
+		}()
+
+		// TTS 音频处理循环只启动一次，避免每个 RTP 包都泄漏一个 goroutine
+		if !ttsStarted.Swap(true) {
+			acr := aiCallReq{
+				sessionID: sessionID,
+				roomId:    r.ID,
+				clientId:  sourceID,
+				clients:   forwardClient,
+			}
+			go r.runAITTSLoop(acr)
 		}
-		go r.aiCall(acr, &ttsOnce)
 	}
 }
 
-// aiCall 调用 AI 助手。先送入ASR，总是开启，唤醒词唤醒需要ASR
-func (r *SFURoom) aiCall(acr aiCallReq, ttsOnce *sync.Once) {
-	// 解码 Opus → PCM，送 ASR
+// runAITTSLoop TTS 音频处理主循环：从 TTS 管道读取 PCM → 重采样 → Opus 编码 → RTP 发送
+// 由 forwardRtp 在首包到达时启动一次，整个 session 复用同一循环
+func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
+	aiTtsTrack, err := r.getAITtsTrack(acr.clientId)
+	if err != nil {
+		logger.Warnw("获取AI TTS音轨失败", "source", acr.clientId[:8], "error", err)
+		return
+	}
+
+	// 创建 Opus 编码器：48kHz 单声道 VoIP 模式，整个 TTS 会话复用同一个实例
+	// CGO_ENABLED=1 编译时使用原生 libopus，编码质量最佳
+	enc, err := newOpusEncoderPreset()
+	if err != nil {
+		logger.Warnw("创建Opus编码器失败", "source", acr.clientId[:8], "error", err)
+		return
+	}
+	// enc.Close() 推迟到 audioLoopDone 中调用，在关闭 frameQueue 之前
+	// 确保编码器在帧队列排空期间仍可用
+
+	var pcmBuf []int16    // PCM 采样缓冲区，用于帧对齐（TTS 输出可能不对齐 20ms 帧边界）
+	var totalPCM int      // 调试：累计收到的 TTS PCM 字节数（16kHz 原始）
+	var framesEncoded int // 调试：累计编码发送的 Opus 帧数
+	var chunkCount int    // 调试：累计收到的 audioCh chunk 数量
+	var timeoutCount int  // 调试：累计超时次数
+	var firstChunk bool = true
+	var relaySeq uint16 // relay 轨 RTP 序号（其他客户端 relay 仍走手动 RTP）
+	var relayTs uint32  // relay 轨 RTP 时间戳
+
+	lrs := llmpb.LLMResponse{
+		SessionId: acr.sessionID, // 使用 forwardRtp 的一致 sessionID，保证和 LLM 返回的 SessionId 一致
+		RoomId:    acr.roomId,
+		ClientId:  acr.clientId,
+	}
+
+	audioCh := tts_cli.GlobalTTSService.GetAudio(&lrs)
+	logger.Infow("TTS音频循环已启动", "source", acr.clientId[:8], "roomID", acr.roomId)
+
+	// 调试：导出原始 PCM，可用 ffplay -f s16le -ar 16000 -ac 1 文件名 播放
+	dumpPath := "tts_dump_" + acr.clientId[:8] + ".pcm"
+	dumpFile, dumpErr := os.Create(dumpPath)
+	if dumpErr != nil {
+		logger.Warnw("创建TTS dump文件失败", "source", acr.clientId[:8], "error", dumpErr)
+	}
+	if dumpFile != nil {
+		defer dumpFile.Close()
+	}
+	var dumpTotal int
+
+	// 创建 16kHz→48kHz 重采样器（polyphase FIR，纯 Go，替代手写线性插值）
+	var upsampledBuf bytes.Buffer
+	resampler, rsErr := resample.New(&upsampledBuf, resample.FormatInt16, 16000, 48000, 1, resample.WithKaiserFastFilter())
+	if rsErr != nil {
+		logger.Warnw("创建重采样器失败", "source", acr.clientId[:8], "error", rsErr)
+		return
+	}
+
+	// rawBuf 累积原始 16kHz PCM，达到阈值后批量重采样
+	var rawBuf []byte
+	const rawResampleThreshold = 6400 // 200ms @ 16kHz mono int16
+	// 诊断计数器
+	var totalResampledBytes int // 重采样后输出的总字节数（48kHz PCM）
+
+	// 周期性诊断 ticker：每 10s 输出累计统计，定位音频丢失的时间点
+	diagTicker := time.NewTicker(10 * time.Second)
+	defer diagTicker.Stop()
+
+	// 空闲超时 timer：2s 无新音频到达视为句子间自然停顿，刷新累积的 rawBuf
+	// 使用 time.NewTimer + Reset 而非 time.After，避免每次迭代创建新 timer 导致泄漏
+	idleTimer := time.NewTimer(2 * time.Second)
+	defer idleTimer.Stop()
+
+	// 帧发送队列：解耦编码（快速）与发送（20ms/帧 实时速率）
+	// TTS 合成速度远超实时播放速度，若瞬间发送所有帧，Chrome NetEq 抖动缓冲区会溢出
+	// 导致中间帧被丢弃——表现为只听到句子开头和末尾
+	// 队列容量 2000 帧 = 40 秒缓冲，足以容纳最长 TTS 回复
+	type queuedFrame struct {
+		payload []byte // 编码后的 Opus 数据
+	}
+	frameQueue := make(chan queuedFrame, 2000)
+
+	// pacedSender 以实时速率从队列取帧并发送，避免 NetEq 缓冲区溢出
+	senderDone := make(chan struct{})
 	go func() {
-		pcm, err := decodeOpusToInt16(acr.rtpPacket.Payload, 16000)
-		if err != nil {
-			logger.Warnw("解码失败", "source", acr.clientId[:8], "error", err)
-		} else if len(pcm) > 0 {
-			// 仅有实际音频数据才送 ASR，DTX 静音包解码后 pcm 为空，直接跳过
-			asr_cli.GlobalRecognizer.AudioIn <- asrpb.AudioChunk{
-				SessionId:  acr.sessionID,
-				RoomId:     acr.roomId,
-				ClientId:   acr.clientId,
-				Pcm:        int16ToLEBytes(pcm),
-				SampleRate: 16000,
+		defer close(senderDone)
+		sendTicker := time.NewTicker(20 * time.Millisecond)
+		defer sendTicker.Stop()
+		var sent int // 已发送帧计数，用于 relay 首帧 Marker 判定
+		for {
+			select {
+			case <-sendTicker.C:
+				select {
+				case qf, ok := <-frameQueue:
+					if !ok {
+						// 队列已关闭且排空，发送完成
+						return
+					}
+					// 写入 AI TTS 轨（pion WriteSample 自动管理 seq/ts/marker）
+					if err := aiTtsTrack.WriteSample(media.Sample{
+						Data:               qf.payload,
+						Duration:           20 * time.Millisecond,
+						PrevDroppedPackets: 0,
+					}); err != nil {
+						logger.Warnw("写入AI TTS轨失败", "source", acr.clientId[:8], "error", err)
+					}
+					// 写入 relay 轨（其他客户端），relay 使用 TrackLocalStaticRTP 需手动构造 RTP 包
+					relayMarker := sent == 0
+					for clientID, relay := range acr.clients {
+						if err := relay.WriteRTP(&rtp.Packet{
+							Header: rtp.Header{
+								Version:        2,
+								Marker:         relayMarker,
+								SequenceNumber: relaySeq,
+								Timestamp:      relayTs,
+							},
+							Payload: qf.payload,
+						}); err != nil {
+							logger.Warnw("写入AI中继轨失败", "dest", clientID[:8], "error", err)
+						}
+					}
+					relaySeq++
+					sent++
+					relayTs += opusEncoderFrameSamples
+				default:
+					// 队列为空，等待下一次 tick
+				}
 			}
 		}
 	}()
 
-	// 从TTS获取音频，转发给房间内所有客户端，包括说话者本人
-	// sync.Once 保证同一 session 的 TTS 转发协程只启动一次
-	// 注意：acr.clients 是首次调用时的快照，之后加入的客户端不会收到本次 AI 回复
-	ttsOnce.Do(func() {
-		aiTtsTrack, err := r.getAITtsTrack(acr.clientId)
-		if err != nil {
-			logger.Warnw("获取AI TTS音轨失败", "source", acr.clientId[:8], "error", err)
-			return
-		}
-
-		// 创建 Opus 编码器：48kHz 单声道 VoIP 模式，整个 TTS 会话复用同一个实例
-		// 注意：非 CGo 编码器（ccgo 转译 libopus）在 16kHz 下有已知缺陷，故统一使用 48kHz
-		// CGO_ENABLED=1 编译时使用原生 libopus，编码质量最佳
-		enc, err := newOpusEncoderPreset()
-		if err != nil {
-			logger.Warnw("创建Opus编码器失败", "source", acr.clientId[:8], "error", err)
-			return
-		}
-		defer enc.Close()
-
-		var pcmBuf []int16    // PCM 采样缓冲区，用于帧对齐（TTS 输出可能不对齐 20ms 帧边界）
-		var seq uint16        // RTP 包序号
-		var ts uint32         // RTP 时间戳，按采样数递增
-		var totalPCM int      // 调试：累计收到的 TTS PCM 字节数（16kHz 原始）
-		var framesEncoded int // 调试：累计编码发送的 Opus 帧数
-		var firstChunk bool = true
-
-		lrs := llmpb.LLMResponse{
-			SessionId: acr.sessionID, // 使用 forwardRtp 的一致 sessionID，保证和 LLM 返回的 SessionId 一致
-			RoomId:    acr.roomId,
-			ClientId:  acr.clientId,
-		}
-
-		audioCh := tts_cli.GlobalTTSService.GetAudio(&lrs)
-		logger.Infow("TTS音频循环已启动", "source", acr.clientId[:8], "roomID", acr.roomId)
-
-		// 调试：导出原始 PCM，可用 ffplay -f s16le -ar 16000 -ac 1 文件名 播放
-		dumpPath := "tts_dump_" + acr.clientId[:8] + ".pcm"
-		dumpFile, dumpErr := os.Create(dumpPath)
-		if dumpErr != nil {
-			logger.Warnw("创建TTS dump文件失败", "source", acr.clientId[:8], "error", dumpErr)
-		}
-		if dumpFile != nil {
-			defer dumpFile.Close()
-		}
-		var dumpTotal int
-
-		// 创建 16kHz→48kHz 重采样器（polyphase FIR，纯 Go，替代手写线性插值）
-		var upsampledBuf bytes.Buffer
-		resampler, rsErr := resample.New(&upsampledBuf, resample.FormatInt16, 16000, 48000, 1, resample.WithKaiserFastFilter())
-		if rsErr != nil {
-			logger.Warnw("创建重采样器失败", "source", acr.clientId[:8], "error", rsErr)
-			return
-		}
-
-		// rawBuf 累积原始 16kHz PCM，达到阈值后批量重采样
-		// 每次 resampler.Write 内部会新建滤波器状态，逐 chunk 调用导致边界失真
-		// 批量累积后再重采样可大幅减少调用次数，消除边界失真累积
-		var rawBuf []byte
-		// overlapSamples 重采样历史重叠采样数，为 Kaiser 滤波器提供历史上下文
-		// 64 采样 = 128 字节 @ int16，可覆盖 ~32 抽头的 Kaiser 窗滤波器左翼
-		// 重采样时拼接在批次前面，输出后丢弃重叠部分，消除批次边界失真
-		const overlapSamples = 64
-		const overlapBytes = overlapSamples * 2 // int16 = 2 bytes per sample
-		var history []byte                      // 上一批次末尾的原始采样，供下次重采样做滤波器上下文
-		// rawResampleThreshold 累积 200ms 原始音频后触发批量重采样
-		// 6400 字节 = 3200 samples @ 16kHz → 重采样后 9600 samples @ 48kHz = 10 个 Opus 帧
-		const rawResampleThreshold = 6400
-		// 上采样比例：48000 / 16000 = 3x
-		const upsampleRatio = 3
-		// 诊断计数器
-		var totalResampledBytes int // 重采样后输出的总字节数（48kHz PCM）
-		for {
-			timeout := time.After(2 * time.Second)
-			select {
-			case rawPCM, ok := <-audioCh:
-				if !ok {
-					goto audioLoopDone
+	for {
+		select {
+		case rawPCM, ok := <-audioCh:
+			if !ok {
+				logger.Infow("audioCh 已关闭，退出TTS循环", "source", acr.clientId[:8])
+				goto audioLoopDone
+			}
+			// 收到数据，重置空闲 timer
+			if !idleTimer.Stop() {
+				select {
+				case <-idleTimer.C:
+				default:
 				}
-				totalPCM += len(rawPCM)
-				if dumpFile != nil {
-					dumpFile.Write(rawPCM)
-					dumpTotal += len(rawPCM)
-				}
+			}
+			idleTimer.Reset(2 * time.Second)
 
-				// 首个 chunk：打印字节序诊断信息（仅首次）
-				if firstChunk {
-					firstChunk = false
-					hexPreview := ""
-					for i := 0; i < 20 && i < len(rawPCM); i++ {
-						hexPreview += fmt.Sprintf("%02x ", rawPCM[i])
-					}
-					samplesLE := leBytesToInt16(rawPCM)
-					lePreview := ""
-					for i := 0; i < 10 && i < len(samplesLE); i++ {
-						lePreview += fmt.Sprintf("%d,", samplesLE[i])
-					}
-					bePreview := ""
-					for i := 0; i < 10 && i < len(samplesLE); i++ {
-						beVal := int16(binary.BigEndian.Uint16(rawPCM[i*2:]))
-						bePreview += fmt.Sprintf("%d,", beVal)
-					}
-					logger.Debugw("TTS首个音频块诊断",
-						"source", acr.clientId[:8],
-						"byteLen", len(rawPCM),
-						"hex", hexPreview,
-						"le", lePreview,
-						"be", bePreview,
-					)
-				}
+			chunkCount++
+			totalPCM += len(rawPCM)
+			if dumpFile != nil {
+				dumpFile.Write(rawPCM)
+				dumpTotal += len(rawPCM)
+			}
 
-				// 累积原始 PCM，达到阈值后批量重采样
-				rawBuf = append(rawBuf, rawPCM...)
-				if len(rawBuf) >= rawResampleThreshold {
-					upsampledBuf.Reset()
-					// 拼接历史上下文 → 重采样 → 丢弃重叠输出，保持滤波器连续性
-					input := make([]byte, len(history)+len(rawBuf))
-					copy(input, history)
-					copy(input[len(history):], rawBuf)
-					if _, rsErr := resampler.Write(input); rsErr != nil {
-						logger.Warnw("重采样失败", "source", acr.clientId[:8], "error", rsErr)
-						rawBuf = rawBuf[:0]
-						continue
-					}
+			// 首个 chunk：打印字节序诊断信息（仅首次）
+			if firstChunk {
+				firstChunk = false
+				hexPreview := ""
+				for i := 0; i < 20 && i < len(rawPCM); i++ {
+					hexPreview += fmt.Sprintf("%02x ", rawPCM[i])
+				}
+				samplesLE := leBytesToInt16(rawPCM)
+				lePreview := ""
+				for i := 0; i < 10 && i < len(samplesLE); i++ {
+					lePreview += fmt.Sprintf("%d,", samplesLE[i])
+				}
+				bePreview := ""
+				for i := 0; i < 10 && i < len(samplesLE); i++ {
+					beVal := int16(binary.BigEndian.Uint16(rawPCM[i*2:]))
+					bePreview += fmt.Sprintf("%d,", beVal)
+				}
+				logger.Debugw("TTS首个音频块诊断",
+					"source", acr.clientId[:8],
+					"byteLen", len(rawPCM),
+					"hex", hexPreview,
+					"le", lePreview,
+					"be", bePreview,
+				)
+			}
+
+			// 累积原始 PCM，达到阈值后批量重采样
+			rawBuf = append(rawBuf, rawPCM...)
+			if len(rawBuf) >= rawResampleThreshold {
+				upsampledBuf.Reset()
+				if _, rsErr := resampler.Write(rawBuf); rsErr != nil {
+					logger.Warnw("重采样失败", "source", acr.clientId[:8], "error", rsErr)
+					rawBuf = rawBuf[:0]
+					continue
+				}
+				output := upsampledBuf.Bytes()
+				if len(output) > 0 {
+					upsampled := leBytesToInt16(output)
+					pcmBuf = append(pcmBuf, upsampled...)
+					totalResampledBytes += len(output)
+				}
+				rawBuf = rawBuf[:0]
+			}
+		case <-diagTicker.C:
+			// 周期性诊断：每 10s 输出累计统计，帮助定位音频丢失的时间段
+			logger.Infow("TTS 周期诊断",
+				"source", acr.clientId[:8],
+				"totalPCM", totalPCM,
+				"resampledBytes", totalResampledBytes,
+				"framesEncoded", framesEncoded,
+				"chunkCount", chunkCount,
+				"timeoutCount", timeoutCount,
+				"rawBufLag", len(rawBuf),
+				"pcmBufLag", len(pcmBuf),
+			)
+		case <-idleTimer.C:
+			// 2s 无新音频到达，视为句子间自然停顿，刷新累积的 rawBuf
+			timeoutCount++
+			idleTimer.Reset(2 * time.Second)
+			if len(rawBuf) > 0 {
+				logger.Debugw("TTS 超时刷新 rawBuf",
+					"source", acr.clientId[:8],
+					"rawBufLen", len(rawBuf),
+					"timeoutCount", timeoutCount,
+					"totalPCMSoFar", totalPCM,
+				)
+				upsampledBuf.Reset()
+				if _, rsErr := resampler.Write(rawBuf); rsErr != nil {
+					logger.Warnw("重采样失败(timeout)", "source", acr.clientId[:8], "error", rsErr)
+				} else {
 					output := upsampledBuf.Bytes()
-					// 丢弃重叠输出（与上一批次末尾重叠，避免重复播放）
-					overlapOutBytes := len(history) * upsampleRatio
-					if overlapOutBytes < len(output) {
-						output = output[overlapOutBytes:]
-					} else {
-						output = nil
-					}
 					if len(output) > 0 {
 						upsampled := leBytesToInt16(output)
 						pcmBuf = append(pcmBuf, upsampled...)
 						totalResampledBytes += len(output)
 					}
-					// 保存末尾样本作为下一批次的历史上下文
-					if len(rawBuf) > overlapBytes {
-						history = append(history[:0], rawBuf[len(rawBuf)-overlapBytes:]...)
-					} else {
-						history = append(history[:0], rawBuf...)
-					}
-					rawBuf = rawBuf[:0]
 				}
-			case <-timeout:
-				// 2s 空闲，刷新 rawBuf 中累积的原始 PCM
-				// 重置历史上下文，因为超时意味着句子间的自然停顿
-				if len(rawBuf) > 0 {
-					upsampledBuf.Reset()
-					input := make([]byte, len(history)+len(rawBuf))
-					copy(input, history)
-					copy(input[len(history):], rawBuf)
-					if _, rsErr := resampler.Write(input); rsErr != nil {
-						logger.Warnw("重采样失败(timeout)", "source", acr.clientId[:8], "error", rsErr)
-					} else {
-						output := upsampledBuf.Bytes()
-						overlapOutBytes := len(history) * upsampleRatio
-						if overlapOutBytes < len(output) {
-							output = output[overlapOutBytes:]
-						} else {
-							output = nil
-						}
-						if len(output) > 0 {
-							upsampled := leBytesToInt16(output)
-							pcmBuf = append(pcmBuf, upsampled...)
-							totalResampledBytes += len(output)
-						}
-					}
-					history = history[:0] // 超时后重置历史：句子间有自然停顿
-					rawBuf = rawBuf[:0]
-				}
-			}
-
-			// 编码所有完整帧（960 samples = 20ms @ 48kHz）
-			// 不足一帧的残采样保留在 pcmBuf，不补零避免破坏 Opus 编码器预测状态
-			for len(pcmBuf) >= opusEncoderFrameSamples {
-				frame := pcmBuf[:opusEncoderFrameSamples]
-				pcmBuf = pcmBuf[opusEncoderFrameSamples:]
-
-				opusPayload, err := enc.Encode(frame)
+				rawBuf = rawBuf[:0]
+				// 重建 resampler 清除滤波器内部状态，避免跨句状态污染
+				newResampler, err := resample.New(&upsampledBuf, resample.FormatInt16, 16000, 48000, 1, resample.WithKaiserFastFilter())
 				if err != nil {
-					logger.Warnw("Opus编码失败", "source", acr.clientId[:8], "error", err)
-					continue
+					logger.Warnw("重建重采样器失败", "source", acr.clientId[:8], "error", err)
+				} else {
+					resampler = newResampler
 				}
-
-				// 构建 RTP 包，Version/PayloadType/SSRC 由 WriteRTP 内部根据 track 绑定覆写
-				pkt := &rtp.Packet{
-					Header: rtp.Header{
-						Version:        2,
-						Marker:         seq == 0, // RFC 7587: talkspurt first packet
-						SequenceNumber: seq,
-						Timestamp:      ts,
-					},
-					Payload: opusPayload,
-				}
-
-				// 写入说话者本人的 AI TTS 轨，客户端通过 ontrack 收到 AI 语音
-				if err = aiTtsTrack.WriteRTP(pkt); err != nil {
-					logger.Warnw("写入AI TTS轨失败", "source", acr.clientId[:8], "error", err)
-				}
-
-				// 写入房间内其他客户端的 relay track，让所有人都能听到 AI 回复
-				for clientID, relay := range acr.clients {
-					if err = relay.WriteRTP(pkt); err != nil {
-						logger.Warnw("写入AI中继轨失败", "dest", clientID[:8], "error", err)
-					}
-				}
-
-				seq++
-				framesEncoded++
-				ts += opusEncoderFrameSamples // Opus RTP 时钟 48000Hz，每 20ms 帧 = 960 ticks
 			}
 		}
-	audioLoopDone:
 
-		// 调试：确认 PCM dump 已写入
-		if dumpFile != nil && dumpTotal > 0 {
-			logger.Infow("TTS dump 已写入",
-				"path", dumpPath, "bytes", dumpTotal,
-				"playback", "ffplay -f s16le -ar 16000 -ac 1 "+dumpPath,
-			)
+		// 编码所有完整帧（960 samples = 20ms @ 48kHz）并入队
+		// 不足一帧的残采样保留在 pcmBuf，不补零避免破坏 Opus 编码器预测状态
+		// 帧发送由 pacedSender goroutine 以 20ms 间隔实时发送，防止 NetEq 缓冲区溢出
+		for len(pcmBuf) >= opusEncoderFrameSamples {
+			frame := pcmBuf[:opusEncoderFrameSamples]
+			pcmBuf = pcmBuf[opusEncoderFrameSamples:]
+
+			opusPayload, err := enc.Encode(frame)
+			if err != nil {
+				logger.Warnw("Opus编码失败", "source", acr.clientId[:8], "error", err)
+				continue
+			}
+
+			frameQueue <- queuedFrame{payload: opusPayload}
+			framesEncoded++
 		}
+	}
+audioLoopDone:
 
-		logger.Infow("TTS 音频流结束",
-			"source", acr.clientId[:8],
-			"totalPCM", totalPCM,
-			"resampledBytes", totalResampledBytes,
-			"seq", seq,
-			"framesEncoded", framesEncoded,
-			"tailPCM", len(pcmBuf),
+	// 编码并排空 pcmBuf 残帧（补零至完整帧），确保尾部音频不丢失
+	if len(pcmBuf) > 0 {
+		padded := make([]int16, opusEncoderFrameSamples)
+		copy(padded, pcmBuf)
+		if opusPayload, err := enc.Encode(padded); err == nil {
+			frameQueue <- queuedFrame{payload: opusPayload}
+			framesEncoded++
+		} else {
+			logger.Warnw("尾部残帧编码失败", "source", acr.clientId[:8], "error", err)
+		}
+	}
+
+	// 关闭编码器（后续不再有新帧入队）
+	enc.Close()
+
+	// 关闭帧队列并等待 pacedSender 排空所有帧
+	close(frameQueue)
+	<-senderDone
+
+	// 调试：确认 PCM dump 已写入
+	if dumpFile != nil && dumpTotal > 0 {
+		logger.Infow("TTS dump 已写入",
+			"path", dumpPath, "bytes", dumpTotal,
+			"playback", "ffplay -f s16le -ar 16000 -ac 1 "+dumpPath,
 		)
-	})
+	}
+
+	logger.Infow("TTS 音频流结束",
+		"source", acr.clientId[:8],
+		"totalPCM", totalPCM,
+		"resampledBytes", totalResampledBytes,
+		"relaySeq", relaySeq,
+		"framesEncoded", framesEncoded,
+		"chunkCount", chunkCount,
+		"timeoutCount", timeoutCount,
+		"tailPCM", len(pcmBuf),
+	)
 }
 
 // stopForwarding 关闭转发协程，确保协程退出

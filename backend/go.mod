@@ -6,10 +6,12 @@ require (
 	github.com/aliyun/alibabacloud-nls-go-sdk v1.1.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/hraban/opus v0.0.0-20260708213942-bde8e4304501
+	github.com/gunter-q12/resample v1.0.0
+	github.com/jj11hh/opus v1.0.1
 	github.com/pion/opus v0.1.0
 	github.com/pion/rtp v1.10.2
 	github.com/pion/webrtc/v4 v4.2.15
+	go.uber.org/zap v1.28.0
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
@@ -36,8 +38,11 @@ require (
 	github.com/pion/transport/v4 v4.0.2 // indirect
 	github.com/pion/turn/v5 v5.0.9 // indirect
 	github.com/satori/go.uuid v1.2.0 // indirect
+	github.com/tetratelabs/wazero v1.9.0 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
+	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
+	golang.org/x/exp v0.0.0-20250106191152-7588d65b2ba8 // indirect
 	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.34.0 // indirect

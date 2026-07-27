@@ -143,14 +143,17 @@ func (s *AliyunSynthesizer) runSession(sp *SessionPipeline, sessionID string) {
 		close(sp.audioOutCh)
 	}()
 
+	var sentenceSeq int // 句子序号，用于跨日志关联音频块归属
 	for {
 		select {
 		case sentence, ok := <-sp.sentenceCh:
 			if !ok {
-				logger.Infow("句子通道已关闭", "sessionID", sessionID)
+				logger.Infow("句子通道已关闭", "sessionID", sessionID, "totalSentences", sentenceSeq)
 				return
 			}
-			s.synthesizeSentence(sp, sentence, sessionID)
+			sentenceSeq++
+			logger.Infow("开始合成句子", "sessionID", sessionID, "seq", sentenceSeq, "sentence", sentence)
+			s.synthesizeSentence(sp, sentence, sessionID, sentenceSeq)
 		case <-sp.ctx.Done():
 			logger.Infow("会话已取消", "sessionID", sessionID)
 			return
@@ -161,13 +164,13 @@ func (s *AliyunSynthesizer) runSession(sp *SessionPipeline, sessionID string) {
 // synthesizeSentence 调用阿里云 TTS HTTP API 合成单句
 //
 // 阿里云语音合成 API 文档：https://help.aliyun.com/zh/ai/developer-reference/streaming-speech-synthesis-api
-func (s *AliyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence string, sessionID string) {
+func (s *AliyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence string, sessionID string, sentenceSeq int) {
 	sentence = strings.TrimSpace(sentence)
 	if sentence == "" {
 		return
 	}
 
-	logger.Infow("开始合成句子", "sessionID", sessionID, "sentence", sentence)
+	logger.Debugw("阿里云合成开始", "sessionID", sessionID, "seq", sentenceSeq, "sentence", sentence)
 
 	query := url.Values{}
 	query.Set("appkey", s.cfg.AppKey)
@@ -229,7 +232,7 @@ func (s *AliyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence str
 		}
 	}
 
-	logger.Infow("合成完成", "sessionID", sessionID, "totalBytes", totalBytes)
+	logger.Infow("合成完成", "sessionID", sessionID, "seq", sentenceSeq, "totalBytes", totalBytes)
 }
 
 // sign 生成阿里云 API 签名
