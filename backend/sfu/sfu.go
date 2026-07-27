@@ -33,10 +33,8 @@ import (
 	asrpb "echat-backend/proto/asr"
 	llmpb "echat-backend/proto/llm"
 	"echat-backend/tts_cli"
-	"encoding/binary"
 	"fmt"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -655,13 +653,10 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 	// 确保编码器在帧队列排空期间仍可用
 
 	var pcmBuf []int16    // PCM 采样缓冲区，用于帧对齐（TTS 输出可能不对齐 20ms 帧边界）
-	var totalPCM int      // 调试：累计收到的 TTS PCM 字节数（16kHz 原始）
-	var framesEncoded int // 调试：累计编码发送的 Opus 帧数
-	var chunkCount int    // 调试：累计收到的 audioCh chunk 数量
-	var timeoutCount int  // 调试：累计超时次数
-	var firstChunk bool = true
-	var relaySeq uint16 // relay 轨 RTP 序号（其他客户端 relay 仍走手动 RTP）
-	var relayTs uint32  // relay 轨 RTP 时间戳
+	var totalPCM int      // 累计收到的 TTS PCM 字节数（16kHz 原始）
+	var framesEncoded int // 累计编码发送的 Opus 帧数
+	var relaySeq uint16   // relay 轨 RTP 序号（其他客户端 relay 仍走手动 RTP）
+	var relayTs uint32    // relay 轨 RTP 时间戳
 
 	lrs := llmpb.LLMResponse{
 		SessionId: acr.sessionID, // 使用 forwardRtp 的一致 sessionID，保证和 LLM 返回的 SessionId 一致
@@ -671,17 +666,6 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 
 	audioCh := tts_cli.GlobalTTSService.GetAudio(&lrs)
 	logger.Infow("TTS音频循环已启动", "source", acr.clientId[:8], "roomID", acr.roomId)
-
-	// 调试：导出原始 PCM，可用 ffplay -f s16le -ar 16000 -ac 1 文件名 播放
-	dumpPath := "tts_dump_" + acr.clientId[:8] + ".pcm"
-	dumpFile, dumpErr := os.Create(dumpPath)
-	if dumpErr != nil {
-		logger.Warnw("创建TTS dump文件失败", "source", acr.clientId[:8], "error", dumpErr)
-	}
-	if dumpFile != nil {
-		defer dumpFile.Close()
-	}
-	var dumpTotal int
 
 	// 创建 16kHz→48kHz 重采样器（polyphase FIR，纯 Go，替代手写线性插值）
 	var upsampledBuf bytes.Buffer
@@ -694,12 +678,7 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 	// rawBuf 累积原始 16kHz PCM，达到阈值后批量重采样
 	var rawBuf []byte
 	const rawResampleThreshold = 6400 // 200ms @ 16kHz mono int16
-	// 诊断计数器
-	var totalResampledBytes int // 重采样后输出的总字节数（48kHz PCM）
-
-	// 周期性诊断 ticker：每 10s 输出累计统计，定位音频丢失的时间点
-	diagTicker := time.NewTicker(10 * time.Second)
-	defer diagTicker.Stop()
+	var totalResampledBytes int       // 重采样后输出的总字节数（48kHz PCM）
 
 	// 空闲超时 timer：2s 无新音频到达视为句子间自然停顿，刷新累积的 rawBuf
 	// 使用 time.NewTimer + Reset 而非 time.After，避免每次迭代创建新 timer 导致泄漏
@@ -780,38 +759,7 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 			}
 			idleTimer.Reset(2 * time.Second)
 
-			chunkCount++
 			totalPCM += len(rawPCM)
-			if dumpFile != nil {
-				dumpFile.Write(rawPCM)
-				dumpTotal += len(rawPCM)
-			}
-
-			// 首个 chunk：打印字节序诊断信息（仅首次）
-			if firstChunk {
-				firstChunk = false
-				hexPreview := ""
-				for i := 0; i < 20 && i < len(rawPCM); i++ {
-					hexPreview += fmt.Sprintf("%02x ", rawPCM[i])
-				}
-				samplesLE := leBytesToInt16(rawPCM)
-				lePreview := ""
-				for i := 0; i < 10 && i < len(samplesLE); i++ {
-					lePreview += fmt.Sprintf("%d,", samplesLE[i])
-				}
-				bePreview := ""
-				for i := 0; i < 10 && i < len(samplesLE); i++ {
-					beVal := int16(binary.BigEndian.Uint16(rawPCM[i*2:]))
-					bePreview += fmt.Sprintf("%d,", beVal)
-				}
-				logger.Debugw("TTS首个音频块诊断",
-					"source", acr.clientId[:8],
-					"byteLen", len(rawPCM),
-					"hex", hexPreview,
-					"le", lePreview,
-					"be", bePreview,
-				)
-			}
 
 			// 累积原始 PCM，达到阈值后批量重采样
 			rawBuf = append(rawBuf, rawPCM...)
@@ -830,29 +778,10 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 				}
 				rawBuf = rawBuf[:0]
 			}
-		case <-diagTicker.C:
-			// 周期性诊断：每 10s 输出累计统计，帮助定位音频丢失的时间段
-			logger.Infow("TTS 周期诊断",
-				"source", acr.clientId[:8],
-				"totalPCM", totalPCM,
-				"resampledBytes", totalResampledBytes,
-				"framesEncoded", framesEncoded,
-				"chunkCount", chunkCount,
-				"timeoutCount", timeoutCount,
-				"rawBufLag", len(rawBuf),
-				"pcmBufLag", len(pcmBuf),
-			)
 		case <-idleTimer.C:
 			// 2s 无新音频到达，视为句子间自然停顿，刷新累积的 rawBuf
-			timeoutCount++
 			idleTimer.Reset(2 * time.Second)
 			if len(rawBuf) > 0 {
-				logger.Debugw("TTS 超时刷新 rawBuf",
-					"source", acr.clientId[:8],
-					"rawBufLen", len(rawBuf),
-					"timeoutCount", timeoutCount,
-					"totalPCMSoFar", totalPCM,
-				)
 				upsampledBuf.Reset()
 				if _, rsErr := resampler.Write(rawBuf); rsErr != nil {
 					logger.Warnw("重采样失败(timeout)", "source", acr.clientId[:8], "error", rsErr)
@@ -913,23 +842,12 @@ audioLoopDone:
 	close(frameQueue)
 	<-senderDone
 
-	// 调试：确认 PCM dump 已写入
-	if dumpFile != nil && dumpTotal > 0 {
-		logger.Infow("TTS dump 已写入",
-			"path", dumpPath, "bytes", dumpTotal,
-			"playback", "ffplay -f s16le -ar 16000 -ac 1 "+dumpPath,
-		)
-	}
-
 	logger.Infow("TTS 音频流结束",
 		"source", acr.clientId[:8],
 		"totalPCM", totalPCM,
 		"resampledBytes", totalResampledBytes,
-		"relaySeq", relaySeq,
 		"framesEncoded", framesEncoded,
-		"chunkCount", chunkCount,
-		"timeoutCount", timeoutCount,
-		"tailPCM", len(pcmBuf),
+		"relaySeq", relaySeq,
 	)
 }
 
@@ -961,39 +879,4 @@ func (s *SFUServer) CleanupRoom(roomID string) {
 	r.lock.Unlock()
 
 	s.RemoveRoom(roomID)
-}
-
-// writeWav 将原始 PCM 数据写入 WAV 文件（临时调试用）
-func writeWav(f *os.File, pcmData []byte, sampleRate, numChannels, bitsPerSample int) {
-	dataSize := len(pcmData)
-	byteRate := sampleRate * numChannels * bitsPerSample / 8
-	blockAlign := numChannels * bitsPerSample / 8
-
-	// RIFF header
-	f.Write([]byte("RIFF"))
-	writeU32LE(f, uint32(36+dataSize))
-	f.Write([]byte("WAVE"))
-
-	// fmt chunk
-	f.Write([]byte("fmt "))
-	writeU32LE(f, 16) // chunk size
-	writeU16LE(f, 1)  // PCM format
-	writeU16LE(f, uint16(numChannels))
-	writeU32LE(f, uint32(sampleRate))
-	writeU32LE(f, uint32(byteRate))
-	writeU16LE(f, uint16(blockAlign))
-	writeU16LE(f, uint16(bitsPerSample))
-
-	// data chunk
-	f.Write([]byte("data"))
-	writeU32LE(f, uint32(dataSize))
-	f.Write(pcmData)
-}
-
-func writeU32LE(f *os.File, v uint32) {
-	f.Write([]byte{byte(v), byte(v >> 8), byte(v >> 16), byte(v >> 24)})
-}
-
-func writeU16LE(f *os.File, v uint16) {
-	f.Write([]byte{byte(v), byte(v >> 8)})
 }
