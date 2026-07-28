@@ -12,6 +12,7 @@ Thumbs.db
 # Node / frontend
 node_modules/
 frontend/node_modules/
+frontend/ssl/
 dist/
 build/
 .vite/
@@ -35,3 +36,7 @@ backend/.gocache/
 *.log
 tmp/
 temp/
+
+# yaml
+backend/config.yaml
+agent/config.yaml
