@@ -1,33 +1,49 @@
 import type { VoiceRoomMember } from '../../types/voiceRoomUi'
 
 interface MemberSeatProps {
-  member: VoiceRoomMember // 当前席位展示的成员或空席位
-  onInvite: () => void // 点击空席位时打开邀请弹窗
+  member: VoiceRoomMember
+  onInvite: () => void
 }
 
-// MemberSeat 渲染单个成员席位：真实成员展示昵称/状态，空席位展示邀请入口
+// 按成员 id 取色板索引，确保同一个人颜色稳定
+const GRADIENT_CLASSES = ['g1', 'g2', 'g3', 'g4', 'g5', 'g6']
+function avatarGradient(id: string) {
+  let hash = 0
+  for (let i = 0; i < id.length; i++) {
+    hash = id.charCodeAt(i) + ((hash << 5) - hash)
+  }
+  return GRADIENT_CLASSES[Math.abs(hash) % GRADIENT_CLASSES.length]
+}
+
+// MemberSeat 渲染单个席位：真实成员展示头像/昵称/状态，空席位作为邀请入口
 export default function MemberSeat({ member, onInvite }: MemberSeatProps) {
   if (member.role === 'empty') {
     return (
-      <button className="member-seat member-seat-empty" type="button" onClick={onInvite}>
-        <span className="seat-avatar">＋</span>
-        <strong>邀请好友</strong>
+      <button className="seat empty" type="button" onClick={onInvite}>
+        <div className="ava">＋</div>
+        <div className="nm">邀请</div>
       </button>
     )
   }
 
-  const statusText = member.isMuted ? '已静音' : member.isSpeaking ? '正在说话' : '在线'
+  const isSpeaking = member.isSpeaking && !member.isMuted
+  const statusText = member.isMuted ? '已静音' : member.isSpeaking ? '说话中' : '在线'
+  const gradientClass = avatarGradient(member.id)
 
   return (
-    <article className={`member-seat ${member.isSpeaking ? 'is-speaking' : ''} ${member.isMuted ? 'is-muted' : ''}`}>
-      <div className="seat-avatar" aria-hidden="true">
-        {member.name.slice(0, 1).toUpperCase()}
+    <div className={`seat${isSpeaking ? ' speaking' : ''}${member.isMuted ? ' muted' : ''}`}>
+      <div className={`ava ${gradientClass}`}>
+        {member.name.slice(0, 1)}
+        {member.role === 'host' && <span className="badge-host">👑</span>}
+        {member.isMuted && <span className="badge-mute">🔇</span>}
       </div>
-      <div className="seat-copy">
-        <strong>{member.isSelf ? `${member.name} · 我` : member.name}</strong>
-        <span>{member.role === 'host' ? '房主' : '成员'}</span>
-      </div>
-      <small>{statusText}</small>
-    </article>
+      {isSpeaking && (
+        <div className="wave">
+          <i /><i /><i />
+        </div>
+      )}
+      <div className="nm">{member.isSelf ? `${member.name} · 我` : member.name}</div>
+      {!isSpeaking && <div className="st">{statusText}</div>}
+    </div>
   )
 }

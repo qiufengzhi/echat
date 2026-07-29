@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>苍月草 · 极简二次元样图 v3.1</title>
+<style>
+/* ============================================================
+   eChat v3.1 —— 极简清爽的二次元（bilibili 粉）
+   相对 v3：去掉樱花雨 / 大吉祥物 / 满地浮动动画，
+   只保留「说话发光环 + 音波」这类有功能含义的状态反馈。
+   大量留白、白色卡片、粉色只用在主行动和激活态上。
+   ============================================================ */
+:root{
+  --pink:        #FB7299;
+  --pink-deep:   #F25D8E;
+  --pink-dark:   #E0486F;
+  --pink-soft:   #FBD0DD;
+  --pink-softer: #FDE9F0;
+  --pink-bg:     #FFF6F9;
+  --blue:        #23ADE5;
+  --green:       #35C26D;
+  --amber:       #F5A623;
+  --ink:         #3D2A35;
+  --ink-soft:    #9B7F8E;
+  --ink-faint:   #C6AFBC;
+  --line:        #F6E4EC;
+  --card:        #FFFFFF;
+  --page:        #FFFBFC;
+  --shadow-sm:   0 2px 10px rgba(251,114,153,.08);
+  --shadow-md:   0 8px 24px rgba(251,114,153,.12);
+  --shadow-lg:   0 16px 44px rgba(61,42,53,.14);
+  --r-md: 16px;
+  --r-lg: 22px;
+  --r-pill: 999px;
+  --font: "PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:var(--font);color:var(--ink);background:var(--page);
+  -webkit-font-smoothing:antialiased;padding:40px 20px 120px;
+}
+.shell{max-width:1240px;margin:0 auto}
+
+/* ---------- 审稿外壳 ---------- */
+.head{text-align:center}
+.brandline{display:inline-flex;align-items:center;gap:9px;background:#fff;border:1.5px solid var(--line);
+  color:var(--pink-deep);padding:7px 18px;border-radius:var(--r-pill);font-weight:900;font-size:14px}
+.head h1{font-size:clamp(24px,4vw,36px);margin:16px 0 8px;font-weight:900}
+.head h1 .hl{color:var(--pink-deep)}
+.head p{color:var(--ink-soft);font-size:14px;max-width:620px;margin:0 auto;line-height:1.75}
+.legend{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:22px 0 6px}
+.legend .lg{display:flex;align-items:center;gap:7px;background:#fff;border:1px solid var(--line);
+  border-radius:var(--r-pill);padding:5px 13px;font-size:12px;font-weight:700;color:var(--ink-soft)}
+.legend .sw{width:14px;height:14px;border-radius:50%}
+
+.section-title{display:flex;align-items:center;gap:12px;margin:54px 0 22px;font-size:19px;font-weight:900}
+.section-title::after{content:"";flex:1;height:1.5px;background:var(--line)}
+.section-title .num{background:var(--pink);color:#fff;width:28px;height:28px;border-radius:50%;
+  display:grid;place-items:center;font-size:14px}
+
+.device-wall{display:flex;flex-wrap:wrap;gap:32px;justify-content:center;align-items:flex-start}
+.device{display:flex;flex-direction:column;align-items:center;gap:12px}
+.device .cap{font-size:12.5px;font-weight:700;color:var(--ink-soft);text-align:center;line-height:1.6;max-width:340px}
+.device .cap b{color:var(--pink-deep)}
+
+.phone{width:340px;height:736px;border-radius:40px;background:#fff;
+  box-shadow:var(--shadow-lg), inset 0 0 0 5px #fff, inset 0 0 0 7px #F1DDE6;
+  overflow:hidden;position:relative;flex:none}
+.phone.desktop{width:780px;height:560px;border-radius:22px}
+.screen{position:absolute;inset:0;display:flex;flex-direction:column;overflow:hidden;background:var(--page)}
+
+/* ---------- 通用元素 ---------- */
+.btn{border:none;cursor:pointer;font-family:inherit;font-weight:800;border-radius:var(--r-pill);
+  transition:transform .12s ease, opacity .12s ease}
+.btn:active{transform:scale(.97)}
+.btn-primary{background:var(--pink);color:#fff;font-size:16px;padding:14px 0;width:100%}
+.btn-ghost{background:#fff;color:var(--pink-deep);border:1.5px solid var(--pink-soft);font-size:16px;padding:13px 0;width:100%}
+.btn[disabled]{opacity:.55;cursor:default}
+
+.wordmark{display:flex;align-items:center;gap:7px;font-weight:900;font-size:16px;color:var(--ink)}
+.wordmark .d{width:9px;height:9px;border-radius:50%;background:var(--pink)}
+
+/* 状态小胶囊 */
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:800;
+  padding:4px 11px;border-radius:var(--r-pill)}
+.pill i{width:7px;height:7px;border-radius:50%}
+.pill.ok{background:#E5F8EE;color:#1F9B57}.pill.ok i{background:var(--green)}
+.pill.wait{background:#FDF3E3;color:#C9821A}.pill.wait i{background:var(--amber)}
+.pill.err{background:#FDE7E7;color:#D84C4C}.pill.err i{background:#E05252}
+
+/* ============================================================
+   首页
+   ============================================================ */
+.home-top{display:flex;justify-content:space-between;align-items:center;padding:20px 20px 0}
+.text-btn{background:none;border:none;color:var(--ink-soft);font-weight:700;font-size:13px;
+  cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:5px}
+.home-body{flex:1;display:flex;flex-direction:column;justify-content:center;padding:0 24px}
+.home-hero{margin-bottom:30px}
+.home-hero .hi{font-size:13px;font-weight:800;color:var(--pink);letter-spacing:1px}
+.home-hero h1{font-size:32px;font-weight:900;line-height:1.25;margin-top:8px}
+.home-hero h1 .hl{color:var(--pink-deep)}
+.home-hero p{color:var(--ink-soft);font-size:14px;margin-top:10px;line-height:1.7}
+.field{margin-bottom:15px}
+.field span{display:block;font-size:12.5px;font-weight:800;color:var(--ink-soft);margin:0 4px 7px}
+.field input{width:100%;border:1.5px solid var(--line);outline:none;font-family:inherit;
+  font-size:16px;font-weight:700;color:var(--ink);background:#fff;border-radius:var(--r-md);
+  padding:13px 16px;transition:border-color .15s ease}
+.field input:focus{border-color:var(--pink)}
+.form-err{display:flex;gap:8px;align-items:center;background:#FDE7E7;color:#C23B3B;
+  font-size:13px;font-weight:700;border-radius:var(--r-md);padding:11px 14px;margin-bottom:15px}
+.home-actions{display:flex;flex-direction:column;gap:11px;margin-top:6px}
+.home-note{text-align:center;color:var(--ink-faint);font-size:12px;font-weight:600;margin-top:16px}
+
+/* ============================================================
+   房间
+   ============================================================ */
+.room-top{display:flex;align-items:center;gap:9px;padding:16px 16px 0}
+.room-chip{flex:1;display:flex;align-items:center;gap:10px;background:#fff;border:1px solid var(--line);
+  border-radius:var(--r-pill);padding:9px 15px;box-shadow:var(--shadow-sm)}
+.room-chip .no{font-weight:900;font-size:15px;letter-spacing:.5px}
+.room-chip .cnt{margin-left:auto;font-size:12px;font-weight:800;color:var(--ink-soft)}
+.icon-round{width:40px;height:40px;border-radius:50%;border:1px solid var(--line);cursor:pointer;
+  display:grid;place-items:center;background:#fff;color:var(--ink-soft);font-size:16px;box-shadow:var(--shadow-sm)}
+.icon-round.leave{background:#fff;border:1.5px solid #FFCCD5;color:#E0486F}
+
+.reconnect{margin:12px 16px 0;display:flex;align-items:center;gap:8px;background:#FDF3E3;
+  color:#C9821A;font-size:12.5px;font-weight:800;border-radius:var(--r-md);padding:10px 14px}
+
+.stage{flex:1;display:flex;flex-wrap:wrap;gap:20px 14px;align-content:center;justify-content:center;
+  padding:16px 20px}
+.seat{display:flex;flex-direction:column;align-items:center;gap:7px;width:76px}
+.ava{position:relative;width:64px;height:64px;border-radius:50%;display:grid;place-items:center;
+  font-size:24px;font-weight:900;color:#fff}
+.g1{background:linear-gradient(150deg,#FFB7C5,#FB7299)}
+.g2{background:linear-gradient(150deg,#9BD8F5,#23ADE5)}
+.g3{background:linear-gradient(150deg,#D9C8F8,#A98FF0)}
+.g4{background:linear-gradient(150deg,#FFD98A,#FFB24D)}
+.g5{background:linear-gradient(150deg,#A9ECD0,#4FCB9A)}
+.g6{background:linear-gradient(150deg,#F5B0C9,#E57BA0)}
+/* 说话：唯一的动效 —— 发光环 + 音波 */
+.seat.speaking .ava::before{content:"";position:absolute;inset:-6px;border-radius:50%;
+  border:2.5px solid var(--pink);animation:speak 1.2s ease-in-out infinite}
+@keyframes speak{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.07);opacity:.55}}
+.wave{display:flex;gap:3px;align-items:flex-end;height:13px}
+.wave i{width:3.5px;background:var(--pink);border-radius:3px;animation:wv 1s ease-in-out infinite}
+.wave i:nth-child(1){height:6px}.wave i:nth-child(2){height:12px;animation-delay:.15s}
+.wave i:nth-child(3){height:8px;animation-delay:.3s}
+@keyframes wv{0%,100%{transform:scaleY(.5)}50%{transform:scaleY(1.25)}}
+.seat .nm{font-size:12px;font-weight:800;color:var(--ink);max-width:76px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.seat .st{font-size:10.5px;font-weight:700;color:var(--ink-faint)}
+.badge-host{position:absolute;top:-4px;right:-4px;font-size:14px}
+.badge-mute{position:absolute;bottom:-1px;right:-1px;width:20px;height:20px;border-radius:50%;
+  background:#fff;display:grid;place-items:center;font-size:10px;box-shadow:var(--shadow-sm);border:1px solid var(--line)}
+.seat.muted .ava{filter:grayscale(.6) opacity(.7)}
+.seat.empty{border:none;background:none;cursor:pointer;font-family:inherit;padding:0}
+.seat.empty .ava{background:#fff;border:2px dashed var(--pink-soft);color:var(--pink)}
+.seat.empty .nm{color:var(--pink);font-weight:800}
+
+.dock{margin:auto 14px 16px;background:#fff;border:1px solid var(--line);border-radius:var(--r-lg);
+  box-shadow:var(--shadow-md);display:flex;align-items:center;justify-content:space-around;padding:11px 8px}
+.db{border:none;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px;
+  background:none;font-family:inherit}
+.db .ic{width:45px;height:45px;border-radius:50%;display:grid;place-items:center;font-size:18px;
+  background:var(--pink-bg);color:var(--pink-deep);transition:transform .12s ease}
+.db:active .ic{transform:scale(.92)}
+.db small{font-size:10px;font-weight:800;color:var(--ink-soft)}
+.db.main .ic{width:60px;height:60px;font-size:24px;margin-top:-24px;background:var(--pink);color:#fff;
+  box-shadow:0 8px 18px rgba(242,93,142,.4)}
+.db.main.off .ic{background:#C9BFCC;box-shadow:none}
+.db.off .ic{background:#F1EBEF;color:#9B8A94}
+
+/* ============================================================
+   浮层
+   ============================================================ */
+.overlay{position:absolute;inset:0;background:rgba(61,42,53,.42);display:flex;align-items:flex-end;z-index:10}
+.sheet{width:100%;background:#fff;border-radius:22px 22px 0 0;padding:10px 18px 28px}
+.grab{width:40px;height:4.5px;border-radius:3px;background:var(--pink-soft);margin:2px auto 14px}
+.sheet h3{font-size:16px;font-weight:900;display:flex;align-items:center;gap:8px;margin-bottom:2px}
+.sheet h3 .tag{background:var(--pink-softer);color:var(--pink-dark);font-size:11px;font-weight:800;
+  padding:2px 9px;border-radius:var(--r-pill)}
+.mrow{display:flex;align-items:center;gap:11px;padding:11px 1px;border-bottom:1px solid var(--line)}
+.mrow:last-child{border-bottom:none}
+.mrow .ma{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;color:#fff;
+  font-weight:900;font-size:16px;flex:none}
+.mrow .mi{flex:1;min-width:0}
+.mrow .mi b{display:block;font-size:14px;font-weight:800}
+.mrow .mi em{display:block;font-style:normal;font-size:11px;color:var(--ink-soft);font-weight:700}
+.mrow .ms{font-size:11px;font-weight:800;color:var(--ink-faint)}
+.mrow .ms.talk{color:var(--pink-deep)}
+
+.center-overlay{position:absolute;inset:0;background:rgba(61,42,53,.45);display:grid;place-items:center;
+  z-index:10;padding:22px}
+.pop{width:100%;max-width:300px;background:#fff;border-radius:var(--r-lg);box-shadow:var(--shadow-lg);
+  padding:18px}
+.pop-head{display:flex;justify-content:space-between;align-items:flex-start}
+.pop-head h3{font-size:17px;font-weight:900}
+.pop-head .sub{font-size:12px;color:var(--ink-soft);font-weight:700;margin-top:3px}
+.pop-close{width:29px;height:29px;border-radius:50%;border:1px solid var(--line);background:#fff;
+  color:var(--ink-soft);font-size:14px;cursor:pointer;flex:none}
+.invite-link{display:flex;align-items:center;gap:8px;background:var(--pink-bg);border:1px solid var(--line);
+  border-radius:var(--r-md);padding:10px 12px;margin:13px 0}
+.invite-link span{flex:1;font-size:11px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-weight:600}
+.copy-mini{background:var(--pink);color:#fff;border:none;border-radius:var(--r-pill);padding:7px 14px;
+  font-size:12px;font-weight:800;cursor:pointer;flex:none}
+.invite-stats{display:flex;gap:8px}
+.stat-chip{flex:1;background:var(--pink-bg);border:1px solid var(--line);border-radius:var(--r-md);
+  padding:9px 4px;text-align:center}
+.stat-chip b{display:block;font-size:14px;color:var(--pink-deep);font-weight:900}
+.stat-chip span{font-size:10px;color:var(--ink-soft);font-weight:700}
+
+.set-row{padding:11px 0;border-bottom:1px solid var(--line)}
+.set-row label{display:block;font-size:12px;font-weight:800;color:var(--ink-soft);margin-bottom:6px}
+.set-row select{width:100%;border:1.5px solid var(--line);outline:none;background:#fff;border-radius:var(--r-md);
+  padding:10px 12px;font-family:inherit;font-size:14px;font-weight:700;color:var(--ink)}
+.tline{display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-bottom:1px solid var(--line)}
+.tline:last-child{border-bottom:none}
+.tline .tl b{display:block;font-size:14px;font-weight:800}
+.tline .tl em{display:block;font-style:normal;font-size:11px;color:var(--ink-soft);font-weight:700}
+.switch{position:relative;width:44px;height:26px;flex:none}
+.switch input{opacity:0;width:100%;height:100%;position:absolute;cursor:pointer;z-index:2;margin:0}
+.switch .tk{position:absolute;inset:0;background:#EADFE6;border-radius:var(--r-pill);transition:.2s}
+.switch .tk::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.2);transition:.2s}
+.switch input:checked + .tk{background:var(--pink)}
+.switch input:checked + .tk::after{left:21px}
+
+.radio-opt{display:flex;align-items:center;gap:11px;background:var(--pink-bg);border:1.5px solid transparent;
+  border-radius:var(--r-md);padding:11px 13px;margin-bottom:8px;cursor:pointer}
+.radio-opt.on{border-color:var(--pink);background:#fff}
+.radio-opt input{accent-color:var(--pink);width:16px;height:16px}
+.radio-opt .ra{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;color:#fff;
+  font-weight:900;font-size:13px}
+.radio-opt b{font-size:14px;font-weight:800}
+.pop-actions{display:flex;gap:10px;margin-top:15px}
+.pop-actions .btn{padding:12px 0;font-size:14.5px}
+
+/* ============================================================
+   离开页
+   ============================================================ */
+.leave{align-items:center;justify-content:center;text-align:center;padding:28px}
+.leave .ok{width:64px;height:64px;border-radius:50%;background:var(--pink-softer);color:var(--pink-deep);
+  display:grid;place-items:center;font-size:28px;font-weight:900}
+.leave h1{font-size:24px;font-weight:900;margin-top:16px}
+.leave .sub{color:var(--ink-soft);font-size:13.5px;margin-top:8px;line-height:1.7}
+.sum-card{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:22px 0;width:100%}
+.sum-cell{background:#fff;border:1px solid var(--line);border-radius:var(--r-md);box-shadow:var(--shadow-sm);
+  padding:13px 6px}
+.sum-cell span{display:block;font-size:11px;color:var(--ink-soft);font-weight:700}
+.sum-cell b{display:block;font-size:16px;color:var(--pink-deep);font-weight:900;margin-top:3px}
+.leave .home-actions{width:100%}
+
+/* ============================================================
+   桌面端
+   ============================================================ */
+.desk{display:flex;flex-direction:column;height:100%;background:var(--page)}
+.desk .room-top{padding:16px 20px 0}
+.desk-body{flex:1;display:flex;gap:16px;padding:16px 20px 0;min-height:0}
+.desk-stage{flex:1;background:#fff;border:1px solid var(--line);border-radius:var(--r-lg);
+  box-shadow:var(--shadow-sm);display:flex;flex-wrap:wrap;gap:22px;align-content:center;justify-content:center;padding:24px}
+.desk-side{width:220px;background:#fff;border:1px solid var(--line);border-radius:var(--r-lg);
+  box-shadow:var(--shadow-sm);padding:14px;overflow:auto}
+.desk .dock{margin:16px auto 18px;width:520px}
+
+.note{background:#fff;border:1px solid var(--line);border-left:4px solid var(--pink);
+  border-radius:0 var(--r-md) var(--r-md) 0;padding:15px 18px;box-shadow:var(--shadow-sm);
+  color:var(--ink-soft);font-size:13.5px;line-height:1.85;margin:26px auto 0;max-width:860px}
+.note b{color:var(--pink-deep)}
+.note ul{margin:6px 0 0 18px}
+footer{text-align:center;color:var(--ink-faint);font-size:12px;font-weight:700;margin-top:60px}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <div class="head">
+    <div class="brandline">苍月草 · 极简二次元 v3.1</div>
+    <h1>粉色、留白、<span class="hl">干净利落</span></h1>
+    <p>保留 v3 的布局方向（气泡席位 + 拇指坞 + 底部抽屉），去掉樱花雨 / 大吉祥物 / 满地浮动动画。全图唯一的动效是「说话发光环 + 音波」这种有功能含义的反馈。覆盖全部真实状态，供逐屏确认。</p>
+    <div class="legend">
+      <div class="lg"><span class="sw" style="background:#FB7299"></span>主粉（主行动/激活）</div>
+      <div class="lg"><span class="sw" style="background:#23ADE5"></span>点缀蓝（头像）</div>
+      <div class="lg"><span class="sw" style="background:#35C26D"></span>已连接</div>
+      <div class="lg"><span class="sw" style="background:#F5A623"></span>重连中</div>
+      <div class="lg"><span class="sw" style="background:#fff;border:1px solid #F6E4EC"></span>白卡片 + 大量留白</div>
+    </div>
+  </div>
+
+  <!-- 一、移动端 首页两态 -->
+  <div class="section-title"><span class="num">1</span>移动端 · 首页（默认 / 校验错误）</div>
+  <div class="device-wall">
+
+    <div class="device">
+      <div class="phone"><div class="screen">
+        <div class="home-top">
+          <div class="wordmark"><span class="d"></span>苍月草</div>
+        </div>
+        <div class="home-body">
+          <div class="home-hero" style="text-align:center">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100" height="100" style="display:block;margin:0 auto">
+              <defs><linearGradient id="bg1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFF9F1"/><stop offset="1" stop-color="#FFEBD3"/></linearGradient></defs>
+              <rect x="0" y="0" width="512" height="512" rx="116" fill="url(#bg1)"/>
+              <ellipse cx="256" cy="376" rx="142" ry="16" fill="#EFD8BC" opacity="0.55"/>
+              <path d="M132,156 q3,10 13,13 q-10,3 -13,13 q-3,-10 -13,-13 q10,-3 13,-13 z" fill="#F5C88F" opacity="0.9"/>
+              <path d="M392,320 q2.4,8 10.4,10.4 q-8,2.4 -10.4,10.4 q-2.4,-8 -10.4,-10.4 q8,-2.4 10.4,-10.4 z" fill="#F5C88F" opacity="0.7"/>
+              <line x1="88" y1="314" x2="424" y2="234" stroke="#C89B6D" stroke-width="9" stroke-linecap="round"/>
+              <circle cx="168" cy="294" r="54" fill="#F6A9BC"/>
+              <ellipse cx="150" cy="274" rx="17" ry="11" fill="#FFFFFF" opacity="0.35" transform="rotate(-25 150 274)"/>
+              <path d="M151,288 Q157,280 163,288" stroke="#57453A" stroke-width="5" fill="none" stroke-linecap="round"/>
+              <path d="M173,288 Q179,280 185,288" stroke="#57453A" stroke-width="5" fill="none" stroke-linecap="round"/>
+              <circle cx="168" cy="301" r="5" fill="#57453A"/>
+              <ellipse cx="145" cy="299" rx="7" ry="4.5" fill="#F27E9C" opacity="0.55"/>
+              <ellipse cx="191" cy="299" rx="7" ry="4.5" fill="#F27E9C" opacity="0.55"/>
+              <circle cx="344" cy="254" r="54" fill="#A7CE9C"/>
+              <ellipse cx="326" cy="234" rx="17" ry="11" fill="#FFFFFF" opacity="0.35" transform="rotate(-25 326 234)"/>
+              <path d="M327,248 Q333,240 339,248" stroke="#57453A" stroke-width="5" fill="none" stroke-linecap="round"/>
+              <path d="M349,248 Q355,240 361,248" stroke="#57453A" stroke-width="5" fill="none" stroke-linecap="round"/>
+              <circle cx="344" cy="261" r="5" fill="#57453A"/>
+              <ellipse cx="321" cy="259" rx="7" ry="4.5" fill="#E89AAB" opacity="0.5"/>
+              <ellipse cx="367" cy="259" rx="7" ry="4.5" fill="#E89AAB" opacity="0.5"/>
+              <circle cx="256" cy="274" r="54" fill="#FFFDF9" stroke="#F0E1CC" stroke-width="4"/>
+              <path d="M206,272 A50,50 0 0 1 306,272" stroke="#6B5A4E" stroke-width="9" fill="none" stroke-linecap="round"/>
+              <rect x="197" y="260" width="17" height="26" rx="8" fill="#6B5A4E"/>
+              <rect x="298" y="260" width="17" height="26" rx="8" fill="#6B5A4E"/>
+              <path d="M306,286 Q302,301 285,302" stroke="#6B5A4E" stroke-width="6" fill="none" stroke-linecap="round"/>
+              <circle cx="281" cy="302" r="6" fill="#6B5A4E"/>
+              <path d="M239,268 Q245,260 251,268" stroke="#57453A" stroke-width="5" fill="none" stroke-linecap="round"/>
+              <path d="M261,268 Q267,260 273,268" stroke="#57453A" stroke-width="5" fill="none" stroke-linecap="round"/>
+              <ellipse cx="256" cy="283" rx="7" ry="8" fill="#57453A"/>
+              <ellipse cx="256" cy="286.5" rx="4" ry="3.5" fill="#F28BA6"/>
+              <ellipse cx="233" cy="279" rx="8" ry="5" fill="#F2A2B4" opacity="0.6"/>
+              <ellipse cx="279" cy="279" rx="8" ry="5" fill="#F2A2B4" opacity="0.6"/>
+            </svg>
+            </div>
+          <div class="field"><span>昵称</span><input value="小樱" readonly></div>
+          <div class="field"><span>房间号</span><input placeholder="留空则创建新房间" readonly></div>
+          <div class="home-actions">
+            <button class="btn btn-primary">创建房间</button>
+            <button class="btn btn-ghost">加入房间</button>
+          </div>
+        </div>
+      </div></div>
+      <div class="cap"><b>首页·默认</b> 昵称/房间号、创建、加入、检查设备；房间号留空即创建</div>
+    </div>
+
+    <div class="device">
+      <div class="phone"><div class="screen">
+        <div class="home-top">
+          <div class="wordmark"><span class="d"></span>苍月草</div>
+        </div>
+        <div class="home-body">
+          <div class="home-hero" style="text-align:center">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100" height="100" style="display:block;margin:0 auto">
+              <defs><linearGradient id="bg2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFF9F1"/><stop offset="1" stop-color="#FFEBD3"/></linearGradient></defs>
+              <rect x="0" y="0" width="512" height="512" rx="116" fill="url(#bg2)"/>
+              <ellipse cx="256" cy="376" rx="142" ry="16" fill="#EFD8BC" opacity="0.55"/>
+              <path d="M132,156 q3,10 13,13 q-10,3 -13,13 q-3,-10 -13,-13 q10,-3 13,-13 z" fill="#F5C88F" opacity="0.9"/>
+              <path d="M392,320 q2.4,8 10.4,10.4 q-8,2.4 -10.4,10.4 q-2.4,-8 -10.4,-10.4 q8,-2.4 10.4,-10.4 z" fill="#F5C88F" opacity="0.7"/>
+              <line x1="88" y1="314" x2="424" y2="234" stroke="#C89B6D" stroke-width="9" stroke-linecap="round"/>
+              <circle cx="168" cy="294" r="54" fill="#F6A9BC"/>
+              <ellipse cx="150" cy="274" rx="17" ry="11" fill="#FFFFFF" opacity="0.35" transform="rotate(-25 150 274)"/>
+              <path d="M151,288 Q157,280 163,288" stroke="#57453A" stroke-width="5" fill="none" stroke-linecap="round"/>
+              <path d="M173,288 Q179,280 185,288" stroke="#57453A" stroke-width="5" fill="none" stroke-linecap="round"/>
+              <circle cx="168" cy="301" r="5" fill="#57453A"/>
+              <ellipse cx="145" cy="299" rx="7" ry="4.5" fill="#F27E9C" opacity="0.55"/>
+              <ellipse cx="191" cy="299" rx="7" ry="4.5" fill="#F27E9C" opacity="0.55"/>
+              <circle cx="344" cy="254" r="54" fill="#A7CE9C"/>
+              <ellipse cx="326" cy="234" rx="17" ry="11" fill="#FFFFFF" opacity="0.35" transform="rotate(-25 326 234)"/>
+              <path d="M327,248 Q333,240 339,248" stroke="#57453A" stroke-width="5" fill="none" stroke-linecap="round"/>
+              <path d="M349,248 Q355,240 361,248" stroke="#57453A" stroke-width="5" fill="none" stroke-linecap="round"/>
+              <circle cx="344" cy="261" r="5" fill="#57453A"/>
+              <ellipse cx="321" cy="259" rx="7" ry="4.5" fill="#E89AAB" opacity="0.5"/>
+              <ellipse cx="367" cy="259" rx="7" ry="4.5" fill="#E89AAB" opacity="0.5"/>
+              <circle cx="256" cy="274" r="54" fill="#FFFDF9" stroke="#F0E1CC" stroke-width="4"/>
+              <path d="M206,272 A50,50 0 0 1 306,272" stroke="#6B5A4E" stroke-width="9" fill="none" stroke-linecap="round"/>
+              <rect x="197" y="260" width="17" height="26" rx="8" fill="#6B5A4E"/>
+              <rect x="298" y="260" width="17" height="26" rx="8" fill="#6B5A4E"/>
+              <path d="M306,286 Q302,301 285,302" stroke="#6B5A4E" stroke-width="6" fill="none" stroke-linecap="round"/>
+              <circle cx="281" cy="302" r="6" fill="#6B5A4E"/>
+              <path d="M239,268 Q245,260 251,268" stroke="#57453A" stroke-width="5" fill="none" stroke-linecap="round"/>
+              <path d="M261,268 Q267,260 273,268" stroke="#57453A" stroke-width="5" fill="none" stroke-linecap="round"/>
+              <ellipse cx="256" cy="283" rx="7" ry="8" fill="#57453A"/>
+              <ellipse cx="256" cy="286.5" rx="4" ry="3.5" fill="#F28BA6"/>
+              <ellipse cx="233" cy="279" rx="8" ry="5" fill="#F2A2B4" opacity="0.6"/>
+              <ellipse cx="279" cy="279" rx="8" ry="5" fill="#F2A2B4" opacity="0.6"/>
+            </svg>
+            </div>
+          <div class="form-err">⚠️ 取个昵称再进来吧</div>
+          <div class="field"><span>昵称</span><input placeholder="比如：小樱" readonly style="border-color:#F3A5BE"></div>
+          <div class="field"><span>房间号</span><input value="SAKURA" readonly></div>
+          <div class="home-actions">
+            <button class="btn btn-primary" disabled>正在准备…</button>
+            <button class="btn btn-ghost">加入房间</button>
+          </div>
+        </div>
+      </div></div>
+      <div class="cap"><b>首页·错误 + 加入中</b> 校验错误内联提示；主按钮在请求麦克风时进入 loading 并禁用</div>
+    </div>
+  </div>
+
+  <!-- 二、移动端 房间四态 -->
+  <div class="section-title"><span class="num">2</span>移动端 · 声聊间（说话 / 静音 / 重连 / 房主视角）</div>
+  <div class="device-wall">
+
+    <div class="device">
+      <div class="phone"><div class="screen">
+        <div class="room-top">
+          <div class="room-chip">
+            <span class="no">SAKURA</span>
+            <span class="cnt">👥 5</span>
+          </div>
+        </div>
+        <div class="stage">
+          <div class="seat speaking"><div class="ava g1">樱<span class="badge-host">👑</span></div><div class="wave"><i></i><i></i><i></i></div><div class="nm">小樱 · 我</div></div>
+          <div class="seat speaking"><div class="ava g2">知</div><div class="wave"><i></i><i></i><i></i></div><div class="nm">知世</div></div>
+          <div class="seat"><div class="ava g3">狼</div><div class="st">在线</div><div class="nm">小狼</div></div>
+          <div class="seat muted"><div class="ava g4">可<span class="badge-mute">🔇</span></div><div class="st">已静音</div><div class="nm">小可</div></div>
+          <div class="seat"><div class="ava g5">莓</div><div class="st">在线</div><div class="nm">莓铃</div></div>
+          <div class="seat empty"><div class="ava">＋</div><div class="nm">邀请</div></div>
+        </div>
+        <div class="dock">
+          <button class="db"><span class="ic">🔊</span></button>
+          <button class="db main"><span class="ic">🎙️</span></button>
+          <button class="db off"><span class="ic">✕</span><small>离开</small></button>
+        </div>
+      </div></div>
+      <div class="cap"><b>房间·成员视角</b> 说话发光环+音波、房主👑、静音置灰🔇、空位＋邀请；普通成员无 AI 按钮</div>
+    </div>
+
+    <div class="device">
+      <div class="phone"><div class="screen">
+        <div class="room-top">
+          <div class="room-chip">
+            <span class="no">SAKURA</span>
+            <span class="pill err"><i></i>重连中</span>
+            <span class="cnt">👥 5</span>
+          </div>
+        </div>
+        <div class="reconnect">🔄 连接不太稳，正在帮你恢复…</div>
+        <div class="stage">
+          <div class="seat muted"><div class="ava g1">樱<span class="badge-host">👑</span><span class="badge-mute">🔇</span></div><div class="st">已静音</div><div class="nm">小樱 · 我</div></div>
+          <div class="seat"><div class="ava g2">知</div><div class="st">在线</div><div class="nm">知世</div></div>
+          <div class="seat"><div class="ava g3">狼</div><div class="st">在线</div><div class="nm">小狼</div></div>
+          <div class="seat empty"><div class="ava">＋</div><div class="nm">邀请</div></div>
+        </div>
+        <div class="dock">
+          <button class="db off"><span class="ic">🔈</span></button>
+          <button class="db main off"><span class="ic">🔇</span></button>
+          <button class="db"><span class="ic">✕</span><small>离开</small></button>
+        </div>
+      </div></div>
+      <div class="cap"><b>房间·重连 + 自静音 + 声音关</b> 顶部状态变「重连中」并出横幅；自己静音后麦克风变灰、声音关闭态</div>
+    </div>
+
+    <div class="device">
+      <div class="phone"><div class="screen">
+        <div class="room-top">
+          <div class="room-chip">
+            <span class="no">SAKURA</span>
+            <span class="cnt">👥 3</span>
+          </div>
+        </div>
+        <div class="stage">
+          <div class="seat speaking"><div class="ava g1">樱<span class="badge-host">👑</span></div><div class="wave"><i></i><i></i><i></i></div><div class="nm">小樱 · 我</div></div>
+          <div class="seat"><div class="ava g2">知</div><div class="st">在线</div><div class="nm">知世</div></div>
+          <div class="seat"><div class="ava g3">狼</div><div class="st">在线</div><div class="nm">小狼</div></div>
+          <div class="seat empty"><div class="ava">＋</div><div class="nm">邀请</div></div>
+        </div>
+        <div class="dock">
+          <button class="db"><span class="ic">🔊</span></button>
+          <button class="db"><span class="ic">🤖</span></button>
+          <button class="db main"><span class="ic">🎙️</span></button>
+          <button class="db off"><span class="ic">✕</span><small>离开</small></button>
+        </div>
+      </div></div>
+      <div class="cap"><b>房间·房主视角</b> 房主多出 🤖 AI 开关；点自己以外无操作，离开仍走交接逻辑</div>
+    </div>
+
+  </div>
+
+  <!-- 三、移动端 弹窗 -->
+  <div class="section-title"><span class="num">3</span>移动端 · 房主交接</div>
+  <div class="device-wall">
+
+    <div class="device">
+      <div class="phone"><div class="screen">
+        <div class="center-overlay">
+          <div class="pop" style="max-width:316px">
+            <div class="pop-head">
+              <div><h3>交接房主</h3><div class="sub">离开前可指定一位在线成员接任</div></div>
+              <button class="pop-close">✕</button>
+            </div>
+            <div style="margin-top:12px">
+              <label class="radio-opt on"><input type="radio" name="h2" checked><span class="ra g2">知</span><b>知世</b></label>
+              <label class="radio-opt"><input type="radio" name="h2"><span class="ra g3">狼</span><b>小狼</b></label>
+              <label class="radio-opt"><input type="radio" name="h2"><span class="ra g4">可</span><b>小可</b></label>
+            </div>
+            <div class="pop-actions">
+              <button class="btn btn-ghost">直接离开</button>
+              <button class="btn btn-primary">指定房主</button>
+            </div>
+          </div>
+        </div>
+      </div></div>
+      <div class="cap"><b>房主交接</b> 单选候选人 +「直接离开（随机）/ 指定房主」</div>
+    </div>
+
+    <div class="device">
+      <div class="phone"><div class="screen leave">
+        <div class="ok">✓</div>
+        <h1>已离开房间</h1>
+        <p class="sub">麦克风已关闭，这次聊天先到这里</p>
+        <div class="sum-card">
+          <div class="sum-cell"><span>房间号</span><b>SAKURA</b></div>
+          <div class="sum-cell"><span>昵称</span><b>小樱</b></div>
+          <div class="sum-cell"><span>停留时长</span><b>12 分 3 秒</b></div>
+          <div class="sum-cell"><span>成员</span><b>5 人</b></div>
+        </div>
+        <div class="home-actions">
+          <button class="btn btn-primary">重新加入</button>
+          <button class="btn btn-ghost">回到首页</button>
+        </div>
+      </div></div>
+      <div class="cap"><b>离开页</b> 摘要四宫格 + 重新加入 / 回首页</div>
+    </div>
+  </div>
+
+  <!-- 四、桌面端 -->
+  <div class="section-title"><span class="num">4</span>桌面端 · 同一套语言横向铺开</div>
+  <div class="device-wall">
+    <div class="device">
+      <div class="phone desktop"><div class="screen desk">
+        <div class="room-top">
+          <div class="wordmark"><span class="d"></span>苍月草</div>
+          <div class="room-chip" style="max-width:400px">
+            <span class="no">SAKURA</span>
+            <span class="cnt">👥 5 人在线</span>
+          </div>
+        </div>
+        <div class="desk-body">
+          <div class="desk-stage">
+            <div class="seat speaking"><div class="ava g1">樱<span class="badge-host">👑</span></div><div class="wave"><i></i><i></i><i></i></div><div class="nm">小樱 · 我</div></div>
+            <div class="seat speaking"><div class="ava g2">知</div><div class="wave"><i></i><i></i><i></i></div><div class="nm">知世</div></div>
+            <div class="seat"><div class="ava g3">狼</div><div class="st">在线</div><div class="nm">小狼</div></div>
+            <div class="seat muted"><div class="ava g4">可<span class="badge-mute">🔇</span></div><div class="st">已静音</div><div class="nm">小可</div></div>
+            <div class="seat"><div class="ava g5">莓</div><div class="st">在线</div><div class="nm">莓铃</div></div>
+            <div class="seat empty"><div class="ava">＋</div><div class="nm">邀请</div></div>
+          </div>
+          <div class="desk-side">
+            <h3 style="font-size:14px;font-weight:900;margin-bottom:6px">成员 <span style="color:var(--pink-deep)">5</span></h3>
+            <div class="mrow"><div class="ma g1">樱</div><div class="mi"><b>小樱 · 我</b><em>👑 房主</em></div></div>
+            <div class="mrow"><div class="ma g2">知</div><div class="mi"><b>知世</b><em>在线</em></div></div>
+            <div class="mrow"><div class="ma g3">狼</div><div class="mi"><b>小狼</b><em>在线</em></div></div>
+            <div class="mrow"><div class="ma g4">可</div><div class="mi"><b>小可</b><em>已静音</em></div></div>
+          </div>
+        </div>
+        <div class="dock">
+          <button class="db"><span class="ic">🔊</span></button>
+          <button class="db"><span class="ic">🤖</span></button>
+          <button class="db main"><span class="ic">🎙️</span></button>
+          <button class="db off"></button><span class="ic">✕</span><small>离开</small></button>
+        </div>
+      </div></div>
+      <div class="cap" style="max-width:780px"><b>桌面端房间</b> 左大舞台 + 右成员栏 + 底部拇指坞（含离开）；首页/弹窗桌面端为居中卡片放大</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>相对 v3 的收敛（极简清爽版）：</b>
+    <ul>
+      <li><b>去掉</b>：樱花飘落动画、大吉祥物 emoji、每个席位的上下浮动、旋转虚线环、满屏渐变。</li>
+      <li><b>保留的唯一动效</b>：说话成员的发光环 + 音波（这是状态反馈，不是纯装饰）。</li>
+      <li><b>配色更克制</b>：近白底 + 白卡片，粉色只用于主按钮、说话态、激活开关、品牌点。</li>
+      <li><b>补全状态</b>：首页默认/错误+loading、房间说话/自静音+重连/房主视角、成员抽屉、三弹窗、离开页、桌面端。</li>
+      <li><b>不变的功能底线</b>：音视频连接、静音/扬声器/AI/邀请/设置/离开/交接、错误提示、离开摘要、邀请链接预填，一个不少。</li>
+    </ul>
+  </div>
+
+  <footer>苍月草 v3.1 极简二次元样图 · 确认后即按此重写真实代码</footer>
+</div>
+</body>
+</html>

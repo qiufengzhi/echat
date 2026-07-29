@@ -1,0 +1,21 @@
+<!--
+  团子 Dango —— 「对方正在输入…」指示器
+  三个团子 = 打字中的三个点。可以直接用在聊天界面的 typing 气泡里，
+  也可以做 favicon 级别的极简标识（去掉竹签和耳机，只留三色圆脸）。
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 44" width="120" height="44">
+  <circle cx="22" cy="22" r="16" fill="#F6A9BC"/>
+  <circle cx="60" cy="22" r="16" fill="#FFFDF9" stroke="#F0E1CC" stroke-width="2.5"/>
+  <circle cx="98" cy="22" r="16" fill="#A7CE9C"/>
+  <g stroke="#57453A" stroke-width="2.5" fill="none" stroke-linecap="round">
+    <path d="M14,20 Q17,15.5 20,20"/>
+    <path d="M24,20 Q27,15.5 30,20"/>
+    <path d="M52,20 Q55,15.5 58,20"/>
+    <path d="M62,20 Q65,15.5 68,20"/>
+    <path d="M90,20 Q93,15.5 96,20"/>
+    <path d="M100,20 Q103,15.5 106,20"/>
+  </g>
+  <circle cx="22" cy="27" r="2" fill="#57453A"/>
+  <circle cx="60" cy="27" r="2" fill="#57453A"/>
+  <circle cx="98" cy="27" r="2" fill="#57453A"/>
+</svg>

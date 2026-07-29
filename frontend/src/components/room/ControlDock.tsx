@@ -1,18 +1,15 @@
 interface ControlDockProps {
-  isMuted: boolean // 当前用户是否静音
-  isSpeakerOn: boolean // 当前是否播放房间声音
-  isHost: boolean // 当前用户是否为房主，决定是否展示 AI 按钮
-  isAIEnabled: boolean // AI 语音助手是否已开启
-  onToggleMute: () => void // 点击麦克风按钮时触发
-  onToggleSpeaker: () => void // 点击扬声器按钮时触发
-  onToggleAI: () => void // 点击 AI 按钮时触发，切换 AI 语音助手开关
-  onOpenMembers: () => void // 点击成员按钮时触发
-  onOpenInvite: () => void // 点击邀请按钮时触发
-  onOpenSettings: () => void // 点击设置按钮时触发
-  onLeave: () => void // 点击离开按钮时触发
+  isMuted: boolean
+  isSpeakerOn: boolean
+  isHost: boolean
+  isAIEnabled: boolean
+  onToggleMute: () => void
+  onToggleSpeaker: () => void
+  onToggleAI: () => void
+  onLeave: () => void
 }
 
-// ControlDock 是声聊间的高频控制栏，所有按钮都用自然语言 title 说明点击结果
+// ControlDock 底部控制栏：声音 + 麦克风（居中主按钮）+ 离开，房主额外 AI 按钮
 export default function ControlDock({
   isMuted,
   isSpeakerOn,
@@ -21,53 +18,41 @@ export default function ControlDock({
   onToggleMute,
   onToggleSpeaker,
   onToggleAI,
-  onOpenMembers,
-  onOpenInvite,
-  onOpenSettings,
   onLeave,
 }: ControlDockProps) {
   return (
     <nav className="control-dock" aria-label="声聊间控制栏">
       <button
-        className={`icon-button ${!isMuted ? 'primary' : 'danger-soft'}`}
+        className={`db ${!isSpeakerOn ? 'off' : ''}`}
         type="button"
-        aria-label={isMuted ? '取消静音' : '静音'}
-        title={isMuted ? '取消静音' : '静音'}
-        onClick={onToggleMute}
-      >
-        {isMuted ? '🔇' : '🎙'}
-      </button>
-      <button
-        className={`icon-button ${isSpeakerOn ? '' : 'danger-soft'}`}
-        type="button"
-        aria-label={isSpeakerOn ? '关闭房间声音' : '打开房间声音'}
-        title={isSpeakerOn ? '关闭房间声音' : '打开房间声音'}
+        aria-label={isSpeakerOn ? '关闭声音' : '打开声音'}
         onClick={onToggleSpeaker}
       >
-        {isSpeakerOn ? '🔊' : '🔈'}
+        <span className="ic">{isSpeakerOn ? '🔊' : '🔈'}</span>
       </button>
+
       {isHost && (
         <button
-          className={`icon-button ${isAIEnabled ? 'primary' : ''}`}
+          className={`db ${!isAIEnabled ? 'off' : ''}`}
           type="button"
-          aria-label={isAIEnabled ? '关闭 AI 语音助手' : '开启 AI 语音助手'}
-          title={isAIEnabled ? '关闭 AI 语音助手' : '开启 AI 语音助手'}
+          aria-label={isAIEnabled ? '关闭 AI' : '开启 AI'}
           onClick={onToggleAI}
         >
-          🤖
+          <span className="ic">🤖</span>
         </button>
       )}
-      <button className="icon-button" type="button" aria-label="查看成员" title="查看成员" onClick={onOpenMembers}>
-        👥
+
+      <button
+        className={`db main ${isMuted ? 'off' : ''}`}
+        type="button"
+        aria-label={isMuted ? '取消静音' : '静音'}
+        onClick={onToggleMute}
+      >
+        <span className="ic">{isMuted ? '🔇' : '🎙️'}</span>
       </button>
-      <button className="icon-button" type="button" aria-label="邀请好友" title="邀请好友" onClick={onOpenInvite}>
-        ↗
-      </button>
-      <button className="icon-button" type="button" aria-label="打开设置" title="打开设置" onClick={onOpenSettings}>
-        ⚙
-      </button>
-      <button className="icon-button danger" type="button" aria-label="离开房间" title="离开房间" onClick={onLeave}>
-        ⏻
+
+      <button className="db off" type="button" aria-label="离开房间" onClick={onLeave}>
+        <span className="ic">✕</span>
       </button>
     </nav>
   )

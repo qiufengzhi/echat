@@ -1,0 +1,60 @@
+<!--
+  团子 Dango —— 应用图标 (512x512)
+  出处：CLANNAD《团子大家族》
+  设计：花见团子经典三色（樱粉 / 糯米白 / 抹茶绿）串在一根竹签上；
+        C 位白团子戴耳机张嘴说话 —— 竹签就是把每个人声音串起来的那根线。
+        三个团子单独拿出来 = 聊天"对方正在输入…"的三个点。
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFF9F1"/>
+      <stop offset="1" stop-color="#FFEBD3"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 底板：年糕奶油色圆角方块 -->
+  <rect x="0" y="0" width="512" height="512" rx="116" fill="url(#bg)"/>
+
+  <!-- 地面软影 -->
+  <ellipse cx="256" cy="376" rx="142" ry="16" fill="#EFD8BC" opacity="0.55"/>
+
+  <!-- 小星星点缀 -->
+  <path d="M132,156 q3,10 13,13 q-10,3 -13,13 q-3,-10 -13,-13 q10,-3 13,-13 z" fill="#F5C88F" opacity="0.9"/>
+  <path d="M392,320 q2.4,8 10.4,10.4 q-8,2.4 -10.4,10.4 q-2.4,-8 -10.4,-10.4 q8,-2.4 10.4,-10.4 z" fill="#F5C88F" opacity="0.7"/>
+
+  <!-- 竹签：藏在团子后面，两端露头（它就是那条"语音波形"的极简版） -->
+  <line x1="88" y1="314" x2="424" y2="234" stroke="#C89B6D" stroke-width="9" stroke-linecap="round"/>
+
+  <!-- 左：樱花团子 -->
+  <circle cx="168" cy="294" r="54" fill="#F6A9BC"/>
+  <ellipse cx="150" cy="274" rx="17" ry="11" fill="#FFFFFF" opacity="0.35" transform="rotate(-25 150 274)"/>
+  <path d="M151,288 Q157,280 163,288" stroke="#57453A" stroke-width="5" fill="none" stroke-linecap="round"/>
+  <path d="M173,288 Q179,280 185,288" stroke="#57453A" stroke-width="5" fill="none" stroke-linecap="round"/>
+  <circle cx="168" cy="301" r="5" fill="#57453A"/>
+  <ellipse cx="145" cy="299" rx="7" ry="4.5" fill="#F27E9C" opacity="0.55"/>
+  <ellipse cx="191" cy="299" rx="7" ry="4.5" fill="#F27E9C" opacity="0.55"/>
+
+  <!-- 右：抹茶团子 -->
+  <circle cx="344" cy="254" r="54" fill="#A7CE9C"/>
+  <ellipse cx="326" cy="234" rx="17" ry="11" fill="#FFFFFF" opacity="0.35" transform="rotate(-25 326 234)"/>
+  <path d="M327,248 Q333,240 339,248" stroke="#57453A" stroke-width="5" fill="none" stroke-linecap="round"/>
+  <path d="M349,248 Q355,240 361,248" stroke="#57453A" stroke-width="5" fill="none" stroke-linecap="round"/>
+  <circle cx="344" cy="261" r="5" fill="#57453A"/>
+  <ellipse cx="321" cy="259" rx="7" ry="4.5" fill="#E89AAB" opacity="0.5"/>
+  <ellipse cx="367" cy="259" rx="7" ry="4.5" fill="#E89AAB" opacity="0.5"/>
+
+  <!-- 中：白团子（C 位，戴耳机） -->
+  <circle cx="256" cy="274" r="54" fill="#FFFDF9" stroke="#F0E1CC" stroke-width="4"/>
+  <path d="M206,272 A50,50 0 0 1 306,272" stroke="#6B5A4E" stroke-width="9" fill="none" stroke-linecap="round"/>
+  <rect x="197" y="260" width="17" height="26" rx="8" fill="#6B5A4E"/>
+  <rect x="298" y="260" width="17" height="26" rx="8" fill="#6B5A4E"/>
+  <path d="M306,286 Q302,301 285,302" stroke="#6B5A4E" stroke-width="6" fill="none" stroke-linecap="round"/>
+  <circle cx="281" cy="302" r="6" fill="#6B5A4E"/>
+  <path d="M239,268 Q245,260 251,268" stroke="#57453A" stroke-width="5" fill="none" stroke-linecap="round"/>
+  <path d="M261,268 Q267,260 273,268" stroke="#57453A" stroke-width="5" fill="none" stroke-linecap="round"/>
+  <ellipse cx="256" cy="283" rx="7" ry="8" fill="#57453A"/>
+  <ellipse cx="256" cy="286.5" rx="4" ry="3.5" fill="#F28BA6"/>
+  <ellipse cx="233" cy="279" rx="8" ry="5" fill="#F2A2B4" opacity="0.6"/>
+  <ellipse cx="279" cy="279" rx="8" ry="5" fill="#F2A2B4" opacity="0.6"/>
+</svg>
