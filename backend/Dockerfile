@@ -1,5 +1,5 @@
 # 构建阶段
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
@@ -18,7 +18,7 @@ RUN go mod tidy
 RUN CGO_ENABLED=1 GOOS=linux go build -tags opus_native -o server .
 
 # 运行阶段
-FROM alpine:latest
+FROM alpine:3.21
 
 WORKDIR /app
 

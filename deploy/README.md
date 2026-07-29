@@ -33,6 +33,8 @@
   .env                       # 从 .env.example 复制并填入密钥
   backend/
     config.yaml              # 后端配置，手动维护和更新
+  agent/
+    config.yaml              # Agent LLM 配置
   nginx/
     gateway.prod.conf
 ```
@@ -74,16 +76,17 @@
 
 - 推送到 `main`
 - 推送到 `master`
-- 修改了前端、后端、部署配置或工作流文件
+- 修改了前端、后端、Agent、部署配置或工作流文件
 
 也支持在 GitHub Actions 页面手动点击 `Run workflow` 触发。
 
 ## 镜像命名规则
 
-工作流会自动生成两个镜像名：
+工作流会自动生成三个镜像名：
 
 - `ghcr.io/<owner>/<repo>-backend`
 - `ghcr.io/<owner>/<repo>-frontend`
+- `ghcr.io/<owner>/<repo>-agent`
 
 并同时打两个 tag：
 
@@ -100,8 +103,9 @@
 - 网关容器把所有 HTTPS 请求转发到前端容器
 - 后端容器只在 Compose 内部网络暴露 `8080`
 - 前端 Nginx 通过容器名 `backend:8080` 反向代理后端和 WebSocket
+- 后端容器对外暴露 `50000-50100/udp`，WebRTC 媒体流浏览器直连必需
 
-也就是说，外部访问入口默认只有 `gateway` 容器。
+也就是说，外部 HTTP/WS 流量经 `gateway` HTTPS 进入，WebRTC 媒体流则走 UDP 端口直连后端。
 
 ## 首次部署前准备
 

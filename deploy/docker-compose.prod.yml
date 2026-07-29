@@ -6,6 +6,7 @@
 
 services:
   gateway: # 最外层 HTTPS 入口，负责 TLS 终止并把请求转发给前端容器
+    container_name: echat-gateway # 固定容器名，方便 docker ps 和 docker logs 直接定位
     image: nginx:1.27-alpine # 直接使用官方 Nginx 镜像，避免额外维护自定义网关镜像
     restart: unless-stopped # 网关异常退出后自动重启，保证外部入口尽量持续可用
     depends_on:
@@ -19,6 +20,7 @@ services:
       - /etc/letsencrypt/live/echat.qxbnx.cn/privkey.pem:/etc/nginx/ssl/privkey.pem:ro # 证书私钥文件
 
   backend: # 后端信令服务，供前端通过容器网络访问
+    container_name: echat-backend # 固定容器名，方便 docker logs echat-backend 查日志
     image: ${BACKEND_IMAGE}:${IMAGE_TAG} # 本次部署的后端镜像名和 tag，由 CI 写入 .env
     restart: unless-stopped # 容器异常退出后自动重启，手动停止时不强制拉起
     volumes:
@@ -28,14 +30,25 @@ services:
       ALIBABA_CLOUD_ACCESS_KEY_ID: ${ALIBABA_CLOUD_ACCESS_KEY_ID:-}
       ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${ALIBABA_CLOUD_ACCESS_KEY_SECRET:-}
       NLS_APP_KEY: ${NLS_APP_KEY:-}
+    expose:
+      - "8080" # HTTP/WebSocket 信令端口，仅在 Compose 内部网络暴露，外部经 gateway HTTPS 进入
     ports:
-      - "8080:8080" # 映射 HTTP/WebSocket 信令端口
-      - "50000-50100:50000-50100/udp" # 映射 WebRTC 媒体流端口范围，需与 config.yaml 中 media_min_port / media_max_port 一致
+      - "50000-50100:50000-50100/udp" # 映射 WebRTC 媒体流 UDP 端口范围到宿主机，浏览器直连必需
 
   frontend: # 前端静态站点和 Nginx 反向代理入口
+    container_name: echat-frontend # 固定容器名
     image: ${FRONTEND_IMAGE}:${IMAGE_TAG} # 本次部署的前端镜像名和 tag，由 CI 写入 .env
     restart: unless-stopped # 容器异常退出后自动重启
     depends_on:
       - backend # 先启动后端，再启动前端代理层
     expose:
       - "80" # 只在 Compose 内部网络暴露，外部流量统一经 gateway 进入
+
+  agent: # LLM Agent gRPC 服务，供后端通过容器网络调用
+    container_name: echat-agent # 固定容器名
+    image: ${AGENT_IMAGE}:${IMAGE_TAG} # 本次部署的 Agent 镜像名和 tag，由 CI 写入 .env
+    restart: unless-stopped # 容器异常退出后自动重启
+    expose:
+      - "50053" # gRPC 端口，仅在 Compose 内部网络暴露
+    volumes:
+      - ./agent/config.yaml:/app/agent/config.yaml:ro # 挂载 Agent 完整配置（含密钥）

@@ -9,6 +9,7 @@ on:
       - ".github/workflows/ci.yml" # 工作流自身改动后也重新执行。
       - "backend/**" # 后端代码变化时触发。
       - "frontend/**" # 前端代码变化时触发。
+      - "agent/**" # Agent gRPC 服务变化时触发。
       - "deploy/**" # 部署配置变化时触发。
 
   workflow_dispatch: # 支持在 GitHub 页面上手动点击执行。
@@ -35,7 +36,7 @@ jobs:
       - name: Set up Node.js # 准备前端构建所需的 Node 环境。
         uses: actions/setup-node@v4
         with:
-          node-version: 20 # 与前端项目当前使用的 Node 大版本保持一致。
+          node-version: 22 # 与前端 Dockerfile 使用的 Node LTS 版本保持一致。
           cache: npm # 缓存 npm 依赖，加快重复构建。
           cache-dependency-path: frontend/package-lock.json # 以前端锁文件作为缓存键。
 
@@ -48,7 +49,7 @@ jobs:
       - name: Set up Go # 准备后端测试所需的 Go 环境。
         uses: actions/setup-go@v5
         with:
-          go-version: "1.21" # 与后端 Dockerfile 使用的 Go 版本保持一致。
+          go-version: "1.25" # 与后端 Dockerfile 和 go.mod 使用的 Go 版本保持一致。
 
       - name: Test backend # 运行后端测试，至少保证编译和包依赖正常。
         working-directory: backend
@@ -60,6 +61,7 @@ jobs:
     outputs:
       backend_image: ${{ steps.image-vars.outputs.backend_image }} # 后端镜像完整名称，供 deploy 任务复用。
       frontend_image: ${{ steps.image-vars.outputs.frontend_image }} # 前端镜像完整名称，供 deploy 任务复用。
+      agent_image: ${{ steps.image-vars.outputs.agent_image }} # Agent 镜像完整名称，供 deploy 任务复用。
       image_tag: ${{ steps.image-vars.outputs.image_tag }} # 本次部署使用的镜像 tag。
 
     steps:
@@ -73,12 +75,10 @@ jobs:
           repo="$(basename "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
           echo "backend_image=${REGISTRY}/${owner}/${repo}-backend" >> "$GITHUB_OUTPUT"
           echo "frontend_image=${REGISTRY}/${owner}/${repo}-frontend" >> "$GITHUB_OUTPUT"
+          echo "agent_image=${REGISTRY}/${owner}/${repo}-agent" >> "$GITHUB_OUTPUT"
           echo "image_tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT" # 用提交 SHA 做不可变版本号。
 
-      - name: Set up QEMU # 支持跨架构构建，多平台镜像需要它。
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx # 启用 buildx 以构建并推送多平台镜像。
+      - name: Set up Docker Buildx # 启用 buildx 构建单平台镜像。
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR # 登录到 GitHub 容器仓库，后续才能推镜像。
@@ -111,7 +111,7 @@ jobs:
         with:
           context: ./backend # 后端镜像构建上下文。
           file: ./backend/Dockerfile # 后端 Dockerfile 位置。
-          platforms: linux/amd64,linux/arm64 # 同时产出 x86 和 arm 镜像。
+          platforms: linux/amd64 # 个人项目只构建 x86 镜像，省掉 QEMU 跨架构模拟的时间。
           push: true # 构建完成后直接推送，不只是在 CI 本地生成。
           tags: ${{ steps.backend-meta.outputs.tags }} # 使用 metadata 步骤生成的 tag。
           labels: ${{ steps.backend-meta.outputs.labels }} # 附带标准镜像元信息。
@@ -121,10 +121,29 @@ jobs:
         with:
           context: ./frontend # 前端镜像构建上下文。
           file: ./frontend/Dockerfile # 前端 Dockerfile 位置。
-          platforms: linux/amd64,linux/arm64 # 同时产出 x86 和 arm 镜像。
+          platforms: linux/amd64 # 个人项目只构建 x86 镜像。
           push: true # 构建完成后直接推送。
           tags: ${{ steps.frontend-meta.outputs.tags }} # 使用 metadata 步骤生成的 tag。
           labels: ${{ steps.frontend-meta.outputs.labels }} # 附带标准镜像元信息。
+
+      - name: Generate agent image metadata # 生成 Agent 镜像 tag 和 OCI 标签元数据。
+        id: agent-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image-vars.outputs.agent_image }} # Agent 镜像仓库名。
+          tags: |
+            type=raw,value=${{ steps.image-vars.outputs.image_tag }} # 精确指向本次提交的版本。
+            type=raw,value=latest # 始终保留一个 latest 方便手工拉取。
+
+      - name: Build and push agent image # 构建 Agent gRPC 镜像并推送到 GHCR。
+        uses: docker/build-push-action@v6
+        with:
+          context: . # Agent 镜像构建上下文为项目根目录，Pythond 需要 agent/ 目录结构和 proto/。
+          file: ./agent/Dockerfile # Agent Dockerfile 位置。
+          platforms: linux/amd64 # 个人项目只构建 x86 镜像。
+          push: true # 构建完成后直接推送。
+          tags: ${{ steps.agent-meta.outputs.tags }} # 使用 metadata 步骤生成的 tag。
+          labels: ${{ steps.agent-meta.outputs.labels }} # 附带标准镜像元信息。
 
   deploy: # 镜像推送完成后，通过 SSH 到服务器执行更新。
     needs: build-and-push # 依赖镜像构建完成，部署时直接拉取刚刚推送的版本。
@@ -171,6 +190,7 @@ jobs:
             cat > .env <<EOF # 写入本次部署要使用的镜像名称和版本。
             BACKEND_IMAGE=${{ needs.build-and-push.outputs.backend_image }}
             FRONTEND_IMAGE=${{ needs.build-and-push.outputs.frontend_image }}
+            AGENT_IMAGE=${{ needs.build-and-push.outputs.agent_image }}
             IMAGE_TAG=${{ needs.build-and-push.outputs.image_tag }}
             EOF
 

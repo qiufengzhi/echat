@@ -1,5 +1,5 @@
 # 前端构建
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -7,7 +7,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # 安装依赖
-RUN npm install
+RUN npm ci
 
 # 复制源码
 COPY . .
@@ -16,7 +16,7 @@ COPY . .
 RUN npm run build
 
 # 运行阶段
-FROM nginx:alpine
+FROM nginx:1.27-alpine
 
 # 复制构建产物
 COPY --from=builder /app/dist /usr/share/nginx/html

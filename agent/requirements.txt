@@ -10,3 +10,6 @@ protobuf>=4.25.0
 
 # YAML 配置文件解析
 pyyaml>=6.0
+
+# 结构化日志
+loguru>=0.7.0
