@@ -4,9 +4,9 @@
 
 1. 校验前端是否可以构建、后端是否可以通过测试。
 2. 分别构建前端和后端 Docker 镜像。
-3. 把镜像推送到 `ghcr.io`。
+3. 把镜像推送到 `ghcr.io` 和**阿里云 ACR**（国内服务器拉取用）。
 4. 通过 SSH 登录服务器，上传生产环境 `compose` 文件和 Nginx HTTPS 网关配置。
-5. 在服务器上执行 `docker compose pull` 和 `docker compose up -d`，同时更新网关、前端和后端。
+5. 在服务器上从 **ACR 拉取镜像**并执行 `docker compose up -d`，同时更新网关、前端和后端。
 
 ## 仓库内相关文件
 
@@ -43,6 +43,8 @@
 
 需要在 GitHub 仓库的 `Settings -> Secrets and variables -> Actions` 中配置这些 Secrets：
 
+**部署相关：**
+
 - `DEPLOY_HOST`
   服务器 IP 或域名。
 - `DEPLOY_PORT`
@@ -53,22 +55,38 @@
   用于登录服务器的 SSH 密码。
 - `DEPLOY_PATH`
   服务器上的部署目录，例如 `/opt/echat`。
-- `GHCR_DEPLOY_USERNAME`
-  服务器拉取 GHCR 镜像时使用的 GitHub 用户名。
-- `GHCR_DEPLOY_TOKEN`
-  服务器拉取 GHCR 镜像时使用的 Token，至少需要 `read:packages` 权限。
+
+**ACR（阿里云容器镜像服务）相关：**
+
+- `ACR_USERNAME`
+  ACR 登录用户名（在 ACR 控制台「访问凭证」中查看）。
+- `ACR_PASSWORD`
+  ACR 登录密码（在 ACR 控制台设置固定密码）。
+
+> ACR 仓库地址已写死在 `ci.yml` 中（`crpi-aixkibkv62fgkkyl.cn-heyuan.personal.cr.aliyuncs.com/echat`），无需单独配置 Secret。
+
+**已废弃（改用 ACR 后不再需要）：**
+
+- ~~`GHCR_DEPLOY_USERNAME`~~ — 不再需要，服务器改为从 ACR 拉取。
+- ~~`GHCR_DEPLOY_TOKEN`~~ — 不再需要，服务器改为从 ACR 拉取。
 
 ## GHCR 权限要求
 
-工作流推送镜像使用的是 GitHub Actions 自带的 `GITHUB_TOKEN`，因此工作流文件里已经开启了：
+工作流推送镜像到 GHCR 使用的是 GitHub Actions 自带的 `GITHUB_TOKEN`，因此工作流文件里已经开启了：
 
 - `packages: write`
 
-如果服务器需要拉取私有镜像，则 `GHCR_DEPLOY_TOKEN` 至少需要：
+服务器部署已改为从 ACR 拉取，不再需要 GHCR 拉取权限。
 
-- `read:packages`
+## 阿里云 ACR 准备
 
-如果你的仓库或镜像策略更严格，也可以单独创建一个专用机器人账号来拉取镜像。
+国内服务器从 ghcr.io 拉取镜像极慢，因此改为从阿里云 ACR 拉取。
+
+1. 登录[阿里云容器镜像服务](https://cr.console.aliyun.com/)，开通**个人版**（免费）。
+2. 创建命名空间 `echat`（必须叫这个，CI 里已写死 `crpi-aixkibkv62fgkkyl.cn-heyuan.personal.cr.aliyuncs.com/echat`）。
+3. 在 ACR 控制台「访问凭证」中设置**固定密码**。
+4. 在 GitHub Secrets 中配置 `ACR_USERNAME` 和 `ACR_PASSWORD`。
+5. CI 构建时自动双推到 GHCR + ACR，服务器从 ACR 拉取即可（国内通常几秒完成）。
 
 ## 触发方式
 
@@ -82,11 +100,17 @@
 
 ## 镜像命名规则
 
-工作流会自动生成三个镜像名：
+工作流会自动生成两套镜像名：
 
+**GHCR（海外 / Actions 内部）：**
 - `ghcr.io/<owner>/<repo>-backend`
 - `ghcr.io/<owner>/<repo>-frontend`
 - `ghcr.io/<owner>/<repo>-agent`
+
+**ACR（国内服务器拉取）：**
+- `crpi-aixkibkv62fgkkyl.cn-heyuan.personal.cr.aliyuncs.com/echat/<repo>-backend`
+- `crpi-aixkibkv62fgkkyl.cn-heyuan.personal.cr.aliyuncs.com/echat/<repo>-frontend`
+- `crpi-aixkibkv62fgkkyl.cn-heyuan.personal.cr.aliyuncs.com/echat/<repo>-agent`
 
 并同时打两个 tag：
 
@@ -109,19 +133,25 @@
 
 ## 首次部署前准备
 
-1. 上传并编辑后端配置（端口、STUN、ASR 开关等通用配置）：
+1. 上传并编辑后端配置（端口、STUN、ASR 开关等）：
 ```bash
 # 从项目复制到服务器，按需修改
 scp backend/config.yaml user@host:/srv/echat/backend/config.yaml
 ```
 
-2. 复制环境变量模板并填入密钥：
+2. 上传 Agent 配置（LLM 密钥等）：
 ```bash
-cp .env.example .env
-# 编辑 .env，填入 ASR 密钥（如需启用）
+scp agent/config.yaml user@host:/srv/echat/agent/config.yaml
 ```
 
-3. Let's Encrypt 证书获取（如果还没有）：
+3. 创建 `.env` 文件（仅首次部署前需初始化空文件，后续 CI 会自动写入镜像名）：
+```bash
+touch /srv/echat/.env
+```
+
+> ⚠️ **注意**：`.env` 文件由 CI 自动管理，每次部署都会覆盖 `BACKEND_IMAGE`、`FRONTEND_IMAGE`、`AGENT_IMAGE`、`IMAGE_TAG` 四个字段。不要手动在 `.env` 中存放持久密钥，敏感配置（ASR 密钥、LLM API Key 等）应统一放在 `backend/config.yaml` 和 `agent/config.yaml` 中。
+
+4. Let's Encrypt 证书获取（如果还没有）：
 
 ```bash
 certbot certonly --standalone -d echat.qxbnx.cn

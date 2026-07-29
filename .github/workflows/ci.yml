@@ -23,7 +23,8 @@ concurrency:
   cancel-in-progress: true # 新的提交到来时取消旧的同分支部署。
 
 env:
-  REGISTRY: ghcr.io # 统一使用 GitHub Container Registry 存放镜像。
+  GHCR_REGISTRY: ghcr.io # GitHub Container Registry，面向海外 / GitHub Actions 内部使用。
+  ACR_REGISTRY: crpi-aixkibkv62fgkkyl.cn-heyuan.personal.cr.aliyuncs.com/echat # 阿里云 ACR 个人版实例地址（含命名空间）。
 
 jobs:
   verify: # 先做基础校验，确保前后端都能正常构建/测试。
@@ -59,90 +60,111 @@ jobs:
     needs: verify # 依赖 verify 成功，避免无效代码进入部署阶段。
     runs-on: ubuntu-latest
     outputs:
-      backend_image: ${{ steps.image-vars.outputs.backend_image }} # 后端镜像完整名称，供 deploy 任务复用。
-      frontend_image: ${{ steps.image-vars.outputs.frontend_image }} # 前端镜像完整名称，供 deploy 任务复用。
-      agent_image: ${{ steps.image-vars.outputs.agent_image }} # Agent 镜像完整名称，供 deploy 任务复用。
+      backend_image: ${{ steps.image-vars.outputs.backend_image }} # GHCR 后端镜像，保留兼容。
+      frontend_image: ${{ steps.image-vars.outputs.frontend_image }} # GHCR 前端镜像，保留兼容。
+      agent_image: ${{ steps.image-vars.outputs.agent_image }} # GHCR Agent 镜像，保留兼容。
+      acr_backend_image: ${{ steps.image-vars.outputs.acr_backend_image }} # ACR 后端镜像，国内服务器部署用。
+      acr_frontend_image: ${{ steps.image-vars.outputs.acr_frontend_image }} # ACR 前端镜像，国内服务器部署用。
+      acr_agent_image: ${{ steps.image-vars.outputs.acr_agent_image }} # ACR Agent 镜像，国内服务器部署用。
       image_tag: ${{ steps.image-vars.outputs.image_tag }} # 本次部署使用的镜像 tag。
 
     steps:
       - name: Checkout repository # 拉取代码，供 Docker 构建上下文使用。
         uses: actions/checkout@v4
 
-      - name: Prepare image names # 统一生成前后端镜像名，全部转成小写以兼容 GHCR。
+      - name: Prepare image names # 统一生成 GHCR 和 ACR 两套镜像名，用于双推。全部转小写。
         id: image-vars
         run: |
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           repo="$(basename "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
-          echo "backend_image=${REGISTRY}/${owner}/${repo}-backend" >> "$GITHUB_OUTPUT"
-          echo "frontend_image=${REGISTRY}/${owner}/${repo}-frontend" >> "$GITHUB_OUTPUT"
-          echo "agent_image=${REGISTRY}/${owner}/${repo}-agent" >> "$GITHUB_OUTPUT"
+          # GHCR 镜像名（保留兼容，海外可用）
+          echo "backend_image=${GHCR_REGISTRY}/${owner}/${repo}-backend" >> "$GITHUB_OUTPUT"
+          echo "frontend_image=${GHCR_REGISTRY}/${owner}/${repo}-frontend" >> "$GITHUB_OUTPUT"
+          echo "agent_image=${GHCR_REGISTRY}/${owner}/${repo}-agent" >> "$GITHUB_OUTPUT"
+          # ACR 镜像名（国内服务器拉取用，速度远超 ghcr.io）
+          echo "acr_backend_image=${ACR_REGISTRY}/${repo}-backend" >> "$GITHUB_OUTPUT"
+          echo "acr_frontend_image=${ACR_REGISTRY}/${repo}-frontend" >> "$GITHUB_OUTPUT"
+          echo "acr_agent_image=${ACR_REGISTRY}/${repo}-agent" >> "$GITHUB_OUTPUT"
           echo "image_tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT" # 用提交 SHA 做不可变版本号。
 
       - name: Set up Docker Buildx # 启用 buildx 构建单平台镜像。
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR # 登录到 GitHub 容器仓库，后续才能推镜像。
+      - name: Log in to GHCR # 登录到 GitHub 容器仓库。
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }} # 目标镜像仓库地址。
+          registry: ${{ env.GHCR_REGISTRY }} # GHCR 地址。
           username: ${{ github.actor }} # 当前触发工作流的 GitHub 用户。
           password: ${{ secrets.GITHUB_TOKEN }} # Actions 自带 token，可用于推 GHCR。
 
-      - name: Generate backend image metadata # 生成后端镜像 tag 和 OCI 标签元数据。
+      - name: Log in to ACR # 登录阿里云容器镜像服务，国内服务器拉取用。
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ACR_REGISTRY }} # ACR 地址，如 registry.cn-hangzhou.aliyuncs.com/echat。
+          username: ${{ secrets.ACR_USERNAME }} # ACR 登录用户名。
+          password: ${{ secrets.ACR_PASSWORD }} # ACR 登录密码。
+
+      - name: Generate backend image metadata # 生成 GHCR + ACR 双注册表 tag 和 OCI 标签。
         id: backend-meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ steps.image-vars.outputs.backend_image }} # 后端镜像仓库名。
+          images: | # 同时为 GHCR 和 ACR 生成相同 tag，一次构建双推。
+            ${{ steps.image-vars.outputs.backend_image }}
+            ${{ steps.image-vars.outputs.acr_backend_image }}
           tags: |
             type=raw,value=${{ steps.image-vars.outputs.image_tag }} # 精确指向本次提交的版本。
             type=raw,value=latest # 始终保留一个 latest 方便手工拉取。
 
-      - name: Generate frontend image metadata # 生成前端镜像 tag 和 OCI 标签元数据。
+      - name: Generate frontend image metadata # 生成 GHCR + ACR 双注册表 tag 和 OCI 标签。
         id: frontend-meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ steps.image-vars.outputs.frontend_image }} # 前端镜像仓库名。
+          images: | # 同时为 GHCR 和 ACR 生成相同 tag，一次构建双推。
+            ${{ steps.image-vars.outputs.frontend_image }}
+            ${{ steps.image-vars.outputs.acr_frontend_image }}
           tags: |
             type=raw,value=${{ steps.image-vars.outputs.image_tag }} # 精确指向本次提交的版本。
             type=raw,value=latest # 始终保留一个 latest 方便手工拉取。
 
-      - name: Build and push backend image # 构建后端镜像并推送到 GHCR。
+      - name: Build and push backend image # 构建后端镜像并双推到 GHCR 和 ACR。
         uses: docker/build-push-action@v6
         with:
           context: ./backend # 后端镜像构建上下文。
           file: ./backend/Dockerfile # 后端 Dockerfile 位置。
           platforms: linux/amd64 # 个人项目只构建 x86 镜像，省掉 QEMU 跨架构模拟的时间。
           push: true # 构建完成后直接推送，不只是在 CI 本地生成。
-          tags: ${{ steps.backend-meta.outputs.tags }} # 使用 metadata 步骤生成的 tag。
+          tags: ${{ steps.backend-meta.outputs.tags }} # 使用 metadata 步骤生成的 tag（含 GHCR + ACR）。
           labels: ${{ steps.backend-meta.outputs.labels }} # 附带标准镜像元信息。
 
-      - name: Build and push frontend image # 构建前端镜像并推送到 GHCR。
+      - name: Build and push frontend image # 构建前端镜像并双推到 GHCR 和 ACR。
         uses: docker/build-push-action@v6
         with:
           context: ./frontend # 前端镜像构建上下文。
           file: ./frontend/Dockerfile # 前端 Dockerfile 位置。
           platforms: linux/amd64 # 个人项目只构建 x86 镜像。
           push: true # 构建完成后直接推送。
-          tags: ${{ steps.frontend-meta.outputs.tags }} # 使用 metadata 步骤生成的 tag。
+          tags: ${{ steps.frontend-meta.outputs.tags }} # 使用 metadata 步骤生成的 tag（含 GHCR + ACR）。
           labels: ${{ steps.frontend-meta.outputs.labels }} # 附带标准镜像元信息。
 
-      - name: Generate agent image metadata # 生成 Agent 镜像 tag 和 OCI 标签元数据。
+      - name: Generate agent image metadata # 生成 GHCR + ACR 双注册表 tag 和 OCI 标签。
         id: agent-meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ steps.image-vars.outputs.agent_image }} # Agent 镜像仓库名。
+          images: | # 同时为 GHCR 和 ACR 生成相同 tag，一次构建双推。
+            ${{ steps.image-vars.outputs.agent_image }}
+            ${{ steps.image-vars.outputs.acr_agent_image }}
           tags: |
             type=raw,value=${{ steps.image-vars.outputs.image_tag }} # 精确指向本次提交的版本。
             type=raw,value=latest # 始终保留一个 latest 方便手工拉取。
 
-      - name: Build and push agent image # 构建 Agent gRPC 镜像并推送到 GHCR。
+      - name: Build and push agent image # 构建 Agent gRPC 镜像并双推到 GHCR 和 ACR。
         uses: docker/build-push-action@v6
         with:
-          context: . # Agent 镜像构建上下文为项目根目录，Pythond 需要 agent/ 目录结构和 proto/。
+          context: . # Agent 镜像构建上下文为项目根目录，需要 agent/ 目录结构和 proto/。
           file: ./agent/Dockerfile # Agent Dockerfile 位置。
           platforms: linux/amd64 # 个人项目只构建 x86 镜像。
           push: true # 构建完成后直接推送。
-          tags: ${{ steps.agent-meta.outputs.tags }} # 使用 metadata 步骤生成的 tag。
+          tags: ${{ steps.agent-meta.outputs.tags }} # 使用 metadata 步骤生成的 tag（含 GHCR + ACR）。
           labels: ${{ steps.agent-meta.outputs.labels }} # 附带标准镜像元信息。
 
   deploy: # 镜像推送完成后，通过 SSH 到服务器执行更新。
@@ -175,7 +197,7 @@ jobs:
           strip_components: 1 # 去掉本地 deploy/ 目录层级，保留 nginx 子目录结构。
           overwrite: true # 如果目标文件已存在，则直接覆盖。
 
-      - name: Pull and restart frontend and backend # 在服务器上登录 GHCR、拉镜像并重启服务。
+      - name: Pull and restart services # 在服务器上登录 ACR、拉镜像并重启所有服务。
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }} # 目标服务器地址。
@@ -183,26 +205,27 @@ jobs:
           password: ${{ secrets.DEPLOY_PASSWORD }} # SSH 登录密码，适用于当前服务器的密码登录方式。
           port: ${{ secrets.DEPLOY_PORT || '22' }} # SSH 端口。
           script_stop: true # 任一命令失败时立即终止整个部署。
+          command_timeout: 10m # ACR 国内拉取速度快，10 分钟绰绰有余。
           script: |
             set -eu # 遇到未定义变量或命令失败时立即退出。
             cd "${{ secrets.DEPLOY_PATH }}" # 进入服务器上的部署目录。
 
-            cat > .env <<EOF # 写入本次部署要使用的镜像名称和版本。
-            BACKEND_IMAGE=${{ needs.build-and-push.outputs.backend_image }}
-            FRONTEND_IMAGE=${{ needs.build-and-push.outputs.frontend_image }}
-            AGENT_IMAGE=${{ needs.build-and-push.outputs.agent_image }}
+            cat > .env <<EOF # 写入本次部署要使用的 ACR 镜像名称和版本。
+            BACKEND_IMAGE=${{ needs.build-and-push.outputs.acr_backend_image }}
+            FRONTEND_IMAGE=${{ needs.build-and-push.outputs.acr_frontend_image }}
+            AGENT_IMAGE=${{ needs.build-and-push.outputs.acr_agent_image }}
             IMAGE_TAG=${{ needs.build-and-push.outputs.image_tag }}
             EOF
 
-            echo "${{ secrets.GHCR_DEPLOY_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_DEPLOY_USERNAME }}" --password-stdin # 登录 GHCR，供服务器拉取私有镜像。
+            echo "${{ secrets.ACR_PASSWORD }}" | docker login "${{ env.ACR_REGISTRY }}" -u "${{ secrets.ACR_USERNAME }}" --password-stdin # 登录 ACR，国内极速拉取。
 
             if docker compose version >/dev/null 2>&1; then # 优先使用 Compose v2，避免旧版 docker-compose 的 ContainerConfig 兼容性问题。
-              docker compose --env-file .env -f docker-compose.prod.yml pull # 先拉取前后端最新镜像。
+              docker compose --env-file .env -f docker-compose.prod.yml pull # 先从 ACR 拉取最新镜像。
               docker compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans # 后台重建并清理无用容器。
             elif docker-compose version >/dev/null 2>&1; then # 兼容只安装旧版 docker-compose v1 的服务器。
-              docker-compose --env-file .env -f docker-compose.prod.yml pull # 先拉取前后端最新镜像，拉取失败时保留旧容器继续运行。
+              docker-compose --env-file .env -f docker-compose.prod.yml pull # 先从 ACR 拉取最新镜像。
               docker-compose --env-file .env -f docker-compose.prod.yml down --remove-orphans # v1 重建旧容器时可能读取缺失的 ContainerConfig，先移除旧容器再新建。
-              docker-compose --env-file .env -f docker-compose.prod.yml up -d # 使用新镜像重新创建网关、前端和后端容器。
+              docker-compose --env-file .env -f docker-compose.prod.yml up -d # 使用新镜像重新创建所有容器。
             else
               echo "Docker Compose is not installed. Please install docker compose v2 or docker-compose v1." # 明确提示服务器缺少部署所需的 Compose 命令。
               exit 1
