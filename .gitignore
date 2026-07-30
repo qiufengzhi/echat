@@ -40,3 +40,7 @@ temp/
 # yaml
 backend/config.yaml
 agent/config.yaml
+
+# Python / agent
+__pycache__/
+*.pyc

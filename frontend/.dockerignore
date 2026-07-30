@@ -1,0 +1,26 @@
+# Git
+.git
+.gitignore
+
+# 依赖
+node_modules
+
+# 构建产物
+dist
+
+# 环境文件
+.env
+.env.*
+!.env.example
+
+# 文档和说明
+*.md
+README*
+
+# Docker
+Dockerfile
+.dockerignore
+
+# IDE
+.vscode
+.idea

@@ -3,8 +3,7 @@ name: deploy # 工作流名称，会显示在 GitHub Actions 页面里。
 on:
   push: # 推送到主分支时自动触发构建和部署。
     branches:
-      - main # 默认主分支名称。
-      - master # 兼容仍在使用 master 作为主分支的仓库。
+      - main
     paths:
       - ".github/workflows/ci.yml" # 工作流自身改动后也重新执行。
       - "backend/**" # 后端代码变化时触发。
@@ -29,6 +28,7 @@ env:
 jobs:
   verify: # 先做基础校验，确保前后端都能正常构建/测试。
     runs-on: ubuntu-latest # 使用 GitHub 提供的 Ubuntu Runner。
+    timeout-minutes: 10 # 防止校验步骤异常挂起耗尽配额。
 
     steps:
       - name: Checkout repository # 拉取当前仓库代码。
@@ -41,11 +41,12 @@ jobs:
           cache: npm # 缓存 npm 依赖，加快重复构建。
           cache-dependency-path: frontend/package-lock.json # 以前端锁文件作为缓存键。
 
-      - name: Build frontend # 先验证前端能否完整打包。
+      - name: Verify frontend # 类型检查 + 完整构建，确保前端无编译错误。
         working-directory: frontend
         run: |
-          npm ci # 按锁文件安装依赖，保证 CI 环境可复现。
-          npm run build # 产出前端构建结果并检查配置是否可用。
+          npm ci            # 按锁文件安装依赖，保证 CI 环境可复现。
+          npx tsc --noEmit  # 纯类型检查，不产出文件，比完整 build 更快。
+          npm run build     # 完整 Vite 构建，校验配置和打包结果。
 
       - name: Set up Go # 准备后端测试所需的 Go 环境。
         uses: actions/setup-go@v5
@@ -56,120 +57,253 @@ jobs:
         working-directory: backend
         run: go test ./...
 
-  build-and-push: # 校验通过后，再分别构建并推送前后端镜像。
+  build-and-push: # 校验通过后构建镜像并推送到可用 registry。每服务只构建一次，按需打多 registry tag。
     needs: verify # 依赖 verify 成功，避免无效代码进入部署阶段。
     runs-on: ubuntu-latest
+    timeout-minutes: 30 # 三个服务构建总时长上限。
     outputs:
-      backend_image: ${{ steps.image-vars.outputs.backend_image }} # GHCR 后端镜像，保留兼容。
-      frontend_image: ${{ steps.image-vars.outputs.frontend_image }} # GHCR 前端镜像，保留兼容。
-      agent_image: ${{ steps.image-vars.outputs.agent_image }} # GHCR Agent 镜像，保留兼容。
-      acr_backend_image: ${{ steps.image-vars.outputs.acr_backend_image }} # ACR 后端镜像，国内服务器部署用。
-      acr_frontend_image: ${{ steps.image-vars.outputs.acr_frontend_image }} # ACR 前端镜像，国内服务器部署用。
-      acr_agent_image: ${{ steps.image-vars.outputs.acr_agent_image }} # ACR Agent 镜像，国内服务器部署用。
+      backend_image: ${{ steps.image-vars.outputs.backend_image }} # GHCR 后端镜像名。
+      frontend_image: ${{ steps.image-vars.outputs.frontend_image }} # GHCR 前端镜像名。
+      agent_image: ${{ steps.image-vars.outputs.agent_image }} # GHCR Agent 镜像名。
+      acr_backend_image: ${{ steps.image-vars.outputs.acr_backend_image }} # ACR 后端镜像名。
+      acr_frontend_image: ${{ steps.image-vars.outputs.acr_frontend_image }} # ACR 前端镜像名。
+      acr_agent_image: ${{ steps.image-vars.outputs.acr_agent_image }} # ACR Agent 镜像名。
       image_tag: ${{ steps.image-vars.outputs.image_tag }} # 本次部署使用的镜像 tag。
+      ghcr_ok: ${{ steps.verify-pushes.outputs.ghcr_ok }} # GHCR 是否全部推送成功。
+      acr_ok: ${{ steps.verify-pushes.outputs.acr_ok }} # ACR 是否全部推送成功。
 
     steps:
       - name: Checkout repository # 拉取代码，供 Docker 构建上下文使用。
         uses: actions/checkout@v4
 
-      - name: Prepare image names # 统一生成 GHCR 和 ACR 两套镜像名，用于双推。全部转小写。
+      - name: Prepare image names # 统一生成 GHCR 和 ACR 两套镜像名，全部转小写。
         id: image-vars
         run: |
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           repo="$(basename "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
-          # GHCR 镜像名（保留兼容，海外可用）
           echo "backend_image=${GHCR_REGISTRY}/${owner}/${repo}-backend" >> "$GITHUB_OUTPUT"
           echo "frontend_image=${GHCR_REGISTRY}/${owner}/${repo}-frontend" >> "$GITHUB_OUTPUT"
           echo "agent_image=${GHCR_REGISTRY}/${owner}/${repo}-agent" >> "$GITHUB_OUTPUT"
-          # ACR 镜像名（国内服务器拉取用，速度远超 ghcr.io）
-          echo "acr_backend_image=${ACR_REGISTRY}/${repo}-backend" >> "$GITHUB_OUTPUT"
-          echo "acr_frontend_image=${ACR_REGISTRY}/${repo}-frontend" >> "$GITHUB_OUTPUT"
-          echo "acr_agent_image=${ACR_REGISTRY}/${repo}-agent" >> "$GITHUB_OUTPUT"
-          echo "image_tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT" # 用提交 SHA 做不可变版本号。
+          echo "acr_backend_image=${ACR_REGISTRY}/echat-backend" >> "$GITHUB_OUTPUT"
+          echo "acr_frontend_image=${ACR_REGISTRY}/echat-frontend" >> "$GITHUB_OUTPUT"
+          echo "acr_agent_image=${ACR_REGISTRY}/echat-agent" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx # 启用 buildx 构建单平台镜像。
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR # 登录到 GitHub 容器仓库。
+      # ---- 登录两个 registry，均为尽力而为 ----
+
+      - name: Log in to GHCR # 登录 GitHub 容器仓库。
+        id: ghcr-login
         uses: docker/login-action@v3
+        continue-on-error: true # GHCR 也可能偶发不可用，不阻塞流程。
         with:
-          registry: ${{ env.GHCR_REGISTRY }} # GHCR 地址。
-          username: ${{ github.actor }} # 当前触发工作流的 GitHub 用户。
-          password: ${{ secrets.GITHUB_TOKEN }} # Actions 自带 token，可用于推 GHCR。
+          registry: ${{ env.GHCR_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Log in to ACR # 登录阿里云容器镜像服务，国内服务器拉取用。
+      - name: Log in to ACR # 登录阿里云容器镜像服务。
+        id: acr-login
         uses: docker/login-action@v3
+        continue-on-error: true # ACR 从 GitHub Actions 海外网络访问不稳定。
         with:
-          registry: ${{ env.ACR_REGISTRY }} # ACR 地址，如 registry.cn-hangzhou.aliyuncs.com/echat。
-          username: ${{ secrets.ACR_USERNAME }} # ACR 登录用户名。
-          password: ${{ secrets.ACR_PASSWORD }} # ACR 登录密码。
+          registry: ${{ env.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
 
-      - name: Generate backend image metadata # 生成 GHCR + ACR 双注册表 tag 和 OCI 标签。
-        id: backend-meta
-        uses: docker/metadata-action@v5
-        with:
-          images: | # 同时为 GHCR 和 ACR 生成相同 tag，一次构建双推。
-            ${{ steps.image-vars.outputs.backend_image }}
-            ${{ steps.image-vars.outputs.acr_backend_image }}
-          tags: |
-            type=raw,value=${{ steps.image-vars.outputs.image_tag }} # 精确指向本次提交的版本。
-            type=raw,value=latest # 始终保留一个 latest 方便手工拉取。
+      # ============================
+      # 核心优化：每服务只构建一次，按登录成功的 registry 动态组合 tag 列表。
+      # 原来每服务独立构建两次（GHCR + ACR），现在一次构建即可推到所有可用 registry，
+      # 同时开启 GHA 层缓存加速下次构建。
+      # ============================
 
-      - name: Generate frontend image metadata # 生成 GHCR + ACR 双注册表 tag 和 OCI 标签。
-        id: frontend-meta
-        uses: docker/metadata-action@v5
-        with:
-          images: | # 同时为 GHCR 和 ACR 生成相同 tag，一次构建双推。
-            ${{ steps.image-vars.outputs.frontend_image }}
-            ${{ steps.image-vars.outputs.acr_frontend_image }}
-          tags: |
-            type=raw,value=${{ steps.image-vars.outputs.image_tag }} # 精确指向本次提交的版本。
-            type=raw,value=latest # 始终保留一个 latest 方便手工拉取。
+      # ============ Backend ============
 
-      - name: Build and push backend image # 构建后端镜像并双推到 GHCR 和 ACR。
+      - name: Prepare backend tags # 按实际登录状态动态生成 backend tag 列表。
+        id: backend-tags
+        run: |
+          tag="${{ steps.image-vars.outputs.image_tag }}"
+          tags=""
+          if [ "${{ steps.ghcr-login.outcome }}" = "success" ]; then
+            tags="${tags}${{ steps.image-vars.outputs.backend_image }}:${tag}"$'\n'
+            tags="${tags}${{ steps.image-vars.outputs.backend_image }}:latest"$'\n'
+          fi
+          if [ "${{ steps.acr-login.outcome }}" = "success" ]; then
+            tags="${tags}${{ steps.image-vars.outputs.acr_backend_image }}:${tag}"$'\n'
+            tags="${tags}${{ steps.image-vars.outputs.acr_backend_image }}:latest"$'\n'
+          fi
+          if [ -z "$tags" ]; then
+            echo "ERROR: No registry available for backend"
+            exit 1
+          fi
+          { echo "tags<<EOF"; echo -n "$tags"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push backend # 单次构建 + 推送到所有可用 registry。
+        id: build-backend
         uses: docker/build-push-action@v6
         with:
-          context: ./backend # 后端镜像构建上下文。
-          file: ./backend/Dockerfile # 后端 Dockerfile 位置。
-          platforms: linux/amd64 # 个人项目只构建 x86 镜像，省掉 QEMU 跨架构模拟的时间。
-          push: true # 构建完成后直接推送，不只是在 CI 本地生成。
-          tags: ${{ steps.backend-meta.outputs.tags }} # 使用 metadata 步骤生成的 tag（含 GHCR + ACR）。
-          labels: ${{ steps.backend-meta.outputs.labels }} # 附带标准镜像元信息。
+          context: ./backend
+          file: ./backend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.backend-tags.outputs.tags }}
+          cache-from: type=gha # 从上次 GHA 缓存读取层，加速 Go 依赖下载和编译。
+          cache-to: type=gha,mode=max # 导出所有层缓存供下次构建复用。
 
-      - name: Build and push frontend image # 构建前端镜像并双推到 GHCR 和 ACR。
+      - name: Track backend results # 汇总 backend 在各 registry 的推送状态。
+        id: track-backend
+        if: success() || failure()
+        run: |
+          if [ "${{ steps.build-backend.outcome }}" = "success" ]; then
+            echo "ghcr=${{ steps.ghcr-login.outcome }}" >> "$GITHUB_OUTPUT"
+            echo "acr=${{ steps.acr-login.outcome }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ghcr=failure" >> "$GITHUB_OUTPUT"
+            echo "acr=failure" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ============ Frontend ============
+
+      - name: Prepare frontend tags # 按实际登录状态动态生成 frontend tag 列表。
+        id: frontend-tags
+        run: |
+          tag="${{ steps.image-vars.outputs.image_tag }}"
+          tags=""
+          if [ "${{ steps.ghcr-login.outcome }}" = "success" ]; then
+            tags="${tags}${{ steps.image-vars.outputs.frontend_image }}:${tag}"$'\n'
+            tags="${tags}${{ steps.image-vars.outputs.frontend_image }}:latest"$'\n'
+          fi
+          if [ "${{ steps.acr-login.outcome }}" = "success" ]; then
+            tags="${tags}${{ steps.image-vars.outputs.acr_frontend_image }}:${tag}"$'\n'
+            tags="${tags}${{ steps.image-vars.outputs.acr_frontend_image }}:latest"$'\n'
+          fi
+          if [ -z "$tags" ]; then
+            echo "ERROR: No registry available for frontend"
+            exit 1
+          fi
+          { echo "tags<<EOF"; echo -n "$tags"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push frontend # 单次构建 + 推送到所有可用 registry。
+        id: build-frontend
         uses: docker/build-push-action@v6
         with:
-          context: ./frontend # 前端镜像构建上下文。
-          file: ./frontend/Dockerfile # 前端 Dockerfile 位置。
-          platforms: linux/amd64 # 个人项目只构建 x86 镜像。
-          push: true # 构建完成后直接推送。
-          tags: ${{ steps.frontend-meta.outputs.tags }} # 使用 metadata 步骤生成的 tag（含 GHCR + ACR）。
-          labels: ${{ steps.frontend-meta.outputs.labels }} # 附带标准镜像元信息。
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.frontend-tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Generate agent image metadata # 生成 GHCR + ACR 双注册表 tag 和 OCI 标签。
-        id: agent-meta
-        uses: docker/metadata-action@v5
-        with:
-          images: | # 同时为 GHCR 和 ACR 生成相同 tag，一次构建双推。
-            ${{ steps.image-vars.outputs.agent_image }}
-            ${{ steps.image-vars.outputs.acr_agent_image }}
-          tags: |
-            type=raw,value=${{ steps.image-vars.outputs.image_tag }} # 精确指向本次提交的版本。
-            type=raw,value=latest # 始终保留一个 latest 方便手工拉取。
+      - name: Track frontend results # 汇总 frontend 在各 registry 的推送状态。
+        id: track-frontend
+        if: success() || failure()
+        run: |
+          if [ "${{ steps.build-frontend.outcome }}" = "success" ]; then
+            echo "ghcr=${{ steps.ghcr-login.outcome }}" >> "$GITHUB_OUTPUT"
+            echo "acr=${{ steps.acr-login.outcome }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ghcr=failure" >> "$GITHUB_OUTPUT"
+            echo "acr=failure" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Build and push agent image # 构建 Agent gRPC 镜像并双推到 GHCR 和 ACR。
+      # ============ Agent ============
+
+      - name: Prepare agent tags # 按实际登录状态动态生成 agent tag 列表。
+        id: agent-tags
+        run: |
+          tag="${{ steps.image-vars.outputs.image_tag }}"
+          tags=""
+          if [ "${{ steps.ghcr-login.outcome }}" = "success" ]; then
+            tags="${tags}${{ steps.image-vars.outputs.agent_image }}:${tag}"$'\n'
+            tags="${tags}${{ steps.image-vars.outputs.agent_image }}:latest"$'\n'
+          fi
+          if [ "${{ steps.acr-login.outcome }}" = "success" ]; then
+            tags="${tags}${{ steps.image-vars.outputs.acr_agent_image }}:${tag}"$'\n'
+            tags="${tags}${{ steps.image-vars.outputs.acr_agent_image }}:latest"$'\n'
+          fi
+          if [ -z "$tags" ]; then
+            echo "ERROR: No registry available for agent"
+            exit 1
+          fi
+          { echo "tags<<EOF"; echo -n "$tags"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push agent # 单次构建 + 推送到所有可用 registry。
+        id: build-agent
         uses: docker/build-push-action@v6
         with:
-          context: . # Agent 镜像构建上下文为项目根目录，需要 agent/ 目录结构和 proto/。
-          file: ./agent/Dockerfile # Agent Dockerfile 位置。
-          platforms: linux/amd64 # 个人项目只构建 x86 镜像。
-          push: true # 构建完成后直接推送。
-          tags: ${{ steps.agent-meta.outputs.tags }} # 使用 metadata 步骤生成的 tag（含 GHCR + ACR）。
-          labels: ${{ steps.agent-meta.outputs.labels }} # 附带标准镜像元信息。
+          context: ./agent
+          file: ./agent/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.agent-tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-  deploy: # 镜像推送完成后，通过 SSH 到服务器执行更新。
-    needs: build-and-push # 依赖镜像构建完成，部署时直接拉取刚刚推送的版本。
+      - name: Track agent results # 汇总 agent 在各 registry 的推送状态。
+        id: track-agent
+        if: success() || failure()
+        run: |
+          if [ "${{ steps.build-agent.outcome }}" = "success" ]; then
+            echo "ghcr=${{ steps.ghcr-login.outcome }}" >> "$GITHUB_OUTPUT"
+            echo "acr=${{ steps.acr-login.outcome }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ghcr=failure" >> "$GITHUB_OUTPUT"
+            echo "acr=failure" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ---- 校验：每个服务至少有一个 registry 推送成功 ----
+
+      - name: Verify at least one registry succeeded # 检查各镜像推送结果，并输出可用 registry 标志。
+        id: verify-pushes
+        if: success() || failure() # 即使前面步骤有失败的也要执行校验。
+        run: |
+          # 收集各推送步骤的结果（skipped/failure 都视为未成功）
+          b_ghcr="${{ steps.track-backend.outputs.ghcr }}"
+          b_acr="${{ steps.track-backend.outputs.acr }}"
+          f_ghcr="${{ steps.track-frontend.outputs.ghcr }}"
+          f_acr="${{ steps.track-frontend.outputs.acr }}"
+          a_ghcr="${{ steps.track-agent.outputs.ghcr }}"
+          a_acr="${{ steps.track-agent.outputs.acr }}"
+
+          failed=""
+
+          # 每个服务必须至少推送到一个 registry
+          if [ "$b_ghcr" != "success" ] && [ "$b_acr" != "success" ]; then
+            failed="${failed} backend"
+          fi
+          if [ "$f_ghcr" != "success" ] && [ "$f_acr" != "success" ]; then
+            failed="${failed} frontend"
+          fi
+          if [ "$a_ghcr" != "success" ] && [ "$a_acr" != "success" ]; then
+            failed="${failed} agent"
+          fi
+
+          if [ -n "$failed" ]; then
+            echo "ERROR: Failed to push to any registry:${failed}"
+            exit 1
+          fi
+
+          # 判断每个 registry 是否全部镜像都推送成功
+          ghcr_ok=false
+          acr_ok=false
+          if [ "$b_ghcr" = "success" ] && [ "$f_ghcr" = "success" ] && [ "$a_ghcr" = "success" ]; then
+            ghcr_ok=true
+          fi
+          if [ "$b_acr" = "success" ] && [ "$f_acr" = "success" ] && [ "$a_acr" = "success" ]; then
+            acr_ok=true
+          fi
+
+          echo "ghcr_ok=${ghcr_ok}" >> "$GITHUB_OUTPUT"
+          echo "acr_ok=${acr_ok}" >> "$GITHUB_OUTPUT"
+          echo "GHCR all ok: ${ghcr_ok}, ACR all ok: ${acr_ok}"
+
+  deploy: # 镜像推送完成后，通过 SSH 到服务器拉取并重启服务。优先 ACR，不可用时 fallback 到 GHCR。
+    needs: build-and-push # 依赖镜像构建完成（至少一个 registry 推送成功）。
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') # 仅 main 分支和 tag 触发部署，其他分支不触发。
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # 部署超时兜底。
 
     steps:
       - name: Checkout repository # 拉取仓库，供后续上传部署文件使用。
@@ -210,23 +344,63 @@ jobs:
             set -eu # 遇到未定义变量或命令失败时立即退出。
             cd "${{ secrets.DEPLOY_PATH }}" # 进入服务器上的部署目录。
 
-            cat > .env <<EOF # 写入本次部署要使用的 ACR 镜像名称和版本。
+            # 尝试拉取并部署：先试 ACR（国内快），失败则 fallback 到 GHCR。
+            try_deploy() {
+              local registry="$1"  # "acr" or "ghcr"
+              local tag="${{ needs.build-and-push.outputs.image_tag }}"
+
+              echo "Trying to deploy from ${registry}..."
+
+              if [ "$registry" = "acr" ]; then
+                echo "${{ secrets.ACR_PASSWORD }}" | docker login "${{ env.ACR_REGISTRY }}" -u "${{ secrets.ACR_USERNAME }}" --password-stdin
+                cat > .env <<EOF
             BACKEND_IMAGE=${{ needs.build-and-push.outputs.acr_backend_image }}
             FRONTEND_IMAGE=${{ needs.build-and-push.outputs.acr_frontend_image }}
             AGENT_IMAGE=${{ needs.build-and-push.outputs.acr_agent_image }}
-            IMAGE_TAG=${{ needs.build-and-push.outputs.image_tag }}
+            IMAGE_TAG=${tag}
             EOF
+              else
+                echo "${{ secrets.GITHUB_TOKEN }}" | docker login "${{ env.GHCR_REGISTRY }}" -u "${{ github.actor }}" --password-stdin
+                cat > .env <<EOF
+            BACKEND_IMAGE=${{ needs.build-and-push.outputs.backend_image }}
+            FRONTEND_IMAGE=${{ needs.build-and-push.outputs.frontend_image }}
+            AGENT_IMAGE=${{ needs.build-and-push.outputs.agent_image }}
+            IMAGE_TAG=${tag}
+            EOF
+              fi
 
-            echo "${{ secrets.ACR_PASSWORD }}" | docker login "${{ env.ACR_REGISTRY }}" -u "${{ secrets.ACR_USERNAME }}" --password-stdin # 登录 ACR，国内极速拉取。
+              # 拉取镜像，失败则返回非零让外层 fallback
+              if docker compose --env-file .env -f docker-compose.prod.yml pull; then
+                docker compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans
+                return 0
+              fi
+              return 1
+            }
 
-            if docker compose version >/dev/null 2>&1; then # 优先使用 Compose v2，避免旧版 docker-compose 的 ContainerConfig 兼容性问题。
-              docker compose --env-file .env -f docker-compose.prod.yml pull # 先从 ACR 拉取最新镜像。
-              docker compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans # 后台重建并清理无用容器。
-            elif docker-compose version >/dev/null 2>&1; then # 兼容只安装旧版 docker-compose v1 的服务器。
-              docker-compose --env-file .env -f docker-compose.prod.yml pull # 先从 ACR 拉取最新镜像。
-              docker-compose --env-file .env -f docker-compose.prod.yml down --remove-orphans # v1 重建旧容器时可能读取缺失的 ContainerConfig，先移除旧容器再新建。
-              docker-compose --env-file .env -f docker-compose.prod.yml up -d # 使用新镜像重新创建所有容器。
-            else
-              echo "Docker Compose is not installed. Please install docker compose v2 or docker-compose v1." # 明确提示服务器缺少部署所需的 Compose 命令。
+            acr_ok="${{ needs.build-and-push.outputs.acr_ok }}"
+            ghcr_ok="${{ needs.build-and-push.outputs.ghcr_ok }}"
+
+            deployed=false
+
+            if [ "$acr_ok" = "true" ]; then
+              if try_deploy acr; then
+                deployed=true
+                echo "Deployed successfully from ACR."
+              else
+                echo "ACR pull failed, will try GHCR as fallback."
+              fi
+            fi
+
+            if [ "$deployed" = false ] && [ "$ghcr_ok" = "true" ]; then
+              if try_deploy ghcr; then
+                deployed=true
+                echo "Deployed successfully from GHCR."
+              else
+                echo "GHCR pull also failed."
+              fi
+            fi
+
+            if [ "$deployed" = false ]; then
+              echo "ERROR: Failed to deploy from any registry."
               exit 1
             fi

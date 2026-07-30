@@ -6,13 +6,13 @@ WORKDIR /app
 # 安装依赖（opus-dev + 编译工具链用于 hraban/opus CGo 编码器）
 RUN apk add --no-cache git opus-dev gcc musl-dev pkgconf
 
+# 先复制依赖描述文件，利用 Docker 层缓存
+COPY go.mod go.sum ./
+ENV GOPROXY=https://goproxy.cn,direct
+RUN go mod download
+
 # 复制源码
 COPY . .
-
-# 下载依赖
-ENV GOPROXY=https://goproxy.cn,direct
-ENV GOSUMDB=off
-RUN go mod tidy
 
 # 构建（-tags opus_native 启用原生 libopus 编码器，需 CGo + opus-dev）
 RUN CGO_ENABLED=1 GOOS=linux go build -tags opus_native -o server .
