@@ -113,9 +113,9 @@ jobs:
           password: ${{ secrets.ACR_PASSWORD }}
 
       # ============================
-      # 核心优化：每服务只构建一次，按登录成功的 registry 动态组合 tag 列表。
-      # 原来每服务独立构建两次（GHCR + ACR），现在一次构建即可推到所有可用 registry，
-      # 同时开启 GHA 层缓存加速下次构建。
+      # 每服务只构建一次，一次性推到所有可用 registry。
+      # 推送完成后通过 docker manifest inspect 独立验证每个 registry，
+      # 单 registry 推送失败不误判另一个。
       # ============================
 
       # ============ Backend ============
@@ -148,24 +148,33 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ${{ steps.backend-tags.outputs.tags }}
-          cache-from: type=gha # 从上次 GHA 缓存读取层，加速 Go 依赖下载和编译。
-          cache-to: type=gha,mode=max # 导出所有层缓存供下次构建复用。
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Track backend results # 汇总 backend 在各 registry 的推送状态。
+      - name: Verify backend on GHCR # 通过 manifest inspect 独立验证 GHCR 推送结果。
+        id: check-backend-ghcr
+        if: steps.ghcr-login.outcome == 'success' && (success() || failure())
+        continue-on-error: true
+        run: |
+          docker manifest inspect "${{ steps.image-vars.outputs.backend_image }}:${{ steps.image-vars.outputs.image_tag }}"
+
+      - name: Verify backend on ACR # 通过 manifest inspect 独立验证 ACR 推送结果。
+        id: check-backend-acr
+        if: steps.acr-login.outcome == 'success' && (success() || failure())
+        continue-on-error: true
+        run: |
+          docker manifest inspect "${{ steps.image-vars.outputs.acr_backend_image }}:${{ steps.image-vars.outputs.image_tag }}"
+
+      - name: Track backend results # 基于 manifest inspect 结果独立追踪每个 registry。
         id: track-backend
         if: success() || failure()
         run: |
-          if [ "${{ steps.build-backend.outcome }}" = "success" ]; then
-            echo "ghcr=${{ steps.ghcr-login.outcome }}" >> "$GITHUB_OUTPUT"
-            echo "acr=${{ steps.acr-login.outcome }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "ghcr=failure" >> "$GITHUB_OUTPUT"
-            echo "acr=failure" >> "$GITHUB_OUTPUT"
-          fi
+          echo "ghcr=${{ steps.check-backend-ghcr.outcome }}" >> "$GITHUB_OUTPUT"
+          echo "acr=${{ steps.check-backend-acr.outcome }}" >> "$GITHUB_OUTPUT"
 
       # ============ Frontend ============
 
-      - name: Prepare frontend tags # 按实际登录状态动态生成 frontend tag 列表。
+      - name: Prepare frontend tags
         id: frontend-tags
         run: |
           tag="${{ steps.image-vars.outputs.image_tag }}"
@@ -184,7 +193,7 @@ jobs:
           fi
           { echo "tags<<EOF"; echo -n "$tags"; echo "EOF"; } >> "$GITHUB_OUTPUT"
 
-      - name: Build and push frontend # 单次构建 + 推送到所有可用 registry。
+      - name: Build and push frontend
         id: build-frontend
         uses: docker/build-push-action@v6
         with:
@@ -196,21 +205,30 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Track frontend results # 汇总 frontend 在各 registry 的推送状态。
+      - name: Verify frontend on GHCR
+        id: check-frontend-ghcr
+        if: steps.ghcr-login.outcome == 'success' && (success() || failure())
+        continue-on-error: true
+        run: |
+          docker manifest inspect "${{ steps.image-vars.outputs.frontend_image }}:${{ steps.image-vars.outputs.image_tag }}"
+
+      - name: Verify frontend on ACR
+        id: check-frontend-acr
+        if: steps.acr-login.outcome == 'success' && (success() || failure())
+        continue-on-error: true
+        run: |
+          docker manifest inspect "${{ steps.image-vars.outputs.acr_frontend_image }}:${{ steps.image-vars.outputs.image_tag }}"
+
+      - name: Track frontend results
         id: track-frontend
         if: success() || failure()
         run: |
-          if [ "${{ steps.build-frontend.outcome }}" = "success" ]; then
-            echo "ghcr=${{ steps.ghcr-login.outcome }}" >> "$GITHUB_OUTPUT"
-            echo "acr=${{ steps.acr-login.outcome }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "ghcr=failure" >> "$GITHUB_OUTPUT"
-            echo "acr=failure" >> "$GITHUB_OUTPUT"
-          fi
+          echo "ghcr=${{ steps.check-frontend-ghcr.outcome }}" >> "$GITHUB_OUTPUT"
+          echo "acr=${{ steps.check-frontend-acr.outcome }}" >> "$GITHUB_OUTPUT"
 
       # ============ Agent ============
 
-      - name: Prepare agent tags # 按实际登录状态动态生成 agent tag 列表。
+      - name: Prepare agent tags
         id: agent-tags
         run: |
           tag="${{ steps.image-vars.outputs.image_tag }}"
@@ -229,7 +247,7 @@ jobs:
           fi
           { echo "tags<<EOF"; echo -n "$tags"; echo "EOF"; } >> "$GITHUB_OUTPUT"
 
-      - name: Build and push agent # 单次构建 + 推送到所有可用 registry。
+      - name: Build and push agent
         id: build-agent
         uses: docker/build-push-action@v6
         with:
@@ -241,17 +259,26 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Track agent results # 汇总 agent 在各 registry 的推送状态。
+      - name: Verify agent on GHCR
+        id: check-agent-ghcr
+        if: steps.ghcr-login.outcome == 'success' && (success() || failure())
+        continue-on-error: true
+        run: |
+          docker manifest inspect "${{ steps.image-vars.outputs.agent_image }}:${{ steps.image-vars.outputs.image_tag }}"
+
+      - name: Verify agent on ACR
+        id: check-agent-acr
+        if: steps.acr-login.outcome == 'success' && (success() || failure())
+        continue-on-error: true
+        run: |
+          docker manifest inspect "${{ steps.image-vars.outputs.acr_agent_image }}:${{ steps.image-vars.outputs.image_tag }}"
+
+      - name: Track agent results
         id: track-agent
         if: success() || failure()
         run: |
-          if [ "${{ steps.build-agent.outcome }}" = "success" ]; then
-            echo "ghcr=${{ steps.ghcr-login.outcome }}" >> "$GITHUB_OUTPUT"
-            echo "acr=${{ steps.acr-login.outcome }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "ghcr=failure" >> "$GITHUB_OUTPUT"
-            echo "acr=failure" >> "$GITHUB_OUTPUT"
-          fi
+          echo "ghcr=${{ steps.check-agent-ghcr.outcome }}" >> "$GITHUB_OUTPUT"
+          echo "acr=${{ steps.check-agent-acr.outcome }}" >> "$GITHUB_OUTPUT"
 
       # ---- 校验：每个服务至少有一个 registry 推送成功 ----
 
