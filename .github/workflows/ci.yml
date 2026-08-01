@@ -113,172 +113,124 @@ jobs:
           password: ${{ secrets.ACR_PASSWORD }}
 
       # ============================
-      # 每服务只构建一次，一次性推到所有可用 registry。
-      # 推送完成后通过 docker manifest inspect 独立验证每个 registry，
-      # 单 registry 推送失败不误判另一个。
+      # 每服务先构建到 GHCR（GitHub Actions 同网络，可靠），
+      # 再通过 docker pull/tag/push 把镜像同步到 ACR（尽力而为）。
+      # GHCR 推送失败整个步骤失败，ACR 推送失败不影响整体流程。
       # ============================
 
       # ============ Backend ============
 
-      - name: Prepare backend tags # 按实际登录状态动态生成 backend tag 列表。
-        id: backend-tags
-        run: |
-          tag="${{ steps.image-vars.outputs.image_tag }}"
-          tags=""
-          if [ "${{ steps.ghcr-login.outcome }}" = "success" ]; then
-            tags="${tags}${{ steps.image-vars.outputs.backend_image }}:${tag}"$'\n'
-            tags="${tags}${{ steps.image-vars.outputs.backend_image }}:latest"$'\n'
-          fi
-          if [ "${{ steps.acr-login.outcome }}" = "success" ]; then
-            tags="${tags}${{ steps.image-vars.outputs.acr_backend_image }}:${tag}"$'\n'
-            tags="${tags}${{ steps.image-vars.outputs.acr_backend_image }}:latest"$'\n'
-          fi
-          if [ -z "$tags" ]; then
-            echo "ERROR: No registry available for backend"
-            exit 1
-          fi
-          { echo "tags<<EOF"; echo -n "$tags"; echo "EOF"; } >> "$GITHUB_OUTPUT"
-
-      - name: Build and push backend # 单次构建 + 推送到所有可用 registry。
+      - name: Build backend to GHCR # 构建并推送到 GHCR（同网段，几乎不会失败）。
         id: build-backend
+        if: steps.ghcr-login.outcome == 'success'
         uses: docker/build-push-action@v6
         with:
           context: ./backend
           file: ./backend/Dockerfile
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.backend-tags.outputs.tags }}
+          tags: |
+            ${{ steps.image-vars.outputs.backend_image }}:${{ steps.image-vars.outputs.image_tag }}
+            ${{ steps.image-vars.outputs.backend_image }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Verify backend on GHCR # 通过 manifest inspect 独立验证 GHCR 推送结果。
-        id: check-backend-ghcr
-        if: steps.ghcr-login.outcome == 'success' && (success() || failure())
-        continue-on-error: true
-        run: |
-          docker manifest inspect "${{ steps.image-vars.outputs.backend_image }}:${{ steps.image-vars.outputs.image_tag }}"
-
-      - name: Verify backend on ACR # 通过 manifest inspect 独立验证 ACR 推送结果。
-        id: check-backend-acr
+      - name: Sync backend to ACR # 从 GHCR 拉取再推送到 ACR，尽力而为。
+        id: sync-backend-acr
         if: steps.acr-login.outcome == 'success' && (success() || failure())
         continue-on-error: true
         run: |
-          docker manifest inspect "${{ steps.image-vars.outputs.acr_backend_image }}:${{ steps.image-vars.outputs.image_tag }}"
+          src="${{ steps.image-vars.outputs.backend_image }}:${{ steps.image-vars.outputs.image_tag }}"
+          dst="${{ steps.image-vars.outputs.acr_backend_image }}"
+          tag="${{ steps.image-vars.outputs.image_tag }}"
+          docker pull "${src}"
+          docker tag "${src}" "${dst}:${tag}"
+          docker tag "${src}" "${dst}:latest"
+          docker push "${dst}:${tag}"
+          docker push "${dst}:latest"
 
-      - name: Track backend results # 基于 manifest inspect 结果独立追踪每个 registry。
+      - name: Track backend results
         id: track-backend
         if: success() || failure()
         run: |
-          echo "ghcr=${{ steps.check-backend-ghcr.outcome }}" >> "$GITHUB_OUTPUT"
-          echo "acr=${{ steps.check-backend-acr.outcome }}" >> "$GITHUB_OUTPUT"
+          echo "ghcr=${{ steps.build-backend.outcome }}" >> "$GITHUB_OUTPUT"
+          echo "acr=${{ steps.sync-backend-acr.outcome }}" >> "$GITHUB_OUTPUT"
 
       # ============ Frontend ============
 
-      - name: Prepare frontend tags
-        id: frontend-tags
-        run: |
-          tag="${{ steps.image-vars.outputs.image_tag }}"
-          tags=""
-          if [ "${{ steps.ghcr-login.outcome }}" = "success" ]; then
-            tags="${tags}${{ steps.image-vars.outputs.frontend_image }}:${tag}"$'\n'
-            tags="${tags}${{ steps.image-vars.outputs.frontend_image }}:latest"$'\n'
-          fi
-          if [ "${{ steps.acr-login.outcome }}" = "success" ]; then
-            tags="${tags}${{ steps.image-vars.outputs.acr_frontend_image }}:${tag}"$'\n'
-            tags="${tags}${{ steps.image-vars.outputs.acr_frontend_image }}:latest"$'\n'
-          fi
-          if [ -z "$tags" ]; then
-            echo "ERROR: No registry available for frontend"
-            exit 1
-          fi
-          { echo "tags<<EOF"; echo -n "$tags"; echo "EOF"; } >> "$GITHUB_OUTPUT"
-
-      - name: Build and push frontend
+      - name: Build frontend to GHCR
         id: build-frontend
+        if: steps.ghcr-login.outcome == 'success'
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
           file: ./frontend/Dockerfile
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.frontend-tags.outputs.tags }}
+          tags: |
+            ${{ steps.image-vars.outputs.frontend_image }}:${{ steps.image-vars.outputs.image_tag }}
+            ${{ steps.image-vars.outputs.frontend_image }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Verify frontend on GHCR
-        id: check-frontend-ghcr
-        if: steps.ghcr-login.outcome == 'success' && (success() || failure())
-        continue-on-error: true
-        run: |
-          docker manifest inspect "${{ steps.image-vars.outputs.frontend_image }}:${{ steps.image-vars.outputs.image_tag }}"
-
-      - name: Verify frontend on ACR
-        id: check-frontend-acr
+      - name: Sync frontend to ACR
+        id: sync-frontend-acr
         if: steps.acr-login.outcome == 'success' && (success() || failure())
         continue-on-error: true
         run: |
-          docker manifest inspect "${{ steps.image-vars.outputs.acr_frontend_image }}:${{ steps.image-vars.outputs.image_tag }}"
+          src="${{ steps.image-vars.outputs.frontend_image }}:${{ steps.image-vars.outputs.image_tag }}"
+          dst="${{ steps.image-vars.outputs.acr_frontend_image }}"
+          tag="${{ steps.image-vars.outputs.image_tag }}"
+          docker pull "${src}"
+          docker tag "${src}" "${dst}:${tag}"
+          docker tag "${src}" "${dst}:latest"
+          docker push "${dst}:${tag}"
+          docker push "${dst}:latest"
 
       - name: Track frontend results
         id: track-frontend
         if: success() || failure()
         run: |
-          echo "ghcr=${{ steps.check-frontend-ghcr.outcome }}" >> "$GITHUB_OUTPUT"
-          echo "acr=${{ steps.check-frontend-acr.outcome }}" >> "$GITHUB_OUTPUT"
+          echo "ghcr=${{ steps.build-frontend.outcome }}" >> "$GITHUB_OUTPUT"
+          echo "acr=${{ steps.sync-frontend-acr.outcome }}" >> "$GITHUB_OUTPUT"
 
       # ============ Agent ============
 
-      - name: Prepare agent tags
-        id: agent-tags
-        run: |
-          tag="${{ steps.image-vars.outputs.image_tag }}"
-          tags=""
-          if [ "${{ steps.ghcr-login.outcome }}" = "success" ]; then
-            tags="${tags}${{ steps.image-vars.outputs.agent_image }}:${tag}"$'\n'
-            tags="${tags}${{ steps.image-vars.outputs.agent_image }}:latest"$'\n'
-          fi
-          if [ "${{ steps.acr-login.outcome }}" = "success" ]; then
-            tags="${tags}${{ steps.image-vars.outputs.acr_agent_image }}:${tag}"$'\n'
-            tags="${tags}${{ steps.image-vars.outputs.acr_agent_image }}:latest"$'\n'
-          fi
-          if [ -z "$tags" ]; then
-            echo "ERROR: No registry available for agent"
-            exit 1
-          fi
-          { echo "tags<<EOF"; echo -n "$tags"; echo "EOF"; } >> "$GITHUB_OUTPUT"
-
-      - name: Build and push agent
+      - name: Build agent to GHCR
         id: build-agent
+        if: steps.ghcr-login.outcome == 'success'
         uses: docker/build-push-action@v6
         with:
           context: ./agent
           file: ./agent/Dockerfile
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.agent-tags.outputs.tags }}
+          tags: |
+            ${{ steps.image-vars.outputs.agent_image }}:${{ steps.image-vars.outputs.image_tag }}
+            ${{ steps.image-vars.outputs.agent_image }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Verify agent on GHCR
-        id: check-agent-ghcr
-        if: steps.ghcr-login.outcome == 'success' && (success() || failure())
-        continue-on-error: true
-        run: |
-          docker manifest inspect "${{ steps.image-vars.outputs.agent_image }}:${{ steps.image-vars.outputs.image_tag }}"
-
-      - name: Verify agent on ACR
-        id: check-agent-acr
+      - name: Sync agent to ACR
+        id: sync-agent-acr
         if: steps.acr-login.outcome == 'success' && (success() || failure())
         continue-on-error: true
         run: |
-          docker manifest inspect "${{ steps.image-vars.outputs.acr_agent_image }}:${{ steps.image-vars.outputs.image_tag }}"
+          src="${{ steps.image-vars.outputs.agent_image }}:${{ steps.image-vars.outputs.image_tag }}"
+          dst="${{ steps.image-vars.outputs.acr_agent_image }}"
+          tag="${{ steps.image-vars.outputs.image_tag }}"
+          docker pull "${src}"
+          docker tag "${src}" "${dst}:${tag}"
+          docker tag "${src}" "${dst}:latest"
+          docker push "${dst}:${tag}"
+          docker push "${dst}:latest"
 
       - name: Track agent results
         id: track-agent
         if: success() || failure()
         run: |
-          echo "ghcr=${{ steps.check-agent-ghcr.outcome }}" >> "$GITHUB_OUTPUT"
-          echo "acr=${{ steps.check-agent-acr.outcome }}" >> "$GITHUB_OUTPUT"
+          echo "ghcr=${{ steps.build-agent.outcome }}" >> "$GITHUB_OUTPUT"
+          echo "acr=${{ steps.sync-agent-acr.outcome }}" >> "$GITHUB_OUTPUT"
 
       # ---- 校验：每个服务至少有一个 registry 推送成功 ----
 
