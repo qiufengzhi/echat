@@ -1,82 +1,82 @@
-name: deploy # 工作流名称，会显示在 GitHub Actions 页面里。
+name: deploy # 工作流名称，会显示在 GitHub Actions 页面里
 
 on:
-  push: # 推送到主分支时自动触发构建和部署。
+  push: # 推送到主分支时自动触发构建和部署
     branches:
       - main
     paths:
-      - ".github/workflows/ci.yml" # 工作流自身改动后也重新执行。
-      - "backend/**" # 后端代码变化时触发。
-      - "frontend/**" # 前端代码变化时触发。
-      - "agent/**" # Agent gRPC 服务变化时触发。
-      - "deploy/**" # 部署配置变化时触发。
+      - ".github/workflows/ci.yml" # 工作流自身改动后也重新执行
+      - "backend/**" # 后端代码变化时触发
+      - "frontend/**" # 前端代码变化时触发
+      - "agent/**" # Agent gRPC 服务变化时触发
+      - "deploy/**" # 部署配置变化时触发
 
-  workflow_dispatch: # 支持在 GitHub 页面上手动点击执行。
+  workflow_dispatch: # 支持在 GitHub 页面上手动点击执行
 
 permissions:
-  contents: read # 允许读取仓库代码。
-  packages: write # 允许把镜像推送到 GHCR。
+  contents: read # 允许读取仓库代码
+  packages: write # 允许把镜像推送到 GHCR
 
 concurrency:
-  group: deploy-${{ github.ref }} # 同一分支只保留一个部署流程，避免并发覆盖。
-  cancel-in-progress: true # 新的提交到来时取消旧的同分支部署。
+  group: deploy-${{ github.ref }} # 同一分支只保留一个部署流程，避免并发覆盖
+  cancel-in-progress: true # 新的提交到来时取消旧的同分支部署
 
 env:
-  GHCR_REGISTRY: ghcr.io # GitHub Container Registry，面向海外 / GitHub Actions 内部使用。
-  ACR_REGISTRY: crpi-aixkibkv62fgkkyl.cn-heyuan.personal.cr.aliyuncs.com/axjj # 阿里云 ACR 个人版实例地址（含命名空间）。
+  GHCR_REGISTRY: ghcr.io # GitHub Container Registry，面向海外 / GitHub Actions 内部使用
+  ACR_REGISTRY: crpi-cqc86h0ovlhhtcpq.cn-hangzhou.personal.cr.aliyuncs.com/axjj # 阿里云 ACR 个人版实例地址（含命名空间）
 
 jobs:
-  verify: # 先做基础校验，确保前后端都能正常构建/测试。
-    runs-on: ubuntu-latest # 使用 GitHub 提供的 Ubuntu Runner。
-    timeout-minutes: 10 # 防止校验步骤异常挂起耗尽配额。
+  verify: # 先做基础校验，确保前后端都能正常构建/测试
+    runs-on: ubuntu-latest # 使用 GitHub 提供的 Ubuntu Runner
+    timeout-minutes: 10 # 防止校验步骤异常挂起耗尽配额
 
     steps:
-      - name: Checkout repository # 拉取当前仓库代码。
+      - name: Checkout repository # 拉取当前仓库代码
         uses: actions/checkout@v4
 
-      - name: Set up Node.js # 准备前端构建所需的 Node 环境。
+      - name: Set up Node.js # 准备前端构建所需的 Node 环境
         uses: actions/setup-node@v4
         with:
-          node-version: 22 # 与前端 Dockerfile 使用的 Node LTS 版本保持一致。
-          cache: npm # 缓存 npm 依赖，加快重复构建。
-          cache-dependency-path: frontend/package-lock.json # 以前端锁文件作为缓存键。
+          node-version: 22 # 与前端 Dockerfile 使用的 Node LTS 版本保持一致
+          cache: npm # 缓存 npm 依赖，加快重复构建
+          cache-dependency-path: frontend/package-lock.json # 以前端锁文件作为缓存键
 
-      - name: Verify frontend # 类型检查 + 完整构建，确保前端无编译错误。
+      - name: Verify frontend # 类型检查 + 完整构建，确保前端无编译错误
         working-directory: frontend
         run: |
-          npm ci            # 按锁文件安装依赖，保证 CI 环境可复现。
-          npx tsc --noEmit  # 纯类型检查，不产出文件，比完整 build 更快。
-          npm run build     # 完整 Vite 构建，校验配置和打包结果。
+          npm ci            # 按锁文件安装依赖，保证 CI 环境可复现
+          npx tsc --noEmit  # 纯类型检查，不产出文件，比完整 build 更快
+          npm run build     # 完整 Vite 构建，校验配置和打包结果
 
-      - name: Set up Go # 准备后端测试所需的 Go 环境。
+      - name: Set up Go # 准备后端测试所需的 Go 环境
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25" # 与后端 Dockerfile 和 go.mod 使用的 Go 版本保持一致。
+          go-version: "1.25" # 与后端 Dockerfile 和 go.mod 使用的 Go 版本保持一致
 
-      - name: Test backend # 运行后端测试，至少保证编译和包依赖正常。
+      - name: Test backend # 运行后端测试，至少保证编译和包依赖正常
         working-directory: backend
         run: go test ./...
 
-  build-and-push: # 校验通过后构建镜像并推送到可用 registry。每服务只构建一次，按需打多 registry tag。
-    needs: verify # 依赖 verify 成功，避免无效代码进入部署阶段。
+  build-and-push: # 校验通过后构建镜像并推送到可用 registry。每服务只构建一次，按需打多 registry tag
+    needs: verify # 依赖 verify 成功，避免无效代码进入部署阶段
     runs-on: ubuntu-latest
-    timeout-minutes: 30 # 三个服务构建总时长上限。
+    timeout-minutes: 30 # 三个服务构建总时长上限
     outputs:
-      backend_image: ${{ steps.image-vars.outputs.backend_image }} # GHCR 后端镜像名。
-      frontend_image: ${{ steps.image-vars.outputs.frontend_image }} # GHCR 前端镜像名。
-      agent_image: ${{ steps.image-vars.outputs.agent_image }} # GHCR Agent 镜像名。
-      acr_backend_image: ${{ steps.image-vars.outputs.acr_backend_image }} # ACR 后端镜像名。
-      acr_frontend_image: ${{ steps.image-vars.outputs.acr_frontend_image }} # ACR 前端镜像名。
-      acr_agent_image: ${{ steps.image-vars.outputs.acr_agent_image }} # ACR Agent 镜像名。
-      image_tag: ${{ steps.image-vars.outputs.image_tag }} # 本次部署使用的镜像 tag。
-      ghcr_ok: ${{ steps.verify-pushes.outputs.ghcr_ok }} # GHCR 是否全部推送成功。
-      acr_ok: ${{ steps.verify-pushes.outputs.acr_ok }} # ACR 是否全部推送成功。
+      backend_image: ${{ steps.image-vars.outputs.backend_image }} # GHCR 后端镜像名
+      frontend_image: ${{ steps.image-vars.outputs.frontend_image }} # GHCR 前端镜像名
+      agent_image: ${{ steps.image-vars.outputs.agent_image }} # GHCR Agent 镜像名
+      acr_backend_image: ${{ steps.image-vars.outputs.acr_backend_image }} # ACR 后端镜像名
+      acr_frontend_image: ${{ steps.image-vars.outputs.acr_frontend_image }} # ACR 前端镜像名
+      acr_agent_image: ${{ steps.image-vars.outputs.acr_agent_image }} # ACR Agent 镜像名
+      image_tag: ${{ steps.image-vars.outputs.image_tag }} # 本次部署使用的镜像 tag
+      ghcr_ok: ${{ steps.verify-pushes.outputs.ghcr_ok }} # GHCR 是否全部推送成功
+      acr_ok: ${{ steps.verify-pushes.outputs.acr_ok }} # ACR 是否全部推送成功
 
     steps:
-      - name: Checkout repository # 拉取代码，供 Docker 构建上下文使用。
+      - name: Checkout repository # 拉取代码，供 Docker 构建上下文使用
         uses: actions/checkout@v4
 
-      - name: Prepare image names # 统一生成 GHCR 和 ACR 两套镜像名，全部转小写。
+      - name: Prepare image names # 统一生成 GHCR 和 ACR 两套镜像名，全部转小写
         id: image-vars
         run: |
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
@@ -89,38 +89,38 @@ jobs:
           echo "acr_agent_image=${ACR_REGISTRY}/echat-agent" >> "$GITHUB_OUTPUT"
           echo "image_tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Set up Docker Buildx # 启用 buildx 构建单平台镜像。
+      - name: Set up Docker Buildx # 启用 buildx 构建单平台镜像
         uses: docker/setup-buildx-action@v3
 
       # ---- 登录两个 registry，均为尽力而为 ----
 
-      - name: Log in to GHCR # 登录 GitHub 容器仓库。
+      - name: Log in to GHCR # 登录 GitHub 容器仓库
         id: ghcr-login
         uses: docker/login-action@v3
-        continue-on-error: true # GHCR 也可能偶发不可用，不阻塞流程。
+        continue-on-error: true # GHCR 也可能偶发不可用，不阻塞流程
         with:
           registry: ${{ env.GHCR_REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Log in to ACR # 登录阿里云容器镜像服务。
+      - name: Log in to ACR # 登录阿里云容器镜像服务
         id: acr-login
         uses: docker/login-action@v3
-        continue-on-error: true # ACR 从 GitHub Actions 海外网络访问不稳定。
+        continue-on-error: true # ACR 从 GitHub Actions 海外网络访问不稳定
         with:
           registry: ${{ env.ACR_REGISTRY }}
           username: ${{ secrets.ACR_USERNAME }}
           password: ${{ secrets.ACR_PASSWORD }}
 
       # ============================
-      # 每服务先构建到 GHCR（GitHub Actions 同网络，可靠），
-      # 再通过 docker pull/tag/push 把镜像同步到 ACR（尽力而为）。
-      # GHCR 推送失败整个步骤失败，ACR 推送失败不影响整体流程。
+      # 每服务先构建到 GHCR（GitHub Actions 同网络，可靠）
+      # 再通过 docker pull/tag/push 把镜像同步到 ACR（尽力而为）
+      # GHCR 推送失败整个步骤失败，ACR 推送失败不影响整体流程
       # ============================
 
       # ============ Backend ============
 
-      - name: Build backend to GHCR # 构建并推送到 GHCR（同网段，几乎不会失败）。
+      - name: Build backend to GHCR # 构建并推送到 GHCR（同网段，几乎不会失败）
         id: build-backend
         if: steps.ghcr-login.outcome == 'success'
         uses: docker/build-push-action@v6
