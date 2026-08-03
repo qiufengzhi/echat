@@ -17,7 +17,7 @@
 >
 > **环境**：
 > - 出现问题的环境：Windows，浏览器播放 TTS 语音
-> - 未验证环境：Linux（后续再测）
+> - Linux 环境：已通过 Docker 部署验证，Frame Pacing 方案在 Linux 下同样有效
 > - 优先级：先在 Windows 上解决，再考虑 Linux 兼容性
 
 ---
