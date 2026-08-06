@@ -5,7 +5,7 @@
 openai>=1.0.0
 
 # gRPC
-grpcio>=1.60.0
+grpcio>=1.70.0
 protobuf>=4.25.0
 
 # YAML 配置文件解析
@@ -13,3 +13,9 @@ pyyaml>=6.0
 
 # 结构化日志
 loguru>=0.7.0
+
+# JSON Schema 参数校验（工具系统）
+jsonschema>=4.0.0
+
+# 配置加载：类型化配置模型，替代手写 YAML 解析
+pydantic>=2.0

@@ -8,6 +8,7 @@ option go_package = "backend/proto/llm";
 // 后端将 ASR 识别文本发给 LLM，LLM 调用 API 处理后流式回传结果。
 service LLMService {
   rpc ChatStream(stream LLMRequest) returns (stream LLMResponse);
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
 }
 
 message LLMRequest {
@@ -17,6 +18,8 @@ message LLMRequest {
   string user_text = 4;  // 用户输入文本（来自 ASR 识别）
   bool is_last = 5;      // 标记是否为本次请求的最后一个文本块，为 true 时 LLM 开始生成回复
   int64 seq = 6;         // 请求序号，用于保持消息顺序
+  bool cancel = 7;       // 取消当前正在生成的回复
+  string user_id = 8;    // 说话用户的业务 ID（预留，个性化用）
 }
 
 message LLMResponse {
@@ -26,4 +29,27 @@ message LLMResponse {
   string response_text = 4;   // LLM 生成的文本片段（流式返回）
   bool is_final = 5;          // 标记是否为本次回复的最后一个片段，为 true 表示回复结束
   int64 seq = 6;              // 对应请求的序号
+  string error_code = 7;      // 错误码，空 = 正常
+  string event_type = 8;      // "token" | "tool_call" | "tool_result"
+  string tool_call_id = 9;    // 工具调用 ID
+  string tool_name = 10;      // 工具名称
+  string tool_arguments = 11; // 工具参数 JSON
+  string tool_result = 12;    // 工具结果文本
+}
+
+message HealthCheckRequest {
+  string service = 1; // 可选的服务名
+}
+
+message HealthCheckResponse {
+  enum ServingStatus {
+    UNKNOWN = 0;
+    SERVING = 1;
+    NOT_SERVING = 2;
+    DEGRADED = 3;
+  }
+  ServingStatus status = 1;
+  int32 active_sessions = 2;
+  string provider_name = 3;
+  double uptime_seconds = 4;
 }
