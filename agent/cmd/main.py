@@ -27,6 +27,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from aiohttp import web
+
 from agent.config.loader import Config, build_parser
 from agent.core.orchestrator import ChatOrchestrator
 from agent.memory.in_memory import InMemoryMemory
@@ -35,6 +37,7 @@ from agent.pb import llm_pb2_grpc
 from agent.providers.openai_compatible import OpenAICompatibleProvider
 from agent.server.grpc_service import LLMServiceServicer
 from agent.server.health import HealthService
+from agent.server.http_api import build_http_app
 from agent.server.interceptors import ErrorHandlingInterceptor, LoggingInterceptor
 from agent.tools.builtin import make_tools
 from agent.tools.registry import ToolRegistry
@@ -154,11 +157,24 @@ async def serve(cfg: Config, orchestrator: ChatOrchestrator, tool_registry: Tool
         addr, cfg.llm.model, cfg.llm.provider, cfg.strategy,
     )
 
+    # 启动 HTTP 调试接口（与 gRPC 同进程、同事件循环，端口见配置 http.port）
+    http_runner = None
+    if cfg.http.enabled:
+        app = build_http_app(orchestrator)
+        http_runner = web.AppRunner(app)
+        await http_runner.setup()
+        site = web.TCPSite(http_runner, cfg.http.host, cfg.http.port)
+        await site.start()
+        logger.info("HTTP 调试接口: http://{}:{}/api/v1/chat", cfg.http.host, cfg.http.port)
+
     try:
         await server.wait_for_termination()
     except KeyboardInterrupt:
         logger.info("Agent gRPC 服务正在关闭...")
         await server.stop(5)
+    finally:
+        if http_runner is not None:
+            await http_runner.cleanup()
 
 
 def main() -> None:

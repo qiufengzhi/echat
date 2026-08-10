@@ -36,6 +36,16 @@ class ServerConfig(BaseModel):
     port: int  # 监听端口
 
 
+class HttpConfig(BaseModel):
+    """HTTP 调试接口配置"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool  # 是否启用 HTTP 调试接口
+    host: str  # HTTP 监听地址
+    port: int  # HTTP 监听端口
+
+
 class LLMConfig(BaseModel):
     """LLM 提供商配置"""
 
@@ -107,6 +117,9 @@ class LoggingConfig(BaseModel):
 _ENV_MAP: List[Tuple[str, Tuple[str, ...]]] = [
     ("AGENT_HOST", ("server", "host")),
     ("AGENT_PORT", ("server", "port")),
+    ("AGENT_HTTP_ENABLED", ("http", "enabled")),
+    ("AGENT_HTTP_HOST", ("http", "host")),
+    ("AGENT_HTTP_PORT", ("http", "port")),
     ("LLM_PROVIDER", ("llm", "provider")),
     ("LLM_API_KEY", ("llm", "api_key")),
     ("LLM_BASE_URL", ("llm", "base_url")),
@@ -139,6 +152,7 @@ class Config(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     server: ServerConfig  # 服务监听配置
+    http: HttpConfig  # HTTP 调试接口配置
     llm: LLMConfig  # LLM 提供商配置
     session: SessionConfig  # 会话生命周期配置
     strategy: str  # 自主循环策略名

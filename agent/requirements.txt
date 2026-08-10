@@ -4,6 +4,9 @@
 # OpenAI 兼容客户端（调用 DeepSeek API）
 openai>=1.0.0
 
+# HTTP 调试接口
+aiohttp>=3.9,<4
+
 # gRPC
 grpcio>=1.70.0
 protobuf>=4.25.0

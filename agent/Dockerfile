@@ -28,4 +28,5 @@ WORKDIR /app
 COPY . ./agent/
 
 EXPOSE 50053
+EXPOSE 40001
 CMD ["python", "-m", "agent.cmd.main", "--config", "agent/config.yaml"]
