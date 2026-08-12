@@ -115,9 +115,12 @@ export interface AITogglePayload {
   enable: boolean // true 表示开启 AI 语音助手，false 表示关闭
 }
 
+// AIAssistantState 是 AI 语音助手的三态，与后端 global.AIState 对应
+export type AIAssistantState = 'offline' | 'standby' | 'online'
+
 // AIStatusPayload 是服务端回复 AI 语音助手当前状态的载荷
 export interface AIStatusPayload {
-  enable: boolean // 当前 AI 语音助手的实际开关状态
+  state: AIAssistantState // 当前 AI 语音助手状态："offline" | "standby" | "online"
 }
 
 // ─── 通用消息结构 ───

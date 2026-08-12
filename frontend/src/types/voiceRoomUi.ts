@@ -1,5 +1,7 @@
 // 本文件集中描述声聊间页面层使用的类型，避免页面组件直接散落字符串和临时对象
 
+import type { AIAssistantState } from './signaling'
+
 export type AppView =
   | 'home' // 首页/进入页，用户在这里创建或加入声聊间
   | 'room' // 声聊间页，用户已经进入房间并开始连麦或等待朋友
@@ -13,6 +15,7 @@ export type RoomConnectionTone =
 export type RoomParticipantRole =
   | 'host' // 房主，通常是创建房间的人
   | 'member' // 普通成员，已经进入当前声聊间
+  | 'ai' // AI 助手席位，系统固定的虚拟成员
   | 'empty' // 空席位，用于邀请更多朋友加入
 
 export interface VoiceRoomMember {
@@ -24,6 +27,7 @@ export interface VoiceRoomMember {
   isSpeaking: boolean // 该成员是否正在说话，第一阶段主要用于 UI 表达和后续音量检测扩展
   isOnline: boolean // 该成员是否在线，空席位和已离开成员为 false
   hasAudio: boolean // SFU 下该成员是否有远端音频流到达
+  aiState?: AIAssistantState // AI 席位专用：当前 AI 三态，仅 role === 'ai' 时有值
 }
 
 export interface RoomStatusCopy {

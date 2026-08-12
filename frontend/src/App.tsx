@@ -131,6 +131,7 @@ function App() {
           isMuted={voiceRoom.isMuted}
           isSpeakerOn={voiceRoom.isSpeakerOn}
           isAIEnabled={voiceRoom.isAIEnabled}
+          aiState={voiceRoom.aiState}
           error={voiceRoom.error}
           onToggleMute={voiceRoom.toggleMute}
           onToggleSpeaker={voiceRoom.toggleSpeaker}

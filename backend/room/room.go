@@ -29,6 +29,18 @@ func StartCleanupLoop() {
 	go cleanupIdleRooms()
 }
 
+// StartAIStateBroadcaster 启动协程，消费 global 的 AI 状态变更事件并广播给对应房间全体成员
+// 唤醒词/休眠词/静默超时等发生在 sfu 与 global 包内的迁移，都靠它同步到前端
+func StartAIStateBroadcaster() {
+	go func() {
+		for evt := range global.AIStateChangeCh {
+			broadcastToRoom(evt.RoomID, "", MsgTypeAiStatus, AiToggleRes{
+				State: evt.State.String(),
+			})
+		}
+	}()
+}
+
 // createRoom 创建房间；如果房间已存在，则直接返回已有房间
 // roomID 是前端传入或生成的房间号，调用前应已做空值校验
 func createRoom(roomID string) *Room {
@@ -169,19 +181,21 @@ func handleMessage(client *Client, msg *Message) {
 	}
 }
 
-// handleAiToggle 处理 AI 助手开关请求，存储开关状态后回复 ai_status 确认
+// handleAiToggle 处理 AI 助手开关请求，按开关更新房间 AI 状态
+// 状态迁移事件由 StartAIStateBroadcaster 统一广播给全房间，此处不再单独回复
 func handleAiToggle(client *Client, msg *Message) {
 	var req AiToggleReq
 	if err := json.Unmarshal(msg.Payload, &req); err != nil {
 		sendError(client, "invalid payload")
 		return
 	}
-	global.StartAiAssistant.Store(req.Enable)
 
-	// 回复客户端当前 AI 语音助手的实际开关状态，前端据此更新按钮亮灭
-	sendToClient(client, MsgTypeAiStatus, AiToggleRes{
-		Enable: req.Enable,
-	}, client.RoomID)
+	roomID := client.RoomID
+	if req.Enable {
+		global.AIStates.SetOnline(roomID) // 开启：直接进入在线状态
+	} else {
+		global.AIStates.SetOffline(roomID) // 关闭：回到离线状态
+	}
 }
 
 // handleJoin 把客户端加入指定房间，创建 SFU PeerConnection（不生成 Offer）
@@ -453,6 +467,7 @@ func disconnect(client *Client, preferredNextHostID string) {
 					})
 
 					if wasHost && nextHostID != "" && nextHostID != client.ID {
+						global.AIStates.SetOffline(roomID) // 房主交接时重置 AI 为离线，新房主需重新开启
 						broadcastToRoom(roomID, client.ID, MsgTypeHostChanged, map[string]string{
 							"host_id": nextHostID,
 						})
@@ -468,6 +483,7 @@ func disconnect(client *Client, preferredNextHostID string) {
 					r.Lock.RUnlock()
 					if empty {
 						delete(allSignalRooms, roomID)
+						global.AIStates.Remove(roomID) // 清理房间 AI 状态，避免状态泄漏
 						logger.Infow("房间已删除", "roomID", roomID)
 					}
 				}

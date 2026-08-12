@@ -1,6 +1,4 @@
+// Package global 存放需要被多个包共享、且不依赖业务包状态的全局数据
+//
+// AI 助手按房间隔离的状态机见 ai.go，替代原先的全局开关 StartAiAssistant
 package global
-
-import "sync/atomic"
-
-// StartAiAssistant 是否启动 AI 助手服务, 默认为 false。因为需要语音唤醒，因此ASR不能停，当前打断的是 ASR-->LLM  LLM-->TTS
-var StartAiAssistant atomic.Bool

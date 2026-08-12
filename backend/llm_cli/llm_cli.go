@@ -33,7 +33,8 @@ func Init() {
 	// TTS 消费协程，复用 Out 通道生命周期
 	go func() {
 		for resp := range LLMServiceClient.Out {
-			if !global.StartAiAssistant.Load() {
+			// 该房间 AI 已离线时不播放回复，待机/在线则正常播放
+			if global.AIStates.Get(resp.RoomId) == global.AIOffline {
 				continue
 			}
 			tts_cli.GlobalTTSService.ProcessText(resp)

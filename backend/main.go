@@ -3,6 +3,7 @@ package main
 import (
 	"echat-backend/asr_cli"
 	"echat-backend/config"
+	"echat-backend/global"
 	"echat-backend/handlers"
 	"echat-backend/llm_cli"
 	"echat-backend/logging"
@@ -10,6 +11,7 @@ import (
 	"echat-backend/sfu"
 	"echat-backend/tts_cli"
 	"net/http"
+	"time"
 )
 
 // main 加载配置、初始化各模块，然后启动 HTTP/HTTPS 服务
@@ -41,6 +43,16 @@ func main() {
 
 	// 启动后台清理协程，定期回收空房间
 	room.StartCleanupLoop()
+
+	// 启动 AI 状态变更广播协程，把唤醒/休眠/静默超时等迁移同步给前端
+	room.StartAIStateBroadcaster()
+
+	// 启动在线静默超时清理协程，静默超过阈值自动转待机，时长来自配置 ai.standby_timeout
+	standbyTimeout, err := time.ParseDuration(config.Get().AI.StandbyTimeout)
+	if err != nil || standbyTimeout <= 0 {
+		standbyTimeout = 60 * time.Second // 配置非法时兜底 60 秒
+	}
+	global.AIStates.StartStandbyCleanup(10*time.Second, standbyTimeout)
 
 	cfg := config.Get()
 	addr := cfg.Server.Addr

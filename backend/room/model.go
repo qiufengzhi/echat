@@ -129,7 +129,7 @@ type AiToggleReq struct {
 
 // AiToggleRes 是服务端回复客户端当前 AI 语音助手状态的载荷
 type AiToggleRes struct {
-	Enable bool `json:"enable"` // 当前 AI 语音助手的实际开关状态
+	State string `json:"state"` // 当前 AI 语音助手状态："offline" | "standby" | "online"
 }
 
 // Message 是前后端 WebSocket 共用的信令信封，具体 payload 结构由 Type 决定

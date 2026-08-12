@@ -392,6 +392,95 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 }
 .seat.empty .nm { color: var(--pink); font-weight: 800; }
 
+/* ---------- AI 助手席位 ---------- */
+.seat.ai .ava {
+  background: linear-gradient(150deg, #C9B8F0, #9B7FE8); /* 紫色系，与真人渐变区分 */
+}
+.seat.ai .ai-ic {
+  font-size: 26px;
+  line-height: 1;
+}
+
+/* 离线：灰色，无光环 */
+.seat.ai.offline .ava {
+  filter: grayscale(1) opacity(.45);
+}
+
+/* 待机：微光，缓慢呼吸 */
+.seat.ai.standby .ava::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 2px solid rgba(155, 127, 232, .4);
+  animation: ai-standby 3.6s ease-in-out infinite;
+}
+@keyframes ai-standby {
+  0%, 100% { transform: scale(1); opacity: .25; }
+  50% { transform: scale(1.14); opacity: .6; }
+}
+
+/* 在线：点亮，光环常亮（带轻微光晕呼吸） */
+.seat.ai.online .ava::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 2.5px solid #8E6EE8;
+  animation: ai-online 2.6s ease-in-out infinite;
+}
+@keyframes ai-online {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(142, 110, 232, .38); opacity: .92; }
+  50% { box-shadow: 0 0 16px 4px rgba(142, 110, 232, .5); opacity: 1; }
+}
+
+/* ---------- 待机唤醒提示气泡 ---------- */
+.ai-standby-bubble {
+  position: fixed;
+  right: 18px;
+  bottom: 84px; /* 悬在底部控制栏上方，避免遮挡 */
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: #fff;
+  border: 1.5px solid #DCC8FA;
+  border-radius: 999px;
+  box-shadow: 0 6px 18px rgba(155, 127, 232, .16);
+  padding: 9px 16px 9px 12px;
+  animation: asb-fade-up .5s ease both;
+}
+.ai-standby-bubble .asb-ic {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #F0E7FE;
+  color: #8B6AE0;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  animation: asb-breathe 2.6s ease-in-out infinite;
+}
+.ai-standby-bubble .asb-txt {
+  font-size: 13px;
+  font-weight: 800;
+  color: #3D2A35;
+  white-space: nowrap;
+}
+.ai-standby-bubble .asb-txt em {
+  font-style: normal;
+  color: #8B6AE0;
+  font-weight: 900;
+}
+@keyframes asb-fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes asb-breathe {
+  0%, 100% { transform: scale(1); opacity: .85; }
+  50% { transform: scale(1.1); opacity: 1; }
+}
+
 /* ---------- 控制栏 ---------- */
 .control-dock {
   position: fixed;

@@ -21,6 +21,7 @@ type Config struct {
 	VAD    VADConfig    `yaml:"vad"`    // 语音活动检测配置
 	LLM    LLMConfig    `yaml:"llm"`    // LLM 服务配置
 	TTS    TTSConfig    `yaml:"tts"`    // 语音合成配置
+	AI     AIConfig     `yaml:"ai"`     // AI 语音助手配置
 	Room   RoomConfig   `yaml:"room"`   // 房间与 WebSocket 配置
 	Log    LogConfig    `yaml:"log"`    // 日志配置
 }
@@ -97,6 +98,15 @@ type RoomConfig struct {
 	WSReadBuffer  int    `yaml:"ws_read_buffer"`  // WebSocket 读缓冲区大小（字节）
 	WSWriteBuffer int    `yaml:"ws_write_buffer"` // WebSocket 写缓冲区大小（字节）
 	WSCheckOrigin bool   `yaml:"ws_check_origin"` // 是否校验 WebSocket 来源
+}
+
+// AIConfig AI 语音助手配置
+type AIConfig struct {
+	// StandbyTimeout 在线状态静默超时后自动转待机的时长
+	// 使用 Go time.ParseDuration 可解析的格式，单位支持 ns / us(µs) / ms / s / m / h，可组合书写
+	// 例如 "500ms"、"60s"、"1m30s"、"2h"
+	// 默认 "60s"，可通过环境变量 AI_STANDBY_TIMEOUT 覆盖
+	StandbyTimeout string `yaml:"standby_timeout"`
 }
 
 // LogConfig 日志配置
@@ -180,6 +190,9 @@ func DefaultConfig() *Config {
 			WSReadBuffer:  1024,
 			WSWriteBuffer: 1024,
 			WSCheckOrigin: true,
+		},
+		AI: AIConfig{
+			StandbyTimeout: "60s",
 		},
 		Log: LogConfig{
 			Level:         "info",
@@ -345,6 +358,11 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("ROOM_WS_CHECK_ORIGIN"); v != "" {
 		cfg.Room.WSCheckOrigin = strings.EqualFold(v, "true")
+	}
+
+	// --- AI ---
+	if v := os.Getenv("AI_STANDBY_TIMEOUT"); v != "" {
+		cfg.AI.StandbyTimeout = v
 	}
 
 	// --- Log ---

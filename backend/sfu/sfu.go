@@ -33,6 +33,7 @@ import (
 	asrpb "echat-backend/proto/asr"
 	llmpb "echat-backend/proto/llm"
 	"echat-backend/tts_cli"
+	"echat-backend/wakeword"
 	"fmt"
 	"net"
 	"strings"
@@ -550,14 +551,37 @@ func StartASRLogger() {
 	go getAsrRes()
 }
 
-// getAsrRes 读取阿里云 ASR 返回的识别结果并打印日志
+// getAsrRes 读取阿里云 ASR 返回的识别结果，按房间 AI 状态做唤醒词/休眠词网关后送 LLM
 func getAsrRes() {
 	for res := range asr_cli.GlobalRecognizer.AudioOut {
-		// todo 唤醒/屏蔽 AI助手 唤醒：提示词、按钮  打断：任何话、按钮
-		// 是否开启ai语音助手
-		if !global.StartAiAssistant.Load() {
+		switch global.AIStates.Get(res.RoomId) {
+		case global.AIOffline:
+			// 离线：不监听、不唤醒，结果直接丢弃
 			continue
+
+		case global.AIStandby:
+			// 待机：只在句末匹配唤醒词，命中转在线；中间结果与未命中结果一律丢弃
+			if !res.IsFinal {
+				continue
+			}
+			if wakeword.IsWake(res.Text) {
+				global.AIStates.TryWake(res.RoomId)
+				logger.Infow("命中唤醒词", "roomID", res.RoomId, "clientID", res.ClientId, "text", res.Text)
+			}
+			// 唤醒词本身不送 LLM，等下一句才是真正的输入
+			continue
+
+		case global.AIOnline:
+			// 在线：句末匹配休眠词，命中转待机且不送 LLM
+			if res.IsFinal && wakeword.IsSleep(res.Text) {
+				global.AIStates.TrySleep(res.RoomId)
+				logger.Infow("命中休眠词", "roomID", res.RoomId, "clientID", res.ClientId, "text", res.Text)
+				continue
+			}
+			// 刷新活动时间，推迟静默超时
+			global.AIStates.Touch(res.RoomId)
 		}
+
 		logger.Infow("收到识别结果", "userID", res.ClientId, "text", res.Text, "isFinal", res.IsFinal, "seq", res.Seq)
 		// 将识别结果送 LLM
 		llm_cli.LLMServiceClient.In <- &llmpb.LLMRequest{

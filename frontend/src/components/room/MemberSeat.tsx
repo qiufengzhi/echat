@@ -26,6 +26,19 @@ export default function MemberSeat({ member, onInvite }: MemberSeatProps) {
     )
   }
 
+  if (member.role === 'ai') {
+    // AI 助手席位：三态全部用光环特效表达，不显示状态文字
+    const aiState = member.aiState ?? 'offline'
+    return (
+      <div className={`seat ai ${aiState}`}>
+        <div className="ava">
+          <span className="ai-ic">🤖</span>
+        </div>
+        <div className="nm">{member.name}</div>
+      </div>
+    )
+  }
+
   const isSpeaking = member.isSpeaking && !member.isMuted
   const statusText = member.isMuted ? '已静音' : member.isSpeaking ? '说话中' : '在线'
   const gradientClass = avatarGradient(member.id)

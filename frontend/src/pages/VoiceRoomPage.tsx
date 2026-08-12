@@ -5,6 +5,7 @@ import MemberSeatGrid from '../components/room/MemberSeatGrid'
 import RemoteAudio from '../components/room/RemoteAudio'
 import RoomTopBar from '../components/room/RoomTopBar'
 import type { RoomStatusCopy, VoiceRoomMember } from '../types/voiceRoomUi'
+import type { AIAssistantState } from '../types/signaling'
 
 interface HookUser {
   id: string
@@ -25,6 +26,7 @@ interface VoiceRoomPageProps {
   isMuted: boolean
   isSpeakerOn: boolean
   isAIEnabled: boolean
+  aiState: AIAssistantState
   error: string | null
   onToggleMute: () => void
   onToggleSpeaker: () => void
@@ -39,6 +41,7 @@ function buildMembers(
   isMuted: boolean,
   isConnected: boolean,
   remoteStreams: Map<string, MediaStream>,
+  aiState: AIAssistantState,
 ): VoiceRoomMember[] {
   const knownUsers = users.length > 0 ? users : []
   const hasSelfInUsers = knownUsers.some(u => u.username === username)
@@ -82,6 +85,19 @@ function buildMembers(
     })
   }
 
+  // AI 助手席位是系统固定虚拟成员，始终展示，三态由光环特效表达
+  const aiSeat: VoiceRoomMember = {
+    id: 'ai-assistant',
+    name: '小月',
+    role: 'ai',
+    isSelf: false,
+    isMuted: false,
+    isSpeaking: false,
+    isOnline: aiState !== 'offline',
+    hasAudio: false,
+    aiState,
+  }
+
   // 始终保留一个空席位作为邀请入口
   const emptySeat: VoiceRoomMember = {
     id: 'empty-invite',
@@ -94,7 +110,7 @@ function buildMembers(
     hasAudio: false,
   }
 
-  return [...realMembers, emptySeat]
+  return [...realMembers, aiSeat, emptySeat]
 }
 
 function getRoomStatus(isConnected: boolean, error: string | null): RoomStatusCopy {
@@ -114,6 +130,7 @@ export default function VoiceRoomPage({
   isMuted,
   isSpeakerOn,
   isAIEnabled,
+  aiState,
   error,
   onToggleMute,
   onToggleSpeaker,
@@ -121,8 +138,8 @@ export default function VoiceRoomPage({
   onLeave,
 }: VoiceRoomPageProps) {
   const members = useMemo(
-    () => buildMembers(users, username, hostId, isHost, isMuted, isConnected, remoteStreams),
-    [users, username, hostId, isHost, isMuted, isConnected, remoteStreams],
+    () => buildMembers(users, username, hostId, isHost, isMuted, isConnected, remoteStreams, aiState),
+    [users, username, hostId, isHost, isMuted, isConnected, remoteStreams, aiState],
   )
   const onlineCount = members.filter(m => m.isOnline).length
   const status = getRoomStatus(isConnected, error)
@@ -147,6 +164,14 @@ export default function VoiceRoomPage({
       {error && (
         <div className="reconnect-banner">
           🔄 连接不太稳，正在帮你恢复…
+        </div>
+      )}
+
+      {/* 待机态唤醒提示气泡：仅待机时显示，提示用户唤醒词 */}
+      {aiState === 'standby' && (
+        <div className="ai-standby-bubble" role="status" aria-label="唤醒提示">
+          <span className="asb-ic">✨</span>
+          <span className="asb-txt">说一声「<em>小月</em>」唤醒我</span>
         </div>
       )}
 
