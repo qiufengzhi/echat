@@ -118,19 +118,17 @@ export default function HomePage({
             onChange={e => { setUsername(e.target.value); setFormError(null) }}
             maxLength={20}
             disabled={isJoining}
-            placeholder="你的昵称"
           />
         </label>
 
         <label className="field">
-          <span>房间号</span>
+          <span>房间</span>
           <input
             type="text"
             value={roomId}
             onChange={e => { setRoomId(e.target.value.toUpperCase()); setFormError(null) }}
             maxLength={12}
             disabled={isJoining}
-            placeholder="留空则创建新房间"
           />
         </label>
 

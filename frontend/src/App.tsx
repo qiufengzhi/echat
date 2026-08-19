@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import HostTransferModal from './components/modals/HostTransferModal'
 import { useVoiceRoom } from './hooks/useVoiceRoom'
@@ -6,6 +6,30 @@ import HomePage from './pages/HomePage'
 import LeavePage from './pages/LeavePage'
 import VoiceRoomPage from './pages/VoiceRoomPage'
 import type { AppView, JoinRoomInput, LeaveRoomSummary } from './types/voiceRoomUi'
+
+// ROOM_SESSION_KEY 用于页面刷新后恢复房间状态，避免重连或手动刷新后直接回到首页
+const ROOM_SESSION_KEY = 'voice_room_session'
+
+// RoomSession 描述需要持久化的房间会话信息
+interface RoomSession {
+  view: AppView // 当前页面视图
+  roomId: string // 当前房间号
+  username: string // 当前用户昵称
+}
+
+// getInitialSession 读取 sessionStorage 中保存的房间会话，用于刷新后恢复
+function getInitialSession(): Partial<RoomSession> {
+  if (typeof window === 'undefined') return {}
+  const saved = sessionStorage.getItem(ROOM_SESSION_KEY)
+  if (!saved) return {}
+
+  try {
+    return JSON.parse(saved) as RoomSession
+  } catch {
+    sessionStorage.removeItem(ROOM_SESSION_KEY)
+    return {}
+  }
+}
 
 function getInitialRoomId() {
   if (typeof window === 'undefined') return ''
@@ -25,9 +49,10 @@ function formatDuration(durationMs: number) {
 }
 
 function App() {
-  const [view, setView] = useState<AppView>('home')
-  const [roomId, setRoomId] = useState(getInitialRoomId)
-  const [username, setUsername] = useState('')
+  const initialSession = getInitialSession()
+  const [view, setView] = useState<AppView>(initialSession.view || 'home')
+  const [roomId, setRoomId] = useState(initialSession.roomId || getInitialRoomId)
+  const [username, setUsername] = useState(initialSession.username || '')
   const [isJoining, setIsJoining] = useState(false)
   const [joinedAt, setJoinedAt] = useState<number | null>(null)
   const [isHostTransferOpen, setIsHostTransferOpen] = useState(false)
@@ -71,6 +96,41 @@ function App() {
     },
     [voiceRoom],
   )
+
+  // 页面刷新后自动恢复房间会话，避免重连失败或用户手动刷新后直接回到首页
+  const hasRestoredRef = useRef(false)
+  useEffect(() => {
+    if (hasRestoredRef.current) return
+    hasRestoredRef.current = true
+
+    const saved = sessionStorage.getItem(ROOM_SESSION_KEY)
+    if (!saved) return
+
+    try {
+      const session = JSON.parse(saved) as RoomSession
+      if (session.view === 'room' && session.roomId && session.username) {
+        void enterRoom({ roomId: session.roomId, username: session.username })
+      }
+    } catch {
+      sessionStorage.removeItem(ROOM_SESSION_KEY)
+    }
+  }, [enterRoom])
+
+  // 当前在房间时持久化会话，离开/返回首页时清理
+  const isInitialRenderRef = useRef(true)
+  useEffect(() => {
+    if (isInitialRenderRef.current) {
+      isInitialRenderRef.current = false
+      return
+    }
+
+    if (view === 'room' && roomId && username) {
+      const session: RoomSession = { view, roomId, username }
+      sessionStorage.setItem(ROOM_SESSION_KEY, JSON.stringify(session))
+    } else {
+      sessionStorage.removeItem(ROOM_SESSION_KEY)
+    }
+  }, [view, roomId, username])
 
   const finalizeLeave = useCallback(
     (nextHostId?: string) => {
@@ -128,6 +188,7 @@ function App() {
           localStream={voiceRoom.localStream}
           remoteStreams={voiceRoom.remoteStreams}
           isConnected={voiceRoom.isConnected}
+          isReconnecting={voiceRoom.isReconnecting}
           isMuted={voiceRoom.isMuted}
           isSpeakerOn={voiceRoom.isSpeakerOn}
           isAIEnabled={voiceRoom.isAIEnabled}

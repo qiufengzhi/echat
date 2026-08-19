@@ -23,6 +23,7 @@ interface VoiceRoomPageProps {
   localStream: MediaStream | null
   remoteStreams: Map<string, MediaStream>
   isConnected: boolean
+  isReconnecting: boolean // 信令 WebSocket 是否正在断线重连中
   isMuted: boolean
   isSpeakerOn: boolean
   isAIEnabled: boolean
@@ -113,8 +114,9 @@ function buildMembers(
   return [...realMembers, aiSeat, emptySeat]
 }
 
-function getRoomStatus(isConnected: boolean, error: string | null): RoomStatusCopy {
-  if (error) return { connectionText: '重连中', qualityText: '正在恢复', tone: 'reconnecting' }
+function getRoomStatus(isConnected: boolean, isReconnecting: boolean, error: string | null): RoomStatusCopy {
+  if (isReconnecting) return { connectionText: '重连中', qualityText: '正在恢复', tone: 'reconnecting' }
+  if (error) return { connectionText: '连接异常', qualityText: '请检查网络', tone: 'reconnecting' }
   if (isConnected) return { connectionText: '已连上', qualityText: '声音流畅', tone: 'ready' }
   return { connectionText: '准备中', qualityText: '等朋友进来', tone: 'waiting' }
 }
@@ -127,6 +129,7 @@ export default function VoiceRoomPage({
   users,
   remoteStreams,
   isConnected,
+  isReconnecting,
   isMuted,
   isSpeakerOn,
   isAIEnabled,
@@ -142,7 +145,7 @@ export default function VoiceRoomPage({
     [users, username, hostId, isHost, isMuted, isConnected, remoteStreams, aiState],
   )
   const onlineCount = members.filter(m => m.isOnline).length
-  const status = getRoomStatus(isConnected, error)
+  const status = getRoomStatus(isConnected, isReconnecting, error)
 
   const handleInvite = useCallback(() => {
     const link = `${window.location.origin}${window.location.pathname}?room=${roomId}`
@@ -161,7 +164,7 @@ export default function VoiceRoomPage({
         status={status}
       />
 
-      {error && (
+      {isReconnecting && (
         <div className="reconnect-banner">
           🔄 连接不太稳，正在帮你恢复…
         </div>

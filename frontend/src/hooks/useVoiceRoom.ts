@@ -65,6 +65,7 @@ interface VoiceRoomState {
   hostId: string | null // 当前房主 ID，来自服务端权威状态
   isHost: boolean // 当前用户是否为房主，用于控制离开时是否展示交接弹窗
   isConnected: boolean // WebRTC 是否已经成功建立音频连接
+  isReconnecting: boolean // 信令 WebSocket 是否正在断线重连中
   isMuted: boolean // 本地麦克风是否被静音
   isSpeakerOn: boolean // 页面扬声器播放开关的 UI 状态
   aiState: AIAssistantState // AI 语音助手三态，来自服务端 ai_status，驱动席位光环与按钮
@@ -95,6 +96,7 @@ function createEmptyVoiceRoomState(): VoiceRoomState {
     hostId: null,
     isHost: false,
     isConnected: false,
+    isReconnecting: false,
     isMuted: false,
     isSpeakerOn: true,
     aiState: 'offline',
@@ -510,7 +512,8 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
     [syncUsersFromSignaling],
   )
 
-  // 加入房间的完整流程：先拿麦克风，再连 WebSocket 和创建 PeerConnection
+  // 加入房间的完整流程：先拿麦克风，再连 WebSocket
+  // PeerConnection 在每次 WebSocket 连接成功（含重连）后重新创建，避免旧 SFU 会话残留
   // 客户端加入后收到 waiting/room_ready，触发客户端创建 SDP Offer 并发起协商
   const joinRoom = useCallback(
     async (roomId: string, username: string) => {
@@ -528,12 +531,9 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
         hostId: null,
         isHost: false,
         error: null,
+        isReconnecting: false,
         remoteStreams: new Map(),
       }))
-
-      // 先创建与 SFU 服务端的 PeerConnection（加入本地音轨），
-      // 再连接信令。客户端加入后收到 waiting/room_ready 时创建并发送 Offer
-      createPeerConnection()
 
       // SignalingClient 只负责连接信令服务器，收到的信令再交回 hook 驱动 WebRTC 协商
       const signalingClient = new SignalingClient({
@@ -541,13 +541,38 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
         username,
         handlers: {
           onOpen: () => {
+            // 每次连接成功都重建 PeerConnection：首次连接需要创建，重连时旧连接已失效
+            if (pcRef.current) {
+              pcRef.current.close()
+              pcRef.current = null
+            }
+            // 清理旧 SFU 会话留下的远端流，避免重连期间播放已失效的 MediaStream
+            setState(prev => ({
+              ...prev,
+              remoteStreams: new Map(),
+              isConnected: false,
+            }))
+            createPeerConnection()
             signalingClient.sendJoin()
           },
           onMessage: message => {
             void handleSignaling(message)
           },
-          onError: () => {
-            setState(prev => ({ ...prev, error: MICROPHONE_ERROR_MESSAGES.signaling }))
+          onReconnecting: (attempt, maxAttempts) => {
+            console.log(`[signaling] 正在重连 ${attempt}/${maxAttempts}`)
+            setState(prev => ({
+              ...prev,
+              isReconnecting: true,
+              isConnected: false,
+              error: null,
+            }))
+          },
+          onClose: () => {
+            setState(prev => ({
+              ...prev,
+              isReconnecting: false,
+              error: MICROPHONE_ERROR_MESSAGES.signaling,
+            }))
           },
         },
       })
