@@ -73,6 +73,10 @@ function buildMembers(
 
   if (remoteStreams.size > 0 && realMembers.length === 1 && realMembers[0]?.isSelf) {
     remoteStreams.forEach((_stream, userId) => {
+      // AI 合成语音流（key 为 "ai_<clientID>"）由下方固定的 AI 席位展示，
+      // 跳过它，避免 AI 说话时被误当成"未知朋友"占位重复显示
+      if (userId.startsWith('ai_')) return
+
       realMembers.push({
         id: userId,
         name: '朋友',
