@@ -1092,7 +1092,7 @@ message HealthCheckResponse {
 - Metrics 暴露
 - `room_status`、`set_timer` 工具
 
-### Phase 4 — 高级场景（远期）
+### Phase 4 — 远期
 
 - 多 Agent 协作
 - **Plan-and-Solve 策略**（`core/strategies/plan_and_solve.py`）
@@ -1101,20 +1101,7 @@ message HealthCheckResponse {
 - 流式中间状态
 - Prompt 版本管理
 
----
-
-## 14. 安全考量
-
-| 方面 | 措施 |
-|------|------|
-| API Key | 当前 `config.yaml` 明文存了 `api_key: "sk-..."`，代码仓库里可见，是安全隐患。应该删除这行，改用 `LLM_API_KEY` 环境变量注入（`Config._load_from_env` 已支持）。当前日志没有打印 API key（`serve()` 只打 host/port/model/base_url，不打密钥），但为防以后新加日志时误打，应在日志配置里加一条过滤规则：自动把 `sk-` 开头的字符串替换为 `"***"` |
-| 输入校验 | `user_text` 超长截断；`session_id` 只允许 `[a-zA-Z0-9_-]` |
-| 工具安全 | Phase 2 只启用 safe 级别（只读、无副作用）。工具网络请求全部设超时 |
-| 资源保护 | 单会话最大消息数上限、全局会话数上限、LLM 调用超时 |
-
----
-
-## 15. 扩展点速查
+## 14. 扩展点速查
 
 想加新能力？看这里：
 

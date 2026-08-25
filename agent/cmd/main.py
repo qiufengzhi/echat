@@ -143,7 +143,15 @@ async def serve(cfg: Config, orchestrator: ChatOrchestrator, tool_registry: Tool
         LoggingInterceptor(),
         ErrorHandlingInterceptor(),
     ]
-    server = grpc.aio.server(interceptors=interceptors)
+    # Go 后端 keepalive 每 10s 发一次 HTTP/2 PING，而 grpcio(C-core) 服务端默认
+    # 允许的无数据 PING 最小间隔是 5 分钟、容忍 2 次 strike，第 3 次即 GOAWAY
+    # "too_many_pings" 断流（10s 间隔下固定约 50s 触发）。
+    # 注意：此选项的字符串名是 min_ping_interval_without_data_ms（无 recv），
+    # 写错名字 C-core 会静默忽略。放宽到 5s，让 10s 的 PING 合法通过，保留防护。
+    options = [
+        ("grpc.http2.min_ping_interval_without_data_ms", 5000),
+    ]
+    server = grpc.aio.server(interceptors=interceptors, options=options)
 
     health_service = HealthService(orchestrator)
     servicer = LLMServiceServicer(orchestrator, health_service=health_service)
