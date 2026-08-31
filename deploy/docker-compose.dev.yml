@@ -1,8 +1,8 @@
 # eChat 本地开发环境 Docker Compose
 #
-# 当前只起 PostgreSQL——持久层跑通后才逐步加入后续探索组件
+# 当前起 PostgreSQL + NATS(JetStream)——持久层 + 事件骨干跑通后逐步加入后续探索组件
 # 启动：docker compose -f deploy/docker-compose.dev.yml up -d
-# 端口避开生产栈占用的 8080/5432，PostgreSQL 用 5433
+# 端口避开生产栈占用的 8080/5432，PostgreSQL 用 5433，NATS 用 4222
 
 services:
   postgres:
@@ -23,5 +23,17 @@ services:
       timeout: 3s
       retries: 10
 
+  nats:
+    container_name: echat-dev-nats
+    image: nats:2-alpine
+    restart: unless-stopped
+    command: ["-js", "-m", "8222"]  # 开启 JetStream，启用 8222 监控 HTTP
+    ports:
+      - "4222:4222"                 # NATS 客户端连接（relay 发布 / 消费者订阅）
+      - "8222:8222"                 # JetStream 监控与健康检查
+    volumes:
+      - echat_dev_natsdata:/data    # 事件流持久化目录
+
 volumes:
   echat_dev_pgdata:
+  echat_dev_natsdata:

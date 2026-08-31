@@ -30,8 +30,16 @@ func init() {
 	identity.DefaultCreatedAt = identityDescCreatedAt.Default.(func() time.Time)
 	outboxeventFields := schema.OutboxEvent{}.Fields()
 	_ = outboxeventFields
+	// outboxeventDescAttempts is the schema descriptor for attempts field.
+	outboxeventDescAttempts := outboxeventFields[7].Descriptor()
+	// outboxevent.DefaultAttempts holds the default value on creation for the attempts field.
+	outboxevent.DefaultAttempts = outboxeventDescAttempts.Default.(int)
+	// outboxeventDescVersion is the schema descriptor for version field.
+	outboxeventDescVersion := outboxeventFields[8].Descriptor()
+	// outboxevent.DefaultVersion holds the default value on creation for the version field.
+	outboxevent.DefaultVersion = outboxeventDescVersion.Default.(int)
 	// outboxeventDescCreatedAt is the schema descriptor for created_at field.
-	outboxeventDescCreatedAt := outboxeventFields[6].Descriptor()
+	outboxeventDescCreatedAt := outboxeventFields[9].Descriptor()
 	// outboxevent.DefaultCreatedAt holds the default value on creation for the created_at field.
 	outboxevent.DefaultCreatedAt = outboxeventDescCreatedAt.Default.(func() time.Time)
 	sessionFields := schema.Session{}.Fields()

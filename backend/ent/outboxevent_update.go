@@ -8,6 +8,7 @@ import (
 	"echat-backend/ent/predicate"
 	"errors"
 	"fmt"
+	"time"
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
@@ -96,6 +97,68 @@ func (_u *OutboxEventUpdate) SetNillableStatus(v *outboxevent.Status) *OutboxEve
 	return _u
 }
 
+// SetPublishedAt sets the "published_at" field.
+func (_u *OutboxEventUpdate) SetPublishedAt(v time.Time) *OutboxEventUpdate {
+	_u.mutation.SetPublishedAt(v)
+	return _u
+}
+
+// SetNillablePublishedAt sets the "published_at" field if the given value is not nil.
+func (_u *OutboxEventUpdate) SetNillablePublishedAt(v *time.Time) *OutboxEventUpdate {
+	if v != nil {
+		_u.SetPublishedAt(*v)
+	}
+	return _u
+}
+
+// ClearPublishedAt clears the value of the "published_at" field.
+func (_u *OutboxEventUpdate) ClearPublishedAt() *OutboxEventUpdate {
+	_u.mutation.ClearPublishedAt()
+	return _u
+}
+
+// SetAttempts sets the "attempts" field.
+func (_u *OutboxEventUpdate) SetAttempts(v int) *OutboxEventUpdate {
+	_u.mutation.ResetAttempts()
+	_u.mutation.SetAttempts(v)
+	return _u
+}
+
+// SetNillableAttempts sets the "attempts" field if the given value is not nil.
+func (_u *OutboxEventUpdate) SetNillableAttempts(v *int) *OutboxEventUpdate {
+	if v != nil {
+		_u.SetAttempts(*v)
+	}
+	return _u
+}
+
+// AddAttempts adds value to the "attempts" field.
+func (_u *OutboxEventUpdate) AddAttempts(v int) *OutboxEventUpdate {
+	_u.mutation.AddAttempts(v)
+	return _u
+}
+
+// SetVersion sets the "version" field.
+func (_u *OutboxEventUpdate) SetVersion(v int) *OutboxEventUpdate {
+	_u.mutation.ResetVersion()
+	_u.mutation.SetVersion(v)
+	return _u
+}
+
+// SetNillableVersion sets the "version" field if the given value is not nil.
+func (_u *OutboxEventUpdate) SetNillableVersion(v *int) *OutboxEventUpdate {
+	if v != nil {
+		_u.SetVersion(*v)
+	}
+	return _u
+}
+
+// AddVersion adds value to the "version" field.
+func (_u *OutboxEventUpdate) AddVersion(v int) *OutboxEventUpdate {
+	_u.mutation.AddVersion(v)
+	return _u
+}
+
 // Mutation returns the OutboxEventMutation object of the builder.
 func (_u *OutboxEventUpdate) Mutation() *OutboxEventMutation {
 	return _u.mutation
@@ -167,6 +230,24 @@ func (_u *OutboxEventUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(outboxevent.FieldStatus, field.TypeEnum, value)
+	}
+	if value, ok := _u.mutation.PublishedAt(); ok {
+		_spec.SetField(outboxevent.FieldPublishedAt, field.TypeTime, value)
+	}
+	if _u.mutation.PublishedAtCleared() {
+		_spec.ClearField(outboxevent.FieldPublishedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.Attempts(); ok {
+		_spec.SetField(outboxevent.FieldAttempts, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedAttempts(); ok {
+		_spec.AddField(outboxevent.FieldAttempts, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.Version(); ok {
+		_spec.SetField(outboxevent.FieldVersion, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedVersion(); ok {
+		_spec.AddField(outboxevent.FieldVersion, field.TypeInt, value)
 	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
@@ -253,6 +334,68 @@ func (_u *OutboxEventUpdateOne) SetNillableStatus(v *outboxevent.Status) *Outbox
 	if v != nil {
 		_u.SetStatus(*v)
 	}
+	return _u
+}
+
+// SetPublishedAt sets the "published_at" field.
+func (_u *OutboxEventUpdateOne) SetPublishedAt(v time.Time) *OutboxEventUpdateOne {
+	_u.mutation.SetPublishedAt(v)
+	return _u
+}
+
+// SetNillablePublishedAt sets the "published_at" field if the given value is not nil.
+func (_u *OutboxEventUpdateOne) SetNillablePublishedAt(v *time.Time) *OutboxEventUpdateOne {
+	if v != nil {
+		_u.SetPublishedAt(*v)
+	}
+	return _u
+}
+
+// ClearPublishedAt clears the value of the "published_at" field.
+func (_u *OutboxEventUpdateOne) ClearPublishedAt() *OutboxEventUpdateOne {
+	_u.mutation.ClearPublishedAt()
+	return _u
+}
+
+// SetAttempts sets the "attempts" field.
+func (_u *OutboxEventUpdateOne) SetAttempts(v int) *OutboxEventUpdateOne {
+	_u.mutation.ResetAttempts()
+	_u.mutation.SetAttempts(v)
+	return _u
+}
+
+// SetNillableAttempts sets the "attempts" field if the given value is not nil.
+func (_u *OutboxEventUpdateOne) SetNillableAttempts(v *int) *OutboxEventUpdateOne {
+	if v != nil {
+		_u.SetAttempts(*v)
+	}
+	return _u
+}
+
+// AddAttempts adds value to the "attempts" field.
+func (_u *OutboxEventUpdateOne) AddAttempts(v int) *OutboxEventUpdateOne {
+	_u.mutation.AddAttempts(v)
+	return _u
+}
+
+// SetVersion sets the "version" field.
+func (_u *OutboxEventUpdateOne) SetVersion(v int) *OutboxEventUpdateOne {
+	_u.mutation.ResetVersion()
+	_u.mutation.SetVersion(v)
+	return _u
+}
+
+// SetNillableVersion sets the "version" field if the given value is not nil.
+func (_u *OutboxEventUpdateOne) SetNillableVersion(v *int) *OutboxEventUpdateOne {
+	if v != nil {
+		_u.SetVersion(*v)
+	}
+	return _u
+}
+
+// AddVersion adds value to the "version" field.
+func (_u *OutboxEventUpdateOne) AddVersion(v int) *OutboxEventUpdateOne {
+	_u.mutation.AddVersion(v)
 	return _u
 }
 
@@ -357,6 +500,24 @@ func (_u *OutboxEventUpdateOne) sqlSave(ctx context.Context) (_node *OutboxEvent
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(outboxevent.FieldStatus, field.TypeEnum, value)
+	}
+	if value, ok := _u.mutation.PublishedAt(); ok {
+		_spec.SetField(outboxevent.FieldPublishedAt, field.TypeTime, value)
+	}
+	if _u.mutation.PublishedAtCleared() {
+		_spec.ClearField(outboxevent.FieldPublishedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.Attempts(); ok {
+		_spec.SetField(outboxevent.FieldAttempts, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedAttempts(); ok {
+		_spec.AddField(outboxevent.FieldAttempts, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.Version(); ok {
+		_spec.SetField(outboxevent.FieldVersion, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedVersion(); ok {
+		_spec.AddField(outboxevent.FieldVersion, field.TypeInt, value)
 	}
 	_node = &OutboxEvent{config: _u.config}
 	_spec.Assign = _node.assignValues

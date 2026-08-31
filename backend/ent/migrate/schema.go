@@ -84,6 +84,9 @@ var (
 		{Name: "subject", Type: field.TypeString},
 		{Name: "payload", Type: field.TypeJSON, Nullable: true},
 		{Name: "status", Type: field.TypeEnum, Enums: []string{"pending", "sent", "failed"}, Default: "pending"},
+		{Name: "published_at", Type: field.TypeTime, Nullable: true},
+		{Name: "attempts", Type: field.TypeInt, Default: 0},
+		{Name: "version", Type: field.TypeInt, Default: 0},
 		{Name: "created_at", Type: field.TypeTime},
 	}
 	// OutboxEventsTable holds the schema information for the "outbox_events" table.
@@ -95,7 +98,7 @@ var (
 			{
 				Name:    "outboxevent_status_created_at",
 				Unique:  false,
-				Columns: []*schema.Column{OutboxEventsColumns[5], OutboxEventsColumns[6]},
+				Columns: []*schema.Column{OutboxEventsColumns[5], OutboxEventsColumns[9]},
 			},
 		},
 	}

@@ -46,6 +46,16 @@ func (OutboxEvent) Fields() []ent.Field {
 			Values(OutboxEventStatusPending, OutboxEventStatusSent, OutboxEventStatusFailed).
 			Default(OutboxEventStatusPending).
 			Comment("投递状态机：pending / sent / failed"),
+		field.Time("published_at").
+			Optional().
+			Nillable().
+			Comment("relay 成功投递到 JetStream 的时间，空表示尚未投递"),
+		field.Int("attempts").
+			Default(0).
+			Comment("已尝试投递次数，超过 outbox.max_attempts 置为 failed"),
+		field.Int("version").
+			Default(0).
+			Comment("投递版本号，relay 每次成功投递 +1，供下游乐观并发检查"),
 		field.Time("created_at").
 			Default(time.Now).
 			Immutable().

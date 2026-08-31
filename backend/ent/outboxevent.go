@@ -30,6 +30,12 @@ type OutboxEvent struct {
 	Payload map[string]interface{} `json:"payload,omitempty"`
 	// 投递状态机：pending / sent / failed
 	Status outboxevent.Status `json:"status,omitempty"`
+	// relay 成功投递到 JetStream 的时间，空表示尚未投递
+	PublishedAt *time.Time `json:"published_at,omitempty"`
+	// 已尝试投递次数，超过 outbox.max_attempts 置为 failed
+	Attempts int `json:"attempts,omitempty"`
+	// 投递版本号，relay 每次成功投递 +1，供下游乐观并发检查
+	Version int `json:"version,omitempty"`
 	// 事件记账时间
 	CreatedAt    time.Time `json:"created_at,omitempty"`
 	selectValues sql.SelectValues
@@ -42,9 +48,11 @@ func (*OutboxEvent) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case outboxevent.FieldPayload:
 			values[i] = new([]byte)
+		case outboxevent.FieldAttempts, outboxevent.FieldVersion:
+			values[i] = new(sql.NullInt64)
 		case outboxevent.FieldEventType, outboxevent.FieldSubject, outboxevent.FieldStatus:
 			values[i] = new(sql.NullString)
-		case outboxevent.FieldCreatedAt:
+		case outboxevent.FieldPublishedAt, outboxevent.FieldCreatedAt:
 			values[i] = new(sql.NullTime)
 		case outboxevent.FieldID, outboxevent.FieldAggregateID:
 			values[i] = new(uuid.UUID)
@@ -100,6 +108,25 @@ func (_m *OutboxEvent) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field status", values[i])
 			} else if value.Valid {
 				_m.Status = outboxevent.Status(value.String)
+			}
+		case outboxevent.FieldPublishedAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field published_at", values[i])
+			} else if value.Valid {
+				_m.PublishedAt = new(time.Time)
+				*_m.PublishedAt = value.Time
+			}
+		case outboxevent.FieldAttempts:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field attempts", values[i])
+			} else if value.Valid {
+				_m.Attempts = int(value.Int64)
+			}
+		case outboxevent.FieldVersion:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field version", values[i])
+			} else if value.Valid {
+				_m.Version = int(value.Int64)
 			}
 		case outboxevent.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -157,6 +184,17 @@ func (_m *OutboxEvent) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("status=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Status))
+	builder.WriteString(", ")
+	if v := _m.PublishedAt; v != nil {
+		builder.WriteString("published_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("attempts=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Attempts))
+	builder.WriteString(", ")
+	builder.WriteString("version=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Version))
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")
 	builder.WriteString(_m.CreatedAt.Format(time.ANSIC))

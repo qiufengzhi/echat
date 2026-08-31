@@ -59,6 +59,48 @@ func (_c *OutboxEventCreate) SetNillableStatus(v *outboxevent.Status) *OutboxEve
 	return _c
 }
 
+// SetPublishedAt sets the "published_at" field.
+func (_c *OutboxEventCreate) SetPublishedAt(v time.Time) *OutboxEventCreate {
+	_c.mutation.SetPublishedAt(v)
+	return _c
+}
+
+// SetNillablePublishedAt sets the "published_at" field if the given value is not nil.
+func (_c *OutboxEventCreate) SetNillablePublishedAt(v *time.Time) *OutboxEventCreate {
+	if v != nil {
+		_c.SetPublishedAt(*v)
+	}
+	return _c
+}
+
+// SetAttempts sets the "attempts" field.
+func (_c *OutboxEventCreate) SetAttempts(v int) *OutboxEventCreate {
+	_c.mutation.SetAttempts(v)
+	return _c
+}
+
+// SetNillableAttempts sets the "attempts" field if the given value is not nil.
+func (_c *OutboxEventCreate) SetNillableAttempts(v *int) *OutboxEventCreate {
+	if v != nil {
+		_c.SetAttempts(*v)
+	}
+	return _c
+}
+
+// SetVersion sets the "version" field.
+func (_c *OutboxEventCreate) SetVersion(v int) *OutboxEventCreate {
+	_c.mutation.SetVersion(v)
+	return _c
+}
+
+// SetNillableVersion sets the "version" field if the given value is not nil.
+func (_c *OutboxEventCreate) SetNillableVersion(v *int) *OutboxEventCreate {
+	if v != nil {
+		_c.SetVersion(*v)
+	}
+	return _c
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (_c *OutboxEventCreate) SetCreatedAt(v time.Time) *OutboxEventCreate {
 	_c.mutation.SetCreatedAt(v)
@@ -118,6 +160,14 @@ func (_c *OutboxEventCreate) defaults() {
 		v := outboxevent.DefaultStatus
 		_c.mutation.SetStatus(v)
 	}
+	if _, ok := _c.mutation.Attempts(); !ok {
+		v := outboxevent.DefaultAttempts
+		_c.mutation.SetAttempts(v)
+	}
+	if _, ok := _c.mutation.Version(); !ok {
+		v := outboxevent.DefaultVersion
+		_c.mutation.SetVersion(v)
+	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		v := outboxevent.DefaultCreatedAt()
 		_c.mutation.SetCreatedAt(v)
@@ -142,6 +192,12 @@ func (_c *OutboxEventCreate) check() error {
 		if err := outboxevent.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "OutboxEvent.status": %w`, err)}
 		}
+	}
+	if _, ok := _c.mutation.Attempts(); !ok {
+		return &ValidationError{Name: "attempts", err: errors.New(`ent: missing required field "OutboxEvent.attempts"`)}
+	}
+	if _, ok := _c.mutation.Version(); !ok {
+		return &ValidationError{Name: "version", err: errors.New(`ent: missing required field "OutboxEvent.version"`)}
 	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		return &ValidationError{Name: "created_at", err: errors.New(`ent: missing required field "OutboxEvent.created_at"`)}
@@ -200,6 +256,18 @@ func (_c *OutboxEventCreate) createSpec() (*OutboxEvent, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Status(); ok {
 		_spec.SetField(outboxevent.FieldStatus, field.TypeEnum, value)
 		_node.Status = value
+	}
+	if value, ok := _c.mutation.PublishedAt(); ok {
+		_spec.SetField(outboxevent.FieldPublishedAt, field.TypeTime, value)
+		_node.PublishedAt = &value
+	}
+	if value, ok := _c.mutation.Attempts(); ok {
+		_spec.SetField(outboxevent.FieldAttempts, field.TypeInt, value)
+		_node.Attempts = value
+	}
+	if value, ok := _c.mutation.Version(); ok {
+		_spec.SetField(outboxevent.FieldVersion, field.TypeInt, value)
+		_node.Version = value
 	}
 	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(outboxevent.FieldCreatedAt, field.TypeTime, value)

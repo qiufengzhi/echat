@@ -10,6 +10,7 @@ import (
 	"echat-backend/handlers"
 	"echat-backend/llm_cli"
 	"echat-backend/logging"
+	"echat-backend/outbox"
 	"echat-backend/room"
 	"echat-backend/sfu"
 	"echat-backend/store"
@@ -82,6 +83,35 @@ func main() {
 
 	// 启动吊销消费协程：会话被吊销/封禁时踢掉对应实时连接（封禁即下线）
 	room.StartRevokedKick()
+
+	// 启动一致性骨干：事务性 Outbox relay 把 pending 事件投递到 NATS JetStream
+	// NATS 不可用时事件留在 outbox 堆积，连接恢复后自动补发（业务主链路不受影响）
+	streamMaxAge, err := time.ParseDuration(config.Get().NATS.StreamMaxAge)
+	if err != nil || streamMaxAge <= 0 {
+		streamMaxAge = 7 * 24 * time.Hour
+	}
+	pollInterval, err := time.ParseDuration(config.Get().Outbox.PollInterval)
+	if err != nil || pollInterval <= 0 {
+		pollInterval = time.Second
+	}
+	batchSize := config.Get().Outbox.BatchSize
+	if batchSize <= 0 {
+		batchSize = 16
+	}
+	maxAttempts := config.Get().Outbox.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = 8
+	}
+	relayer := outbox.NewRelayer(st.Pool(), outbox.Config{
+		NatsURL:        config.Get().NATS.URL,
+		Stream:         config.Get().NATS.Stream,
+		StreamSubjects: config.Get().NATS.StreamSubjects,
+		StreamMaxAge:   streamMaxAge,
+		PollInterval:   pollInterval,
+		BatchSize:      batchSize,
+		MaxAttempts:    maxAttempts,
+	})
+	go relayer.Run(context.Background())
 
 	// 启动 AI 状态变更广播协程，把唤醒/休眠/静默超时等迁移同步给前端
 	room.StartAIStateBroadcaster()

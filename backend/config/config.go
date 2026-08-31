@@ -26,6 +26,8 @@ type Config struct {
 	Database DatabaseConfig `yaml:"database"` // PostgreSQL 持久层配置
 	Auth     AuthConfig     `yaml:"auth"`     // 用户系统认证与密码哈希配置
 	Log      LogConfig      `yaml:"log"`      // 日志配置
+	NATS     NATSConfig     `yaml:"nats"`     // NATS JetStream 一致性骨干配置
+	Outbox   OutboxConfig   `yaml:"outbox"`   // 事务性 Outbox relay 参数
 }
 
 // ServerConfig HTTP/HTTPS 服务配置
@@ -119,6 +121,21 @@ type DatabaseConfig struct {
 	Password string `yaml:"password"`  // 连接密码
 	Name     string `yaml:"name"`      // 数据库名
 	TimeZone string `yaml:"time_zone"` // 会话时区，默认 Asia/Shanghai
+}
+
+// NATSConfig NATS JetStream 一致性骨干配置（事务性 Outbox 事件的投递目的地）
+type NATSConfig struct {
+	URL            string   `yaml:"url"`             // NATS 地址，默认 127.0.0.1:4222
+	Stream         string   `yaml:"stream"`          // JetStream 流名，事件按 subject 落入该流
+	StreamSubjects []string `yaml:"stream_subjects"` // 流覆盖的 subject 前缀，如 user.> / room.>
+	StreamMaxAge   string   `yaml:"stream_max_age"`  // 事件保留时长，过期由 JetStream 自动回收
+}
+
+// OutboxConfig 事务性 Outbox relay 参数
+type OutboxConfig struct {
+	PollInterval string `yaml:"poll_interval"` // relay 轮询 pending 事件的间隔
+	BatchSize    int    `yaml:"batch_size"`    // 单批取件上限
+	MaxAttempts  int    `yaml:"max_attempts"`  // 单条事件最大投递尝试次数，超限置 failed
 }
 
 // DSN 拼接成 pgx 驱动可用的连接串
@@ -259,6 +276,17 @@ func DefaultConfig() *Config {
 			EnableConsole: true,
 			EnableFile:    true,
 			FileDir:       "logs",
+		},
+		NATS: NATSConfig{
+			URL:            "127.0.0.1:4222",
+			Stream:         "echat_events",
+			StreamSubjects: []string{"user.>", "room.>"},
+			StreamMaxAge:   "168h",
+		},
+		Outbox: OutboxConfig{
+			PollInterval: "1s",
+			BatchSize:    16,
+			MaxAttempts:  8,
 		},
 	}
 }
@@ -478,5 +506,34 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("LOG_FILE_DIR"); v != "" {
 		cfg.Log.FileDir = v
+	}
+
+	// --- NATS ---
+	if v := os.Getenv("NATS_URL"); v != "" {
+		cfg.NATS.URL = v
+	}
+	if v := os.Getenv("NATS_STREAM"); v != "" {
+		cfg.NATS.Stream = v
+	}
+	if v := os.Getenv("NATS_STREAM_SUBJECTS"); v != "" {
+		cfg.NATS.StreamSubjects = strings.Split(v, ",")
+	}
+	if v := os.Getenv("NATS_STREAM_MAX_AGE"); v != "" {
+		cfg.NATS.StreamMaxAge = v
+	}
+
+	// --- Outbox relay ---
+	if v := os.Getenv("OUTBOX_POLL_INTERVAL"); v != "" {
+		cfg.Outbox.PollInterval = v
+	}
+	if v := os.Getenv("OUTBOX_BATCH_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Outbox.BatchSize = n
+		}
+	}
+	if v := os.Getenv("OUTBOX_MAX_ATTEMPTS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Outbox.MaxAttempts = n
+		}
 	}
 }
