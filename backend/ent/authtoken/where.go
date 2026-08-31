@@ -66,6 +66,11 @@ func TokenHash(v string) predicate.AuthToken {
 	return predicate.AuthToken(sql.FieldEQ(FieldTokenHash, v))
 }
 
+// Target applies equality check predicate on the "target" field. It's identical to TargetEQ.
+func Target(v string) predicate.AuthToken {
+	return predicate.AuthToken(sql.FieldEQ(FieldTarget, v))
+}
+
 // ExpiresAt applies equality check predicate on the "expires_at" field. It's identical to ExpiresAtEQ.
 func ExpiresAt(v time.Time) predicate.AuthToken {
 	return predicate.AuthToken(sql.FieldEQ(FieldExpiresAt, v))
@@ -184,6 +189,81 @@ func TokenHashEqualFold(v string) predicate.AuthToken {
 // TokenHashContainsFold applies the ContainsFold predicate on the "token_hash" field.
 func TokenHashContainsFold(v string) predicate.AuthToken {
 	return predicate.AuthToken(sql.FieldContainsFold(FieldTokenHash, v))
+}
+
+// TargetEQ applies the EQ predicate on the "target" field.
+func TargetEQ(v string) predicate.AuthToken {
+	return predicate.AuthToken(sql.FieldEQ(FieldTarget, v))
+}
+
+// TargetNEQ applies the NEQ predicate on the "target" field.
+func TargetNEQ(v string) predicate.AuthToken {
+	return predicate.AuthToken(sql.FieldNEQ(FieldTarget, v))
+}
+
+// TargetIn applies the In predicate on the "target" field.
+func TargetIn(vs ...string) predicate.AuthToken {
+	return predicate.AuthToken(sql.FieldIn(FieldTarget, vs...))
+}
+
+// TargetNotIn applies the NotIn predicate on the "target" field.
+func TargetNotIn(vs ...string) predicate.AuthToken {
+	return predicate.AuthToken(sql.FieldNotIn(FieldTarget, vs...))
+}
+
+// TargetGT applies the GT predicate on the "target" field.
+func TargetGT(v string) predicate.AuthToken {
+	return predicate.AuthToken(sql.FieldGT(FieldTarget, v))
+}
+
+// TargetGTE applies the GTE predicate on the "target" field.
+func TargetGTE(v string) predicate.AuthToken {
+	return predicate.AuthToken(sql.FieldGTE(FieldTarget, v))
+}
+
+// TargetLT applies the LT predicate on the "target" field.
+func TargetLT(v string) predicate.AuthToken {
+	return predicate.AuthToken(sql.FieldLT(FieldTarget, v))
+}
+
+// TargetLTE applies the LTE predicate on the "target" field.
+func TargetLTE(v string) predicate.AuthToken {
+	return predicate.AuthToken(sql.FieldLTE(FieldTarget, v))
+}
+
+// TargetContains applies the Contains predicate on the "target" field.
+func TargetContains(v string) predicate.AuthToken {
+	return predicate.AuthToken(sql.FieldContains(FieldTarget, v))
+}
+
+// TargetHasPrefix applies the HasPrefix predicate on the "target" field.
+func TargetHasPrefix(v string) predicate.AuthToken {
+	return predicate.AuthToken(sql.FieldHasPrefix(FieldTarget, v))
+}
+
+// TargetHasSuffix applies the HasSuffix predicate on the "target" field.
+func TargetHasSuffix(v string) predicate.AuthToken {
+	return predicate.AuthToken(sql.FieldHasSuffix(FieldTarget, v))
+}
+
+// TargetIsNil applies the IsNil predicate on the "target" field.
+func TargetIsNil() predicate.AuthToken {
+	return predicate.AuthToken(sql.FieldIsNull(FieldTarget))
+}
+
+// TargetNotNil applies the NotNil predicate on the "target" field.
+func TargetNotNil() predicate.AuthToken {
+	return predicate.AuthToken(sql.FieldNotNull(FieldTarget))
+}
+
+// TargetEqualFold applies the EqualFold predicate on the "target" field.
+func TargetEqualFold(v string) predicate.AuthToken {
+	return predicate.AuthToken(sql.FieldEqualFold(FieldTarget, v))
+}
+
+// TargetContainsFold applies the ContainsFold predicate on the "target" field.
+func TargetContainsFold(v string) predicate.AuthToken {
+	return predicate.AuthToken(sql.FieldContainsFold(FieldTarget, v))
 }
 
 // ExpiresAtEQ applies the EQ predicate on the "expires_at" field.

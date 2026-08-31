@@ -65,6 +65,7 @@ CREATE TABLE auth_tokens (
     user_id     uuid                   NOT NULL,
     purpose     character varying      NOT NULL,
     token_hash  character varying      NOT NULL,
+    target      character varying,
     expires_at  timestamp with time zone NOT NULL,
     consumed_at timestamp with time zone,
     created_at  timestamp with time zone NOT NULL,
@@ -74,3 +75,17 @@ CREATE TABLE auth_tokens (
 
 -- 支撑「查某用户某用途的未消费令牌」与「同用途防滥用」
 CREATE INDEX authtoken_purpose_consumed_at_user_id ON auth_tokens (purpose, consumed_at, user_id);
+
+CREATE TABLE outbox_events (
+    id           uuid                   NOT NULL,
+    event_type   character varying      NOT NULL,
+    aggregate_id uuid                   NOT NULL,
+    subject      character varying      NOT NULL,
+    payload      jsonb,
+    status       character varying      NOT NULL DEFAULT 'pending',
+    created_at   timestamp with time zone NOT NULL,
+    PRIMARY KEY (id)
+);
+
+-- relay 拉取待投递事件
+CREATE INDEX outboxevent_status_created_at ON outbox_events (status, created_at);

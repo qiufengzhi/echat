@@ -14,6 +14,7 @@ var (
 		{Name: "id", Type: field.TypeUUID},
 		{Name: "purpose", Type: field.TypeEnum, Enums: []string{"verify_email", "reset_password"}},
 		{Name: "token_hash", Type: field.TypeString},
+		{Name: "target", Type: field.TypeString, Nullable: true},
 		{Name: "expires_at", Type: field.TypeTime},
 		{Name: "consumed_at", Type: field.TypeTime, Nullable: true},
 		{Name: "created_at", Type: field.TypeTime},
@@ -27,7 +28,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "auth_tokens_users_auth_tokens",
-				Columns:    []*schema.Column{AuthTokensColumns[6]},
+				Columns:    []*schema.Column{AuthTokensColumns[7]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.NoAction,
 			},
@@ -36,7 +37,7 @@ var (
 			{
 				Name:    "authtoken_purpose_consumed_at_user_id",
 				Unique:  false,
-				Columns: []*schema.Column{AuthTokensColumns[1], AuthTokensColumns[4], AuthTokensColumns[6]},
+				Columns: []*schema.Column{AuthTokensColumns[1], AuthTokensColumns[5], AuthTokensColumns[7]},
 			},
 		},
 	}
@@ -72,6 +73,29 @@ var (
 				Name:    "identity_provider_user_id",
 				Unique:  true,
 				Columns: []*schema.Column{IdentitiesColumns[1], IdentitiesColumns[5]},
+			},
+		},
+	}
+	// OutboxEventsColumns holds the columns for the "outbox_events" table.
+	OutboxEventsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "event_type", Type: field.TypeString},
+		{Name: "aggregate_id", Type: field.TypeUUID},
+		{Name: "subject", Type: field.TypeString},
+		{Name: "payload", Type: field.TypeJSON, Nullable: true},
+		{Name: "status", Type: field.TypeEnum, Enums: []string{"pending", "sent", "failed"}, Default: "pending"},
+		{Name: "created_at", Type: field.TypeTime},
+	}
+	// OutboxEventsTable holds the schema information for the "outbox_events" table.
+	OutboxEventsTable = &schema.Table{
+		Name:       "outbox_events",
+		Columns:    OutboxEventsColumns,
+		PrimaryKey: []*schema.Column{OutboxEventsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "outboxevent_status_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{OutboxEventsColumns[5], OutboxEventsColumns[6]},
 			},
 		},
 	}
@@ -143,6 +167,7 @@ var (
 	Tables = []*schema.Table{
 		AuthTokensTable,
 		IdentitiesTable,
+		OutboxEventsTable,
 		SessionsTable,
 		UsersTable,
 	}

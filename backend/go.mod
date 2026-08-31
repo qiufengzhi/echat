@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	entgo.io/ent v0.14.6
+	github.com/alexedwards/argon2id v1.0.0
 	github.com/aliyun/alibabacloud-nls-go-sdk v1.1.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
@@ -11,6 +12,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/jj11hh/opus v1.0.1
 	github.com/mozillazg/go-pinyin v0.21.0
+	github.com/nbutton23/zxcvbn-go v0.0.0-20210217022336-fa2cb2858354
 	github.com/pion/opus v0.1.0
 	github.com/pion/rtp v1.10.2
 	github.com/pion/webrtc/v4 v4.2.15

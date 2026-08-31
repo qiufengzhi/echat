@@ -12,6 +12,9 @@ type AuthToken func(*sql.Selector)
 // Identity is the predicate function for identity builders.
 type Identity func(*sql.Selector)
 
+// OutboxEvent is the predicate function for outboxevent builders.
+type OutboxEvent func(*sql.Selector)
+
 // Session is the predicate function for session builders.
 type Session func(*sql.Selector)
 

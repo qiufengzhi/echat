@@ -72,6 +72,26 @@ func (_u *AuthTokenUpdate) SetNillableTokenHash(v *string) *AuthTokenUpdate {
 	return _u
 }
 
+// SetTarget sets the "target" field.
+func (_u *AuthTokenUpdate) SetTarget(v string) *AuthTokenUpdate {
+	_u.mutation.SetTarget(v)
+	return _u
+}
+
+// SetNillableTarget sets the "target" field if the given value is not nil.
+func (_u *AuthTokenUpdate) SetNillableTarget(v *string) *AuthTokenUpdate {
+	if v != nil {
+		_u.SetTarget(*v)
+	}
+	return _u
+}
+
+// ClearTarget clears the value of the "target" field.
+func (_u *AuthTokenUpdate) ClearTarget() *AuthTokenUpdate {
+	_u.mutation.ClearTarget()
+	return _u
+}
+
 // SetExpiresAt sets the "expires_at" field.
 func (_u *AuthTokenUpdate) SetExpiresAt(v time.Time) *AuthTokenUpdate {
 	_u.mutation.SetExpiresAt(v)
@@ -180,6 +200,12 @@ func (_u *AuthTokenUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.TokenHash(); ok {
 		_spec.SetField(authtoken.FieldTokenHash, field.TypeString, value)
 	}
+	if value, ok := _u.mutation.Target(); ok {
+		_spec.SetField(authtoken.FieldTarget, field.TypeString, value)
+	}
+	if _u.mutation.TargetCleared() {
+		_spec.ClearField(authtoken.FieldTarget, field.TypeString)
+	}
 	if value, ok := _u.mutation.ExpiresAt(); ok {
 		_spec.SetField(authtoken.FieldExpiresAt, field.TypeTime, value)
 	}
@@ -277,6 +303,26 @@ func (_u *AuthTokenUpdateOne) SetNillableTokenHash(v *string) *AuthTokenUpdateOn
 	if v != nil {
 		_u.SetTokenHash(*v)
 	}
+	return _u
+}
+
+// SetTarget sets the "target" field.
+func (_u *AuthTokenUpdateOne) SetTarget(v string) *AuthTokenUpdateOne {
+	_u.mutation.SetTarget(v)
+	return _u
+}
+
+// SetNillableTarget sets the "target" field if the given value is not nil.
+func (_u *AuthTokenUpdateOne) SetNillableTarget(v *string) *AuthTokenUpdateOne {
+	if v != nil {
+		_u.SetTarget(*v)
+	}
+	return _u
+}
+
+// ClearTarget clears the value of the "target" field.
+func (_u *AuthTokenUpdateOne) ClearTarget() *AuthTokenUpdateOne {
+	_u.mutation.ClearTarget()
 	return _u
 }
 
@@ -417,6 +463,12 @@ func (_u *AuthTokenUpdateOne) sqlSave(ctx context.Context) (_node *AuthToken, er
 	}
 	if value, ok := _u.mutation.TokenHash(); ok {
 		_spec.SetField(authtoken.FieldTokenHash, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.Target(); ok {
+		_spec.SetField(authtoken.FieldTarget, field.TypeString, value)
+	}
+	if _u.mutation.TargetCleared() {
+		_spec.ClearField(authtoken.FieldTarget, field.TypeString)
 	}
 	if value, ok := _u.mutation.ExpiresAt(); ok {
 		_spec.SetField(authtoken.FieldExpiresAt, field.TypeTime, value)

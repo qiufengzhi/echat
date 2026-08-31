@@ -15,17 +15,17 @@ import (
 
 // Config 后端完整配置，各模块通过此 struct 获取各自的配置子项
 type Config struct {
-	Server ServerConfig `yaml:"server"` // HTTP/HTTPS 服务配置
-	SFU    SFUConfig    `yaml:"sfu"`    // WebRTC SFU 媒体引擎配置
-	ASR    ASRConfig    `yaml:"asr"`    // 语音识别配置
-	VAD    VADConfig    `yaml:"vad"`    // 语音活动检测配置
-	LLM    LLMConfig    `yaml:"llm"`    // LLM 服务配置
-	TTS    TTSConfig    `yaml:"tts"`    // 语音合成配置
-	AI     AIConfig     `yaml:"ai"`     // AI 语音助手配置
-	Room   RoomConfig   `yaml:"room"`   // 房间与 WebSocket 配置
+	Server   ServerConfig   `yaml:"server"`   // HTTP/HTTPS 服务配置
+	SFU      SFUConfig      `yaml:"sfu"`      // WebRTC SFU 媒体引擎配置
+	ASR      ASRConfig      `yaml:"asr"`      // 语音识别配置
+	VAD      VADConfig      `yaml:"vad"`      // 语音活动检测配置
+	LLM      LLMConfig      `yaml:"llm"`      // LLM 服务配置
+	TTS      TTSConfig      `yaml:"tts"`      // 语音合成配置
+	AI       AIConfig       `yaml:"ai"`       // AI 语音助手配置
+	Room     RoomConfig     `yaml:"room"`     // 房间与 WebSocket 配置
 	Database DatabaseConfig `yaml:"database"` // PostgreSQL 持久层配置
-	Auth   AuthConfig   `yaml:"auth"`   // 用户系统认证与密码哈希配置
-	Log    LogConfig    `yaml:"log"`    // 日志配置
+	Auth     AuthConfig     `yaml:"auth"`     // 用户系统认证与密码哈希配置
+	Log      LogConfig      `yaml:"log"`      // 日志配置
 }
 
 // ServerConfig HTTP/HTTPS 服务配置
@@ -113,12 +113,12 @@ type AIConfig struct {
 
 // DatabaseConfig PostgreSQL 持久层连接配置
 type DatabaseConfig struct {
-	Host     string `yaml:"host"`       // PostgreSQL 主机地址，默认 127.0.0.1
-	Port     int    `yaml:"port"`       // PostgreSQL 端口，默认 5433（避开生产栈默认 5432）
-	User     string `yaml:"user"`       // 连接用户名
-	Password string `yaml:"password"`   // 连接密码
-	Name     string `yaml:"name"`       // 数据库名
-	TimeZone string `yaml:"time_zone"`  // 会话时区，默认 Asia/Shanghai
+	Host     string `yaml:"host"`      // PostgreSQL 主机地址，默认 127.0.0.1
+	Port     int    `yaml:"port"`      // PostgreSQL 端口，默认 5433（避开生产栈默认 5432）
+	User     string `yaml:"user"`      // 连接用户名
+	Password string `yaml:"password"`  // 连接密码
+	Name     string `yaml:"name"`      // 数据库名
+	TimeZone string `yaml:"time_zone"` // 会话时区，默认 Asia/Shanghai
 }
 
 // DSN 拼接成 pgx 驱动可用的连接串
@@ -129,19 +129,20 @@ func (d DatabaseConfig) DSN() string {
 
 // AuthConfig 用户系统认证与密码哈希配置
 type AuthConfig struct {
-	JWTSecret      string       `yaml:"jwt_secret"`       // access token 的 HMAC 签名密钥，生产必须用环境变量覆盖
-	AccessTokenTTL string       `yaml:"access_token_ttl"` // access token 有效期，默认 "15m"
-	RefreshTokenTTL string      `yaml:"refresh_token_ttl"` // refresh token 有效期，默认 "720h"（30 天）
-	Argon2         Argon2Config `yaml:"argon2"`         // argon2id 密码哈希参数
+	JWTSecret       string       `yaml:"jwt_secret"`        // access token 的 HMAC 签名密钥，生产必须用环境变量覆盖
+	AccessTokenTTL  string       `yaml:"access_token_ttl"`  // access token 有效期，默认 "15m"
+	RefreshTokenTTL string       `yaml:"refresh_token_ttl"` // refresh token 有效期，默认 "720h"（30 天）
+	VerifyBaseURL   string       `yaml:"verify_base_url"`   // 前端邮箱验证页 URL 前缀，用于拼接一次性链接
+	Argon2          Argon2Config `yaml:"argon2"`            // argon2id 密码哈希参数
 }
 
 // Argon2Config argon2id 参数，OWASP 推荐内存密集型反 GPU 并行爆破
 type Argon2Config struct {
-	MemoryKiB  uint32 `yaml:"memory_kib"` // 内存开销 KiB，默认 65536（64 MiB）
-	Iterations uint32 `yaml:"iterations"` // 迭代次数，默认 3
-	Parallelism uint8 `yaml:"parallelism"` // 并行度，默认 4
-	SaltLength uint32 `yaml:"salt_length"` // 随机盐字节数，默认 16
-	KeyLength  uint32 `yaml:"key_length"`  // 派生密钥字节数，默认 32
+	MemoryKiB   uint32 `yaml:"memory_kib"`  // 内存开销 KiB，默认 65536（64 MiB）
+	Iterations  uint32 `yaml:"iterations"`  // 迭代次数，默认 3
+	Parallelism uint8  `yaml:"parallelism"` // 并行度，默认 4
+	SaltLength  uint32 `yaml:"salt_length"` // 随机盐字节数，默认 16
+	KeyLength   uint32 `yaml:"key_length"`  // 派生密钥字节数，默认 32
 }
 
 // LogConfig 日志配置
@@ -241,12 +242,13 @@ func DefaultConfig() *Config {
 			JWTSecret:       "dev-insecure-change-me",
 			AccessTokenTTL:  "15m",
 			RefreshTokenTTL: "720h",
+			VerifyBaseURL:   "http://localhost:5173/verify",
 			Argon2: Argon2Config{
-				MemoryKiB:  65536,
-				Iterations: 3,
+				MemoryKiB:   65536,
+				Iterations:  3,
 				Parallelism: 4,
-				SaltLength: 16,
-				KeyLength:  32,
+				SaltLength:  16,
+				KeyLength:   32,
 			},
 		},
 		Log: LogConfig{
@@ -451,6 +453,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("AUTH_REFRESH_TTL"); v != "" {
 		cfg.Auth.RefreshTokenTTL = v
+	}
+	if v := os.Getenv("AUTH_VERIFY_BASE_URL"); v != "" {
+		cfg.Auth.VerifyBaseURL = v
 	}
 
 	// --- Log ---

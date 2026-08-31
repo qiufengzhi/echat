@@ -16,6 +16,8 @@ type Tx struct {
 	AuthToken *AuthTokenClient
 	// Identity is the client for interacting with the Identity builders.
 	Identity *IdentityClient
+	// OutboxEvent is the client for interacting with the OutboxEvent builders.
+	OutboxEvent *OutboxEventClient
 	// Session is the client for interacting with the Session builders.
 	Session *SessionClient
 	// User is the client for interacting with the User builders.
@@ -153,6 +155,7 @@ func (tx *Tx) Client() *Client {
 func (tx *Tx) init() {
 	tx.AuthToken = NewAuthTokenClient(tx.config)
 	tx.Identity = NewIdentityClient(tx.config)
+	tx.OutboxEvent = NewOutboxEventClient(tx.config)
 	tx.Session = NewSessionClient(tx.config)
 	tx.User = NewUserClient(tx.config)
 }

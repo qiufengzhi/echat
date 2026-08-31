@@ -37,6 +37,9 @@ func (AuthToken) Fields() []ent.Field {
 			Comment("用途枚举：verify_email / reset_password"),
 		field.String("token_hash").
 			Comment("一次性明文 token 的 SHA-256 哈希，不存原文"),
+		field.String("target").
+			Optional().
+			Comment("目标联系方式：verify_email 的待绑邮箱 / reset_password 的找回邮箱，可空"),
 		field.Time("expires_at").
 			Comment("失效时间，默认 30 分钟"),
 		field.Time("consumed_at").

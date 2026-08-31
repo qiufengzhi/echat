@@ -6,6 +6,7 @@ import (
 	"context"
 	"echat-backend/ent/authtoken"
 	"echat-backend/ent/identity"
+	"echat-backend/ent/outboxevent"
 	"echat-backend/ent/session"
 	"echat-backend/ent/user"
 	"errors"
@@ -76,10 +77,11 @@ var (
 func checkColumn(t, c string) error {
 	initCheck.Do(func() {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
-			authtoken.Table: authtoken.ValidColumn,
-			identity.Table:  identity.ValidColumn,
-			session.Table:   session.ValidColumn,
-			user.Table:      user.ValidColumn,
+			authtoken.Table:   authtoken.ValidColumn,
+			identity.Table:    identity.ValidColumn,
+			outboxevent.Table: outboxevent.ValidColumn,
+			session.Table:     session.ValidColumn,
+			user.Table:        user.ValidColumn,
 		})
 	})
 	return columnCheck(t, c)

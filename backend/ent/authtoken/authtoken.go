@@ -21,6 +21,8 @@ const (
 	FieldPurpose = "purpose"
 	// FieldTokenHash holds the string denoting the token_hash field in the database.
 	FieldTokenHash = "token_hash"
+	// FieldTarget holds the string denoting the target field in the database.
+	FieldTarget = "target"
 	// FieldExpiresAt holds the string denoting the expires_at field in the database.
 	FieldExpiresAt = "expires_at"
 	// FieldConsumedAt holds the string denoting the consumed_at field in the database.
@@ -46,6 +48,7 @@ var Columns = []string{
 	FieldUserID,
 	FieldPurpose,
 	FieldTokenHash,
+	FieldTarget,
 	FieldExpiresAt,
 	FieldConsumedAt,
 	FieldCreatedAt,
@@ -110,6 +113,11 @@ func ByPurpose(opts ...sql.OrderTermOption) OrderOption {
 // ByTokenHash orders the results by the token_hash field.
 func ByTokenHash(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldTokenHash, opts...).ToFunc()
+}
+
+// ByTarget orders the results by the target field.
+func ByTarget(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldTarget, opts...).ToFunc()
 }
 
 // ByExpiresAt orders the results by the expires_at field.

@@ -26,6 +26,8 @@ type AuthToken struct {
 	Purpose authtoken.Purpose `json:"purpose,omitempty"`
 	// 一次性明文 token 的 SHA-256 哈希，不存原文
 	TokenHash string `json:"token_hash,omitempty"`
+	// 目标联系方式：verify_email 的待绑邮箱 / reset_password 的找回邮箱，可空
+	Target string `json:"target,omitempty"`
 	// 失效时间，默认 30 分钟
 	ExpiresAt time.Time `json:"expires_at,omitempty"`
 	// 消费时间，可空；置位即失效不可复用
@@ -63,7 +65,7 @@ func (*AuthToken) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case authtoken.FieldPurpose, authtoken.FieldTokenHash:
+		case authtoken.FieldPurpose, authtoken.FieldTokenHash, authtoken.FieldTarget:
 			values[i] = new(sql.NullString)
 		case authtoken.FieldExpiresAt, authtoken.FieldConsumedAt, authtoken.FieldCreatedAt:
 			values[i] = new(sql.NullTime)
@@ -107,6 +109,12 @@ func (_m *AuthToken) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field token_hash", values[i])
 			} else if value.Valid {
 				_m.TokenHash = value.String
+			}
+		case authtoken.FieldTarget:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field target", values[i])
+			} else if value.Valid {
+				_m.Target = value.String
 			}
 		case authtoken.FieldExpiresAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -176,6 +184,9 @@ func (_m *AuthToken) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("token_hash=")
 	builder.WriteString(_m.TokenHash)
+	builder.WriteString(", ")
+	builder.WriteString("target=")
+	builder.WriteString(_m.Target)
 	builder.WriteString(", ")
 	builder.WriteString("expires_at=")
 	builder.WriteString(_m.ExpiresAt.Format(time.ANSIC))

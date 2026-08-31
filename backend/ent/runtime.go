@@ -5,6 +5,7 @@ package ent
 import (
 	"echat-backend/ent/authtoken"
 	"echat-backend/ent/identity"
+	"echat-backend/ent/outboxevent"
 	"echat-backend/ent/schema"
 	"echat-backend/ent/session"
 	"echat-backend/ent/user"
@@ -18,7 +19,7 @@ func init() {
 	authtokenFields := schema.AuthToken{}.Fields()
 	_ = authtokenFields
 	// authtokenDescCreatedAt is the schema descriptor for created_at field.
-	authtokenDescCreatedAt := authtokenFields[6].Descriptor()
+	authtokenDescCreatedAt := authtokenFields[7].Descriptor()
 	// authtoken.DefaultCreatedAt holds the default value on creation for the created_at field.
 	authtoken.DefaultCreatedAt = authtokenDescCreatedAt.Default.(func() time.Time)
 	identityFields := schema.Identity{}.Fields()
@@ -27,6 +28,12 @@ func init() {
 	identityDescCreatedAt := identityFields[5].Descriptor()
 	// identity.DefaultCreatedAt holds the default value on creation for the created_at field.
 	identity.DefaultCreatedAt = identityDescCreatedAt.Default.(func() time.Time)
+	outboxeventFields := schema.OutboxEvent{}.Fields()
+	_ = outboxeventFields
+	// outboxeventDescCreatedAt is the schema descriptor for created_at field.
+	outboxeventDescCreatedAt := outboxeventFields[6].Descriptor()
+	// outboxevent.DefaultCreatedAt holds the default value on creation for the created_at field.
+	outboxevent.DefaultCreatedAt = outboxeventDescCreatedAt.Default.(func() time.Time)
 	sessionFields := schema.Session{}.Fields()
 	_ = sessionFields
 	// sessionDescCreatedAt is the schema descriptor for created_at field.

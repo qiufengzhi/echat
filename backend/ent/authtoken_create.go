@@ -40,6 +40,20 @@ func (_c *AuthTokenCreate) SetTokenHash(v string) *AuthTokenCreate {
 	return _c
 }
 
+// SetTarget sets the "target" field.
+func (_c *AuthTokenCreate) SetTarget(v string) *AuthTokenCreate {
+	_c.mutation.SetTarget(v)
+	return _c
+}
+
+// SetNillableTarget sets the "target" field if the given value is not nil.
+func (_c *AuthTokenCreate) SetNillableTarget(v *string) *AuthTokenCreate {
+	if v != nil {
+		_c.SetTarget(*v)
+	}
+	return _c
+}
+
 // SetExpiresAt sets the "expires_at" field.
 func (_c *AuthTokenCreate) SetExpiresAt(v time.Time) *AuthTokenCreate {
 	_c.mutation.SetExpiresAt(v)
@@ -193,6 +207,10 @@ func (_c *AuthTokenCreate) createSpec() (*AuthToken, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.TokenHash(); ok {
 		_spec.SetField(authtoken.FieldTokenHash, field.TypeString, value)
 		_node.TokenHash = value
+	}
+	if value, ok := _c.mutation.Target(); ok {
+		_spec.SetField(authtoken.FieldTarget, field.TypeString, value)
+		_node.Target = value
 	}
 	if value, ok := _c.mutation.ExpiresAt(); ok {
 		_spec.SetField(authtoken.FieldExpiresAt, field.TypeTime, value)
