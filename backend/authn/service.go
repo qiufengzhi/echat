@@ -20,7 +20,7 @@ import (
 // tokenTTL 一次性令牌有效期（默认 30 分钟）
 const tokenTTL = 30 * time.Minute
 
-// Service 认证域服务：编排注册、验证、绑定等用例
+// Service 认证域服务：编排注册、验证、绑定、登录会话等用例
 type Service struct {
 	// client Ent ORM 客户端
 	client *ent.Client
@@ -30,12 +30,25 @@ type Service struct {
 	mailer Mailer
 	// verifyBaseURL 前端验证页 URL 前缀，用于拼接一次性链接
 	verifyBaseURL string
+	// limiter 登录失败限流（默认进程内实现，可整体换成 Redis）
+	limiter LoginLimiter
 }
 
 // NewService 构造认证服务
 // client 持久层客户端，authCfg 认证配置，mailer 邮件发送器，verifyBaseURL 前端验证页前缀
 func NewService(client *ent.Client, authCfg config.AuthConfig, mailer Mailer, verifyBaseURL string) *Service {
-	return &Service{client: client, authCfg: authCfg, mailer: mailer, verifyBaseURL: verifyBaseURL}
+	return &Service{
+		client:        client,
+		authCfg:       authCfg,
+		mailer:        mailer,
+		verifyBaseURL: verifyBaseURL,
+		limiter:       NewMemLoginLimiter(),
+	}
+}
+
+// SetLoginLimiter 覆盖登录限流实现（测试注入 / 生产换 Redis）
+func (s *Service) SetLoginLimiter(l LoginLimiter) {
+	s.limiter = l
 }
 
 // RegisterRequest 注册请求体
@@ -118,14 +131,17 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*RegisterR
 		status = user.StatusPending
 	}
 
-	created, err := tx.User.Create().
+	create := tx.User.Create().
 		SetID(userID).
 		SetUsername(username).
 		SetDisplayName(username).
-		SetEmail(email).
 		SetStatus(status).
-		SetPasswordHash(hash).
-		Save(ctx)
+		SetPasswordHash(hash)
+	// email 只在校验邮箱路径写入：本地账号保持 NULL（空串会被部分唯一索引视为已占用）
+	if email != "" {
+		create.SetEmail(email)
+	}
+	created, err := create.Save(ctx)
 	if err != nil {
 		return nil, constraintOrInternal(err)
 	}
@@ -157,7 +173,7 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*RegisterR
 		}
 	}
 
-	if err := recordEvent(ctx, tx, Event{
+	if err := recordEvent(ctx, tx.OutboxEvent, Event{
 		Type:        EventTypeUserRegistered,
 		AggregateID: created.ID,
 		Subject:     userSubject(created.ID, "registered"),
@@ -231,7 +247,7 @@ func (s *Service) VerifyEmail(ctx context.Context, token string) error {
 		if _, err := tx.User.UpdateOneID(u.ID).SetStatus(user.StatusActive).Save(ctx); err != nil {
 			return ErrInternal
 		}
-		if err := recordEvent(ctx, tx, Event{
+		if err := recordEvent(ctx, tx.OutboxEvent, Event{
 			Type:        EventTypeUserVerified,
 			AggregateID: u.ID,
 			Subject:     userSubject(u.ID, "verified"),
@@ -252,7 +268,7 @@ func (s *Service) VerifyEmail(ctx context.Context, token string) error {
 		if _, err := tx.User.UpdateOneID(u.ID).SetEmail(bindTarget).Save(ctx); err != nil {
 			return ErrInternal
 		}
-		if err := recordEvent(ctx, tx, Event{
+		if err := recordEvent(ctx, tx.OutboxEvent, Event{
 			Type:        EventTypeUserEmailBound,
 			AggregateID: u.ID,
 			Subject:     userSubject(u.ID, "email.bound"),

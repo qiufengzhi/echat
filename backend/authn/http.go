@@ -3,6 +3,7 @@ package authn
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 )
 
@@ -61,6 +62,115 @@ func readJSON(r *http.Request, out any) error {
 		return ErrBadRequest
 	}
 	return nil
+}
+
+// refreshCookieName refresh token 的 httpOnly cookie 名
+const refreshCookieName = "refresh_token"
+
+// Login POST /api/v1/auth/login 登录接口
+// 请求体 {identifier, password}；成功后签发双 token，refresh 写入 httpOnly cookie
+func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
+	var req LoginRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, toError(err))
+		return
+	}
+	result, err := h.svc.Login(r.Context(), req, clientIP(r), r.UserAgent())
+	if err != nil {
+		writeError(w, toError(err))
+		return
+	}
+	setRefreshCookie(w, r, result.RefreshToken)
+	writeJSON(w, http.StatusOK, result)
+}
+
+// Refresh POST /api/v1/auth/refresh 轮换刷新
+// refresh 从 cookie 或请求体读取，成功后换发新 refresh（继续写 cookie）
+func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
+	rt := h.refreshTokenFrom(r)
+	result, err := h.svc.Refresh(r.Context(), rt, clientIP(r))
+	if err != nil {
+		writeError(w, toError(err))
+		return
+	}
+	setRefreshCookie(w, r, result.RefreshToken)
+	writeJSON(w, http.StatusOK, result)
+}
+
+// Logout POST /api/v1/auth/logout 单设备退出：吊销当前 refresh 会话
+func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.Logout(r.Context(), h.refreshTokenFrom(r)); err != nil {
+		writeError(w, toError(err))
+		return
+	}
+	clearRefreshCookie(w, r)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// LogoutAll POST /api/v1/auth/logout-all 全设备退出
+// 需要 Authorization: Bearer access；吊销全部会话并 +1 token_version
+func (h *Handler) LogoutAll(w http.ResponseWriter, r *http.Request) {
+	claims, err := h.accessClaimsFrom(r)
+	if err != nil {
+		writeError(w, toError(err))
+		return
+	}
+	if err := h.svc.LogoutAll(r.Context(), claims.SubjectUUID()); err != nil {
+		writeError(w, toError(err))
+		return
+	}
+	clearRefreshCookie(w, r)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// accessClaimsFrom 从 Authorization: Bearer 头解析 access 声明；缺失或非法返回 ErrInvalidToken
+func (h *Handler) accessClaimsFrom(r *http.Request) (*AccessClaims, error) {
+	raw := r.Header.Get("Authorization")
+	if len(raw) > 7 && raw[:7] == "Bearer " {
+		return h.svc.parseAccessToken(raw[7:])
+	}
+	return nil, ErrInvalidToken
+}
+
+// refreshTokenFrom 优先读取 httpOnly cookie，其次请求体（供纯 API 客户端）
+func (h *Handler) refreshTokenFrom(r *http.Request) string {
+	if c, err := r.Cookie(refreshCookieName); err == nil && c.Value != "" {
+		return c.Value
+	}
+	var body struct {
+		// RefreshToken 明文刷新串
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err == nil && body.RefreshToken != "" {
+		return body.RefreshToken
+	}
+	return ""
+}
+
+// clientIP 提取来源 IP：优先 RemoteAddr 的 host 部分，退化返回原串
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// setRefreshCookie 写 refresh 的 httpOnly cookie：防 XSS 窃取；SameSite 防 CSRF；仅限 auth 路径
+func setRefreshCookie(w http.ResponseWriter, r *http.Request, value string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     refreshCookieName,
+		Value:    value,
+		Path:     "/api/v1/auth",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		Secure:   r.TLS != nil, // 开发 http 下不强制 Secure，生产 https 自动开启
+	})
+}
+
+// clearRefreshCookie 清除 refresh cookie（登出）
+func clearRefreshCookie(w http.ResponseWriter, r *http.Request) {
+	setRefreshCookie(w, r, "")
 }
 
 // errorEnvelope 对外错误响应结构：统一包一层 error

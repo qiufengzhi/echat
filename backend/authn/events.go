@@ -44,10 +44,10 @@ func userSubject(userID uuid.UUID, suffix string) string {
 	return "user." + userID.String() + "." + suffix
 }
 
-// recordEvent 在既有事务内写入一条 outbox 事件，与业务数据同事务提交
-// ctx 透传事务上下文，tx 进行中的 ent 事务，ev 待记账事件
-func recordEvent(ctx context.Context, tx *ent.Tx, ev Event) error {
-	_, err := tx.OutboxEvent.Create().
+// recordEvent 写入一条 outbox 事件，与业务数据同事务提交
+// ctx 透传上下文，ec 事件客户端（tx.OutboxEvent 同事务 / client.OutboxEvent 独立写），ev 待记账事件
+func recordEvent(ctx context.Context, ec *ent.OutboxEventClient, ev Event) error {
+	_, err := ec.Create().
 		SetID(uuid.New()).
 		SetEventType(ev.Type).
 		SetAggregateID(ev.AggregateID).

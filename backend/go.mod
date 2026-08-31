@@ -6,6 +6,7 @@ require (
 	entgo.io/ent v0.14.6
 	github.com/alexedwards/argon2id v1.0.0
 	github.com/aliyun/alibabacloud-nls-go-sdk v1.1.1
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/gunter-q12/resample v1.0.0

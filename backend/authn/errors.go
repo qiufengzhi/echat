@@ -30,6 +30,8 @@ var (
 	ErrWeakPassword = &Error{Code: "WEAK_PASSWORD", Message: "密码强度不足，请使用更复杂的组合", Status: http.StatusBadRequest}
 	// ErrInvalidToken 一次性令牌无效/过期/已消费
 	ErrInvalidToken = &Error{Code: "TOKEN_INVALID", Message: "验证链接无效或已过期", Status: http.StatusBadRequest}
+	// ErrInvalidCredentials 用户名/密码错误，均返回同一文案防枚举
+	ErrInvalidCredentials = &Error{Code: "INVALID_CREDENTIALS", Message: "用户名或密码错误", Status: http.StatusUnauthorized}
 	// ErrAccountSuspended 账户被封禁，仅提示联系客服，不泄露具体处置
 	ErrAccountSuspended = &Error{Code: "ACCOUNT_SUSPENDED", Message: "账户状态异常，请联系客服处理", Status: http.StatusForbidden}
 	// ErrInternal 服务端内部错误，只给泛化文案

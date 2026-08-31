@@ -59,11 +59,15 @@ func main() {
 		logging.L().Fatalw("开发期 schema 迁移失败", "error", err)
 	}
 
-	// 认证域：注册 / 邮箱验证 接口
+	// 认证域：注册 / 邮箱验证 / 登录与会话 接口
 	authSvc := authn.NewService(st.Ent(), config.Get().Auth, authn.ConsoleMailer{}, config.Get().Auth.VerifyBaseURL)
 	authHandler := authn.NewHandler(authSvc)
 	http.HandleFunc("POST /api/v1/auth/register", authHandler.Register)
 	http.HandleFunc("POST /api/v1/auth/verify", authHandler.Verify)
+	http.HandleFunc("POST /api/v1/auth/login", authHandler.Login)
+	http.HandleFunc("POST /api/v1/auth/refresh", authHandler.Refresh)
+	http.HandleFunc("POST /api/v1/auth/logout", authHandler.Logout)
+	http.HandleFunc("POST /api/v1/auth/logout-all", authHandler.LogoutAll)
 
 	http.HandleFunc("/", handlers.IndexHandler)
 	http.HandleFunc("/ws", handlers.WebSocketHandler) // 注册 WebSocket 处理函数
