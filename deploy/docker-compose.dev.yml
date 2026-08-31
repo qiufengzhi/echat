@@ -1,0 +1,27 @@
+# eChat 本地开发环境 Docker Compose
+#
+# 当前只起 PostgreSQL——持久层跑通后才逐步加入后续探索组件
+# 启动：docker compose -f deploy/docker-compose.dev.yml up -d
+# 端口避开生产栈占用的 8080/5432，PostgreSQL 用 5433
+
+services:
+  postgres:
+    container_name: echat-dev-postgres
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: echat        # 开发库用户
+      POSTGRES_PASSWORD: echat    # 开发库密码，仅本地开发，生产以环境变量覆盖
+      POSTGRES_DB: echat_dev      # 开发库名
+    ports:
+      - "5433:5432"               # 宿主机 5433 -> 容器 5432，避开生产默认 5432
+    volumes:
+      - echat_dev_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U echat -d echat_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  echat_dev_pgdata:

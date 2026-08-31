@@ -31,6 +31,7 @@ bin/
 vendor/
 .gocache/
 backend/.gocache/
+backend/.tools/
 
 # Logs and temp files
 *.log
@@ -44,3 +45,9 @@ agent/config.yaml
 # Python / agent
 __pycache__/
 *.pyc
+
+journey.html
+journey.md
+.recall/
+
+agent/test/

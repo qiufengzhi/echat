@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"echat-backend/asr_cli"
 	"echat-backend/config"
 	"echat-backend/global"
@@ -9,6 +10,7 @@ import (
 	"echat-backend/logging"
 	"echat-backend/room"
 	"echat-backend/sfu"
+	"echat-backend/store"
 	"echat-backend/tts_cli"
 	"net/http"
 	"time"
@@ -37,6 +39,23 @@ func main() {
 	//vad_cli.InitVADClient()
 	llm_cli.Init() // 初始化 LLM rpc客户端
 	tts_cli.Init() // 初始化 TTS
+
+	// 初始化 PostgreSQL 持久层（用户系统地基；连接失败即退出，提示先启动 dev compose）
+	dbCtx, dbCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer dbCancel()
+	st, err := store.Open(dbCtx, config.Get().Database)
+	if err != nil {
+		logging.L().Fatalw("数据库初始化失败", "error", err,
+			"hint", "先运行: docker compose -f deploy/docker-compose.dev.yml up -d")
+	}
+	defer st.Close()
+
+	// 按 Ent Schema 做开发期自动建表/迁移（幂等；生产迁移以 backend/migrations 版本化文件为准）
+	migCtx, migCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer migCancel()
+	if err = st.Migrate(migCtx); err != nil {
+		logging.L().Fatalw("开发期 schema 迁移失败", "error", err)
+	}
 
 	http.HandleFunc("/", handlers.IndexHandler)
 	http.HandleFunc("/ws", handlers.WebSocketHandler) // 注册 WebSocket 处理函数

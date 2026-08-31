@@ -23,6 +23,8 @@ type Config struct {
 	TTS    TTSConfig    `yaml:"tts"`    // 语音合成配置
 	AI     AIConfig     `yaml:"ai"`     // AI 语音助手配置
 	Room   RoomConfig   `yaml:"room"`   // 房间与 WebSocket 配置
+	Database DatabaseConfig `yaml:"database"` // PostgreSQL 持久层配置
+	Auth   AuthConfig   `yaml:"auth"`   // 用户系统认证与密码哈希配置
 	Log    LogConfig    `yaml:"log"`    // 日志配置
 }
 
@@ -109,6 +111,39 @@ type AIConfig struct {
 	StandbyTimeout string `yaml:"standby_timeout"`
 }
 
+// DatabaseConfig PostgreSQL 持久层连接配置
+type DatabaseConfig struct {
+	Host     string `yaml:"host"`       // PostgreSQL 主机地址，默认 127.0.0.1
+	Port     int    `yaml:"port"`       // PostgreSQL 端口，默认 5433（避开生产栈默认 5432）
+	User     string `yaml:"user"`       // 连接用户名
+	Password string `yaml:"password"`   // 连接密码
+	Name     string `yaml:"name"`       // 数据库名
+	TimeZone string `yaml:"time_zone"`  // 会话时区，默认 Asia/Shanghai
+}
+
+// DSN 拼接成 pgx 驱动可用的连接串
+func (d DatabaseConfig) DSN() string {
+	return fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable TimeZone=%s",
+		d.Host, d.Port, d.User, d.Password, d.Name, d.TimeZone)
+}
+
+// AuthConfig 用户系统认证与密码哈希配置
+type AuthConfig struct {
+	JWTSecret      string       `yaml:"jwt_secret"`       // access token 的 HMAC 签名密钥，生产必须用环境变量覆盖
+	AccessTokenTTL string       `yaml:"access_token_ttl"` // access token 有效期，默认 "15m"
+	RefreshTokenTTL string      `yaml:"refresh_token_ttl"` // refresh token 有效期，默认 "720h"（30 天）
+	Argon2         Argon2Config `yaml:"argon2"`         // argon2id 密码哈希参数
+}
+
+// Argon2Config argon2id 参数，OWASP 推荐内存密集型反 GPU 并行爆破
+type Argon2Config struct {
+	MemoryKiB  uint32 `yaml:"memory_kib"` // 内存开销 KiB，默认 65536（64 MiB）
+	Iterations uint32 `yaml:"iterations"` // 迭代次数，默认 3
+	Parallelism uint8 `yaml:"parallelism"` // 并行度，默认 4
+	SaltLength uint32 `yaml:"salt_length"` // 随机盐字节数，默认 16
+	KeyLength  uint32 `yaml:"key_length"`  // 派生密钥字节数，默认 32
+}
+
 // LogConfig 日志配置
 //
 // Level 控制输出级别，只输出 >= 该级别的日志：
@@ -193,6 +228,26 @@ func DefaultConfig() *Config {
 		},
 		AI: AIConfig{
 			StandbyTimeout: "60s",
+		},
+		Database: DatabaseConfig{
+			Host:     "127.0.0.1",
+			Port:     5433,
+			User:     "echat",
+			Password: "echat",
+			Name:     "echat_dev",
+			TimeZone: "Asia/Shanghai",
+		},
+		Auth: AuthConfig{
+			JWTSecret:       "dev-insecure-change-me",
+			AccessTokenTTL:  "15m",
+			RefreshTokenTTL: "720h",
+			Argon2: Argon2Config{
+				MemoryKiB:  65536,
+				Iterations: 3,
+				Parallelism: 4,
+				SaltLength: 16,
+				KeyLength:  32,
+			},
 		},
 		Log: LogConfig{
 			Level:         "info",
@@ -363,6 +418,39 @@ func applyEnvOverrides(cfg *Config) {
 	// --- AI ---
 	if v := os.Getenv("AI_STANDBY_TIMEOUT"); v != "" {
 		cfg.AI.StandbyTimeout = v
+	}
+
+	// --- Database ---
+	if v := os.Getenv("DB_HOST"); v != "" {
+		cfg.Database.Host = v
+	}
+	if v := os.Getenv("DB_PORT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Database.Port = n
+		}
+	}
+	if v := os.Getenv("DB_USER"); v != "" {
+		cfg.Database.User = v
+	}
+	if v := os.Getenv("DB_PASSWORD"); v != "" {
+		cfg.Database.Password = v
+	}
+	if v := os.Getenv("DB_NAME"); v != "" {
+		cfg.Database.Name = v
+	}
+	if v := os.Getenv("DB_TIME_ZONE"); v != "" {
+		cfg.Database.TimeZone = v
+	}
+
+	// --- Auth ---
+	if v := os.Getenv("AUTH_JWT_SECRET"); v != "" {
+		cfg.Auth.JWTSecret = v
+	}
+	if v := os.Getenv("AUTH_ACCESS_TTL"); v != "" {
+		cfg.Auth.AccessTokenTTL = v
+	}
+	if v := os.Getenv("AUTH_REFRESH_TTL"); v != "" {
+		cfg.Auth.RefreshTokenTTL = v
 	}
 
 	// --- Log ---
