@@ -5,6 +5,8 @@ import { useVoiceRoom } from './hooks/useVoiceRoom'
 import HomePage from './pages/HomePage'
 import LeavePage from './pages/LeavePage'
 import VoiceRoomPage from './pages/VoiceRoomPage'
+import { getAuthUser, login, logout } from './services/auth'
+import type { AuthUser } from './services/auth'
 import type { AppView, JoinRoomInput, LeaveRoomSummary } from './types/voiceRoomUi'
 
 // ROOM_SESSION_KEY 用于页面刷新后恢复房间状态，避免重连或手动刷新后直接回到首页
@@ -52,13 +54,50 @@ function App() {
   const initialSession = getInitialSession()
   const [view, setView] = useState<AppView>(initialSession.view || 'home')
   const [roomId, setRoomId] = useState(initialSession.roomId || getInitialRoomId)
-  const [username, setUsername] = useState(initialSession.username || '')
+  const [username, setUsername] = useState(initialSession.username || getAuthUser()?.display_name || '')
   const [isJoining, setIsJoining] = useState(false)
   const [joinedAt, setJoinedAt] = useState<number | null>(null)
   const [isHostTransferOpen, setIsHostTransferOpen] = useState(false)
   const [lastSummary, setLastSummary] = useState<LeaveRoomSummary | null>(null)
+  // 认证状态：access 令牌 + 用户概要，驱动首页登录表单与 WS 握手
+  const [authedUser, setAuthedUser] = useState<AuthUser | null>(() => getAuthUser())
+  const [loggingIn, setLoggingIn] = useState(false)
+  const [loginError, setLoginError] = useState<string | null>(null)
+  // kickedNotice 连接被服务端踢下线后的提示文案，切回首页展示
+  const [kickedNotice, setKickedNotice] = useState<string | null>(null)
 
-  const voiceRoom = useVoiceRoom()
+  const voiceRoom = useVoiceRoom({
+    onKicked: () => {
+      setKickedNotice('你已被强制下线（账号在别处登录，或会话已被注销）')
+      setIsHostTransferOpen(false)
+      setLastSummary(null)
+      setJoinedAt(null)
+      setView('home')
+    },
+  })
+
+  // handleLogin 登录成功后保存用户并预填昵称
+  const handleLogin = useCallback(async (identifier: string, password: string) => {
+    setLoggingIn(true)
+    setLoginError(null)
+    try {
+      const user = await login(identifier, password)
+      setAuthedUser(user)
+      setUsername(user.display_name || user.username)
+      setKickedNotice(null)
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : '登录失败，请稍后重试')
+    } finally {
+      setLoggingIn(false)
+    }
+  }, [])
+
+  // handleLogout 清除本地令牌并吊销当前会话
+  const handleLogout = useCallback(() => {
+    logout()
+    setAuthedUser(null)
+    setKickedNotice(null)
+  }, [])
 
   // 动态标题：首页/离开页仅颜文字，房间页加上昵称
   useEffect(() => {
@@ -171,10 +210,15 @@ function App() {
         <HomePage
           defaultRoomId={roomId}
           defaultUsername={username}
-          error={voiceRoom.error}
+          error={voiceRoom.error || kickedNotice}
           isJoining={isJoining}
           onCreateRoom={input => { void enterRoom(input) }}
           onJoinRoom={input => { void enterRoom(input) }}
+          authedUser={authedUser}
+          loggingIn={loggingIn}
+          loginError={loginError}
+          onLogin={(identifier, password) => { void handleLogin(identifier, password) }}
+          onLogout={handleLogout}
         />
       )}
 

@@ -9,28 +9,42 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
+// ConnIdentity 握手鉴权后的连接身份，取代早期「每连接随机 UUID 当身份」
+// 身份（UserID）来自 access token 的 sub，服务端权威，客户端无法伪造
+type ConnIdentity struct {
+	// UserID 鉴权后的用户 id（权威身份，来自 access 的 sub）
+	UserID string
+	// SessionID 签发 access 的会话 id，吊销时按此精确踢连接
+	SessionID string
+	// TokenVersion 签发时的 token_version，预留吊销级联比对
+	TokenVersion int
+}
+
 // Client 表示一个已连接的浏览器客户端，以及它在房间中的成员信息
 type Client struct {
-	ID        string          // 客户端唯一标识，由服务端在连接建立时生成
-	RoomID    string          // 客户端当前所在房间 ID，尚未加入房间时为空
-	Username  string          // 用户进入房间时填写的展示昵称
-	JoinedAt  time.Time       // 加入房间时间，用于生成稳定的成员列表排序
-	Conn      *websocket.Conn // 与浏览器保持的 WebSocket 连接实例
-	Send      chan []byte     // 单客户端发送队列，由 writePump 串行写入 WebSocket
-	closeOnce sync.Once       // 确保离开/断连清理只执行一次，避免重复关闭通道或连接
+	ConnID       string          // 连接级唯一 id（服务端生成），作为 SFU peer 与通道键
+	UserID       string          // 鉴权后的用户 id（权威身份，所有上行身份以绑定值为准）
+	SessionID    string          // 签发 access 的会话 id，吊销联动时精确踢连接
+	TokenVersion int             // 签发时的 token_version，预留吊销级联比对
+	RoomID       string          // 客户端当前所在房间 ID，尚未加入房间时为空
+	Username     string          // 用户进入房间时填写的展示昵称
+	JoinedAt     time.Time       // 加入房间时间，用于生成稳定的成员列表排序
+	Conn         *websocket.Conn // 与浏览器保持的 WebSocket 连接实例
+	Send         chan []byte     // 单客户端发送队列，由 writePump 串行写入 WebSocket
+	closeOnce    sync.Once       // 确保离开/断连清理只执行一次，避免重复关闭通道或连接
 }
 
 // Room 表示一个信令房间，后端在这里维护成员列表和权威房主
 type Room struct {
 	ID      string             // 房间唯一标识，由前端创建或输入
-	HostID  string             // 当前房主的客户端 ID；房主离开时会重新选择
-	Clients map[string]*Client // 当前在线成员，以 client.ID 为键
+	HostID  string             // 当前房主的用户 ID；房主离开时会重新选择
+	Clients map[string]*Client // 当前在线成员，以连接 ID（ConnID）为键
 	Lock    sync.RWMutex       // 保护 HostID 和 Clients 的并发读写
 }
 
 // RoomUser 是返回给前端的成员摘要，只包含 UI 展示和身份判断必需字段
 type RoomUser struct {
-	ID       string `json:"id"`       // 成员 ID，对应 Client.ID
+	ID       string `json:"id"`       // 成员 ID（鉴权后的用户 id），前端席位/成员列表主键
 	Username string `json:"username"` // 成员昵称，用于席位和成员列表展示
 }
 
@@ -48,20 +62,20 @@ type RoomReadyPayload struct {
 
 // UserJoinedPayload 广播给房间已有成员，通知新成员加入并同步当前房主
 type UserJoinedPayload struct {
-	UserID   string `json:"user_id"`  // 新加入成员 ID
+	UserID   string `json:"user_id"`  // 新加入成员的用户 ID（鉴权后身份）
 	Username string `json:"username"` // 新加入成员昵称
 	HostID   string `json:"host_id"`  // 当前房主 ID，避免前端房主状态滞后
 }
 
 // UserLeftPayload 广播给剩余成员，表示某位成员已离开
 type UserLeftPayload struct {
-	UserID string `json:"user_id"`           // 离开的成员 ID
+	UserID string `json:"user_id"`           // 离开成员的用户 ID（鉴权后身份）
 	HostID string `json:"host_id,omitempty"` // 离开后仍存在的房主 ID；房间清空时省略
 }
 
 // LeavePayload 是客户端主动离开时可携带的载荷，房主可用它指定下一任房主
 type LeavePayload struct {
-	NextHostID string `json:"next_host_id,omitempty"` // 期望交接给的成员 ID；为空或无效时服务端自动选择
+	NextHostID string `json:"next_host_id,omitempty"` // 期望交接给的用户 ID；为空或无效时服务端自动选择
 }
 
 // ---------- SFU 信令载荷类型 ----------

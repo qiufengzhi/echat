@@ -172,6 +172,26 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   margin-top: 6px;
 }
 
+.home-userbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.home-username {
+  font-weight: 800;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 /* ============================================================
    声聊间
    ============================================================ */

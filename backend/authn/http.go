@@ -108,13 +108,8 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 }
 
 // LogoutAll POST /api/v1/auth/logout-all 全设备退出
-// 需要 Authorization: Bearer access；吊销全部会话并 +1 token_version
-func (h *Handler) LogoutAll(w http.ResponseWriter, r *http.Request) {
-	claims, err := h.accessClaimsFrom(r)
-	if err != nil {
-		writeError(w, toError(err))
-		return
-	}
+// 需要 Authorization: Bearer access；吊销全部会话并 +1 token_version，实时连接随之被踢
+func (h *Handler) LogoutAll(w http.ResponseWriter, r *http.Request, claims *AccessClaims) {
 	if err := h.svc.LogoutAll(r.Context(), claims.SubjectUUID()); err != nil {
 		writeError(w, toError(err))
 		return
@@ -157,14 +152,24 @@ func (h *Handler) PasswordReset(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// PasswordChange POST /api/v1/auth/password/change 已登录改密
-// 需要 Authorization: Bearer access；将吊销本设备之外全部会话
-func (h *Handler) PasswordChange(w http.ResponseWriter, r *http.Request) {
-	claims, err := h.accessClaimsFrom(r)
-	if err != nil {
+// EmailBind POST /api/v1/auth/email/verify-request 申请绑定/换绑邮箱
+// 需要 Authorization: Bearer access；签发一次性验证链接并发邮件
+func (h *Handler) EmailBind(w http.ResponseWriter, r *http.Request, claims *AccessClaims) {
+	var req BindEmailRequest
+	if err := readJSON(r, &req); err != nil {
 		writeError(w, toError(err))
 		return
 	}
+	if err := h.svc.RequestEmailBind(r.Context(), claims.SubjectUUID(), req); err != nil {
+		writeError(w, toError(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// PasswordChange POST /api/v1/auth/password/change 已登录改密
+// 需要 Authorization: Bearer access；将吊销本设备之外全部会话
+func (h *Handler) PasswordChange(w http.ResponseWriter, r *http.Request, claims *AccessClaims) {
 	var req ChangePasswordRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, toError(err))
@@ -175,15 +180,6 @@ func (h *Handler) PasswordChange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-}
-
-// accessClaimsFrom 从 Authorization: Bearer 头解析 access 声明；缺失或非法返回 ErrInvalidToken
-func (h *Handler) accessClaimsFrom(r *http.Request) (*AccessClaims, error) {
-	raw := r.Header.Get("Authorization")
-	if len(raw) > 7 && raw[:7] == "Bearer " {
-		return h.svc.parseAccessToken(raw[7:])
-	}
-	return nil, ErrInvalidToken
 }
 
 // refreshTokenFrom 优先读取 httpOnly cookie，其次请求体（供纯 API 客户端）

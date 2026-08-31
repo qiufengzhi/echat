@@ -73,22 +73,25 @@ func getOrCreateRoom(roomID string) *Room {
 	return createRoom(roomID)
 }
 
-// HandleConnection 为新 WebSocket 连接创建客户端对象，启动写协程，并持续读取客户端消息
+// HandleConnection 为新 WebSocket 连接创建客户端对象并绑定鉴权身份，然后启动读写协程
 // conn 的生命周期由 readPump/writePump/disconnect 共同管理
-func HandleConnection(conn *websocket.Conn) {
-	userID := uuid.NewString() // 客户端唯一标识
+// identity 握手阶段鉴权后的身份（用户/会话/版本），取代早期每连接随机 UUID
+func HandleConnection(conn *websocket.Conn, identity ConnIdentity) {
 	client := &Client{
-		ID:   userID,
+		ConnID:       uuid.NewString(), // 连接级唯一 id，仅作为通道/房间键，不是身份
+		UserID:       identity.UserID,  // 权威用户身份，来自 access token 的 sub
+		SessionID:    identity.SessionID,
+		TokenVersion: identity.TokenVersion,
 		Conn: conn,
 		// 使用缓冲队列避免短暂慢客户端立刻阻塞整房广播
 		Send: make(chan []byte, 256),
 	}
 
 	clientLock.Lock()
-	allConnectedClients[userID] = client
+	allConnectedClients[client.ConnID] = client
 	clientLock.Unlock()
 
-	logger.Infow("客户端已连接", "userID", userID)
+	logger.Infow("客户端已连接", "userID", client.UserID, "connID", client.ConnID)
 
 	go writePump(client) // 统一串行写 WebSocket，避免并发写连接
 	readPump(client)     // 当前协程负责读取并按消息顺序分发。阻塞
@@ -103,7 +106,7 @@ func HandleConnection(conn *websocket.Conn) {
 func readPump(client *Client) {
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Warnw("readPump 发生 panic", "userID", client.ID, "panic", r)
+			logger.Warnw("readPump 发生 panic", "userID", client.UserID, "panic", r)
 		}
 	}()
 
@@ -119,7 +122,8 @@ func readPump(client *Client) {
 			}
 			// 记录所有读循环结束原因，用来区分代理/网络断开和客户端主动 leave
 			logger.Infow("WebSocket 读取结束",
-				"userID", client.ID,
+				"userID", client.UserID,
+				"connID", client.ConnID,
 				"roomID", client.RoomID,
 				"username", client.Username,
 				"closeCode", closeCode,
@@ -131,7 +135,7 @@ func readPump(client *Client) {
 
 		var msg Message
 		if err = json.Unmarshal(message, &msg); err != nil {
-			logger.Warnw("无效消息", "userID", client.ID, "error", err)
+			logger.Warnw("无效消息", "userID", client.UserID, "error", err)
 			continue
 		}
 
@@ -215,18 +219,18 @@ func handleJoin(client *Client, msg *Message) {
 
 	username := parseUsername(msg.Payload)
 	if username == "" {
-		username = "用户" + client.ID[:8]
+		username = "用户" + client.UserID[:8]
 	}
 
-	// 加入信令房间（设置成员和房主）
+	// 加入信令房间（成员键是连接 ID，房主身份是用户 ID，二者分离）
 	r := getOrCreateRoom(roomID)
 	r.Lock.Lock()
 	client.RoomID = roomID
 	client.Username = username
 	client.JoinedAt = time.Now()
-	r.Clients[client.ID] = client
+	r.Clients[client.ConnID] = client
 	if r.HostID == "" {
-		r.HostID = client.ID
+		r.HostID = client.UserID
 	}
 	hostID := r.HostID
 	userCount := len(r.Clients)
@@ -277,8 +281,8 @@ func handleJoin(client *Client, msg *Message) {
 	})
 
 	// 让 SFU 引擎为该客户端创建 PeerConnection（不生成 Offer）
-	if err := sfuRoom.Join(client.ID); err != nil {
-		logger.Warnw("加入失败", "userID", client.ID[:8], "error", err)
+	if err := sfuRoom.Join(client.ConnID); err != nil {
+		logger.Warnw("加入失败", "userID", client.ConnID[:8], "error", err)
 		sendError(client, "无法创建 WebRTC 连接，请重试")
 		return
 	}
@@ -292,8 +296,8 @@ func handleJoin(client *Client, msg *Message) {
 	}
 
 	// 通知已有成员新用户已加入
-	broadcastToRoom(roomID, client.ID, MsgTypeUserJoined, UserJoinedPayload{
-		UserID:   client.ID,
+	broadcastToRoom(roomID, client.ConnID, MsgTypeUserJoined, UserJoinedPayload{
+		UserID:   client.UserID,
 		Username: username,
 		HostID:   hostID,
 	})
@@ -315,7 +319,7 @@ func handleSFUOffer(client *Client, payload json.RawMessage) {
 
 	var offer SFUOfferPayload
 	if err := json.Unmarshal(payload, &offer); err != nil {
-		logger.Warnw("sfu_offer 内容无效", "userID", client.ID[:8], "error", err)
+		logger.Warnw("sfu_offer 内容无效", "userID", client.ConnID[:8], "error", err)
 		return
 	}
 
@@ -325,9 +329,9 @@ func handleSFUOffer(client *Client, payload json.RawMessage) {
 		return
 	}
 
-	answerSDP, err := sfuRoom.AcceptOffer(client.ID, offer.SDP)
+	answerSDP, err := sfuRoom.AcceptOffer(client.ConnID, offer.SDP)
 	if err != nil {
-		logger.Warnw("接受 Offer 失败", "userID", client.ID[:8], "error", err)
+		logger.Warnw("接受 Offer 失败", "userID", client.ConnID[:8], "error", err)
 		sendError(client, "信令协商失败")
 		return
 	}
@@ -345,7 +349,7 @@ func handleRenegotiationAnswer(client *Client, payload json.RawMessage) {
 
 	var answer RenegotiationAnswerPayload
 	if err := json.Unmarshal(payload, &answer); err != nil {
-		logger.Warnw("renegotiation answer 内容无效", "userID", client.ID[:8], "error", err)
+		logger.Warnw("renegotiation answer 内容无效", "userID", client.ConnID[:8], "error", err)
 		return
 	}
 
@@ -355,8 +359,8 @@ func handleRenegotiationAnswer(client *Client, payload json.RawMessage) {
 		return
 	}
 
-	if err := sfuRoom.AcceptRenegotiationAnswer(client.ID, answer.SDP); err != nil {
-		logger.Warnw("renegotiation answer 处理失败", "userID", client.ID[:8], "error", err)
+	if err := sfuRoom.AcceptRenegotiationAnswer(client.ConnID, answer.SDP); err != nil {
+		logger.Warnw("renegotiation answer 处理失败", "userID", client.ConnID[:8], "error", err)
 		return
 	}
 }
@@ -370,7 +374,7 @@ func handleSFUICE(client *Client, payload json.RawMessage) {
 
 	var ice SFUICEPayload
 	if err := json.Unmarshal(payload, &ice); err != nil {
-		logger.Warnw("sfu_ice 内容无效", "userID", client.ID[:8], "error", err)
+		logger.Warnw("sfu_ice 内容无效", "userID", client.ConnID[:8], "error", err)
 		return
 	}
 
@@ -380,8 +384,8 @@ func handleSFUICE(client *Client, payload json.RawMessage) {
 		return
 	}
 
-	if err := sfuRoom.AcceptICECandidate(client.ID, ice.ToWebRTCICECandidateInit()); err != nil {
-		logger.Warnw("ICE Candidate 添加失败", "userID", client.ID[:8], "error", err)
+	if err := sfuRoom.AcceptICECandidate(client.ConnID, ice.ToWebRTCICECandidateInit()); err != nil {
+		logger.Warnw("ICE Candidate 添加失败", "userID", client.ConnID[:8], "error", err)
 	}
 }
 
@@ -393,8 +397,8 @@ func handleRelay(client *Client, msgType string, payload json.RawMessage) {
 		return
 	}
 
-	broadcastRawToRoom(client.RoomID, client.ID, msgType, payload)
-	logger.Infow("已转发信令", "msgType", msgType, "from", client.ID[:8])
+	broadcastRawToRoom(client.RoomID, client.ConnID, msgType, payload)
+	logger.Infow("已转发信令", "msgType", msgType, "from", client.ConnID[:8])
 }
 
 // handleLeave 处理客户端主动离开房间的请求
@@ -403,12 +407,12 @@ func handleLeave(client *Client, payload json.RawMessage) {
 	var leavePayload LeavePayload
 	if len(payload) > 0 {
 		if err := json.Unmarshal(payload, &leavePayload); err != nil {
-			logger.Warnw("离开消息无效", "userID", client.ID, "error", err)
+			logger.Warnw("离开消息无效", "userID", client.UserID, "error", err)
 		}
 	}
 
 	logger.Infow("用户请求离开",
-		"userID", client.ID,
+		"userID", client.UserID,
 		"roomID", client.RoomID,
 		"username", client.Username,
 		"nextHost", leavePayload.NextHostID,
@@ -425,7 +429,7 @@ func disconnect(client *Client, preferredNextHostID string) {
 		// 先清理 SFU 连接，确保停止音轨转发
 		if roomID != "" {
 			if sfuRoom := sfuServer.GetRoom(roomID); sfuRoom != nil {
-				sfuRoom.Leave(client.ID)
+				sfuRoom.Leave(client.ConnID)
 				// 如果 SFU 房间已空，也清理 SFU 房间
 				if sfuRoom.PeerCount() == 0 {
 					sfuServer.RemoveRoom(roomID)
@@ -445,8 +449,8 @@ func disconnect(client *Client, preferredNextHostID string) {
 			roomLock.RUnlock()
 			if ok {
 				r.Lock.Lock()
-				wasHost := r.HostID == client.ID // 是否为房主
-				delete(r.Clients, client.ID)
+				wasHost := r.HostID == client.UserID // 是否为房主（按用户身份判断）
+				delete(r.Clients, client.ConnID)
 				remaining := len(r.Clients)
 
 				if remaining == 0 { // 房间无人，删除整个房间
@@ -461,14 +465,14 @@ func disconnect(client *Client, preferredNextHostID string) {
 				r.Lock.Unlock()
 
 				if remaining > 0 {
-					broadcastToRoom(roomID, client.ID, MsgTypeUserLeft, UserLeftPayload{
-						UserID: client.ID,
+					broadcastToRoom(roomID, client.ConnID, MsgTypeUserLeft, UserLeftPayload{
+						UserID: client.UserID,
 						HostID: nextHostID,
 					})
 
-					if wasHost && nextHostID != "" && nextHostID != client.ID {
+					if wasHost && nextHostID != "" && nextHostID != client.UserID {
 						global.AIStates.SetOffline(roomID) // 房主交接时重置 AI 为离线，新房主需重新开启
-						broadcastToRoom(roomID, client.ID, MsgTypeHostChanged, map[string]string{
+						broadcastToRoom(roomID, client.ConnID, MsgTypeHostChanged, map[string]string{
 							"host_id": nextHostID,
 						})
 					}
@@ -493,36 +497,47 @@ func disconnect(client *Client, preferredNextHostID string) {
 
 		// 从全局客户端索引移除
 		clientLock.Lock()
-		delete(allConnectedClients, client.ID)
+		delete(allConnectedClients, client.ConnID)
 		clientLock.Unlock()
 
 		// 关闭发送队列和底层 WebSocket
 		close(client.Send)
 		_ = client.Conn.Close()
-		logger.Infow("客户端已断开", "userID", client.ID[:8])
+		logger.Infow("客户端已断开", "userID", client.UserID)
 	})
 }
 
 // chooseNextHostID 在当前房间剩余成员中选择下一任房主
-// preferredNextHostID 有效时优先使用；否则从排序后的成员 ID 中随机选择
+// preferredNextHostID 有效时优先使用（按用户身份匹配）；否则从排序后的用户 ID 中随机选择
 func chooseNextHostID(room *Room, preferredNextHostID string) string {
 	if preferredNextHostID != "" {
-		if _, ok := room.Clients[preferredNextHostID]; ok {
-			return preferredNextHostID
+		if c, ok := clientByUserID(room, preferredNextHostID); ok {
+			return c.UserID
 		}
 	}
 
-	clientIDs := make([]string, 0, len(room.Clients))
-	for id := range room.Clients {
-		clientIDs = append(clientIDs, id)
+	userIDs := make([]string, 0, len(room.Clients))
+	for _, c := range room.Clients {
+		userIDs = append(userIDs, c.UserID)
 	}
 
-	if len(clientIDs) == 0 {
+	if len(userIDs) == 0 {
 		return ""
 	}
 
-	slices.Sort(clientIDs)
-	return clientIDs[rand.Intn(len(clientIDs))]
+	slices.Sort(userIDs)
+	return userIDs[rand.Intn(len(userIDs))]
+}
+
+// clientByUserID 按权威用户 id 反查房间内连接
+// 成员键是连接 ID（ConnID），身份是用户 ID（UserID），二者分离故需反查
+func clientByUserID(room *Room, userID string) (*Client, bool) {
+	for _, c := range room.Clients {
+		if c.UserID == userID {
+			return c, true
+		}
+	}
+	return nil, false
 }
 
 // sendToClient 把结构化 payload 编码成统一 Message 后发送给指定客户端
@@ -541,7 +556,7 @@ func sendToClient(client *Client, msgType string, payload interface{}, roomID st
 	sendRaw(client, Message{
 		Type:    msgType,
 		RoomID:  roomID,
-		UserID:  client.ID,
+		UserID:  client.UserID,
 		Payload: rawPayload,
 	})
 }
@@ -562,7 +577,7 @@ func sendRaw(client *Client, msg Message) {
 	select {
 	case client.Send <- data:
 	default:
-		logger.Warnw("慢客户端消息丢弃", "userID", client.ID[:8])
+		logger.Warnw("慢客户端消息丢弃", "userID", client.ConnID[:8])
 	}
 }
 
@@ -615,7 +630,7 @@ func broadcastRawToRoom(roomID, senderID, msgType string, payload json.RawMessag
 		select {
 		case client.Send <- data:
 		default:
-			logger.Warnw("房间广播消息丢弃(慢客户端)", "userID", client.ID[:8])
+			logger.Warnw("房间广播消息丢弃(慢客户端)", "userID", client.ConnID[:8])
 		}
 	}
 }
@@ -645,9 +660,9 @@ func getRoomUsers(roomID string) []RoomUser {
 			return 1
 		}
 		switch {
-		case a.ID < b.ID:
+		case a.ConnID < b.ConnID:
 			return -1
-		case a.ID > b.ID:
+		case a.ConnID > b.ConnID:
 			return 1
 		default:
 			return 0
@@ -657,7 +672,7 @@ func getRoomUsers(roomID string) []RoomUser {
 	users := make([]RoomUser, 0, len(clients))
 	for _, client := range clients {
 		users = append(users, RoomUser{
-			ID:       client.ID,
+			ID:       client.UserID,
 			Username: client.Username,
 		})
 	}

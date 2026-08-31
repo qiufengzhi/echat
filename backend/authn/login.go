@@ -277,7 +277,12 @@ func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 // LogoutAll 全部设备退出：吊销该用户全部会话并 +1 token_version（旧 access 全废）
 // ctx 链路上下文，userID 目标用户
 func (s *Service) LogoutAll(ctx context.Context, userID uuid.UUID) error {
-	return s.revokeAllAndBump(ctx, userID)
+	if err := s.revokeAllAndBump(ctx, userID); err != nil {
+		return err
+	}
+	// 广播吊销给实时层，该用户的全部 WS 连接立即被踢
+	s.publishRevoked(userID, uuid.Nil, "logout-all")
+	return nil
 }
 
 // revokeAllAndBump 吊销用户全部会话并把 token_version+1（置旧 access 立即失效）

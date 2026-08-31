@@ -161,9 +161,16 @@ function upsertRoomUser(users: User[], nextUser: User): User[] {
 //   1. 采集本地麦克风
 //   2. 通过 WebSocket 交换 SFU 信令（sfu_offer / sfu_answer / sfu_ice）
 //   3. 与 SFU 服务端建立单条 PeerConnection，接收多路远端音频流
-export function useVoiceRoom(): UseVoiceRoomReturn {
+// options.onKicked 在连接被服务端踢下线（会话吊销/封禁）时回调，由页面决定如何提示与跳转
+export function useVoiceRoom(options?: { onKicked?: () => void }): UseVoiceRoomReturn {
   // state 会驱动 React 页面刷新，例如成员席位、房主标记、远程音频和连接状态
   const [state, setState] = useState<VoiceRoomState>(createEmptyVoiceRoomState)
+
+  // onKickedRef 用 ref 持有回调：事件回调里避免捕获过期的 options 闭包
+  const onKickedRef = useRef<(() => void) | undefined>(undefined)
+  useEffect(() => {
+    onKickedRef.current = options?.onKicked
+  }, [options])
 
   // 这些 ref 保存不会直接触发页面刷新的底层连接对象，避免事件回调拿到过期值
   const signalingClientRef = useRef<SignalingClient | null>(null)
@@ -573,6 +580,15 @@ export function useVoiceRoom(): UseVoiceRoomReturn {
               isReconnecting: false,
               error: MICROPHONE_ERROR_MESSAGES.signaling,
             }))
+          },
+          onKicked: () => {
+            setState(prev => ({
+              ...prev,
+              isReconnecting: false,
+              error: '你已被强制下线（账号在别处登录，或会话已被注销）',
+            }))
+            // 交由页面处理跳转与提示；连接与媒体资源随后由组件卸载时的清理逻辑释放
+            onKickedRef.current?.()
           },
         },
       })

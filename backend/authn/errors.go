@@ -30,6 +30,8 @@ var (
 	ErrWeakPassword = &Error{Code: "WEAK_PASSWORD", Message: "密码强度不足，请使用更复杂的组合", Status: http.StatusBadRequest}
 	// ErrInvalidToken 一次性令牌无效/过期/已消费
 	ErrInvalidToken = &Error{Code: "TOKEN_INVALID", Message: "验证链接无效或已过期", Status: http.StatusBadRequest}
+	// ErrAccessTokenInvalid access token 无效/过期/被吊销（HTTP 中间件与 WS 握手共用，401 让客户端走刷新）
+	ErrAccessTokenInvalid = &Error{Code: "ACCESS_TOKEN_INVALID", Message: "登录已失效，请重新登录", Status: http.StatusUnauthorized}
 	// ErrInvalidCredentials 用户名/密码错误，均返回同一文案防枚举
 	ErrInvalidCredentials = &Error{Code: "INVALID_CREDENTIALS", Message: "用户名或密码错误", Status: http.StatusUnauthorized}
 	// ErrAccountSuspended 账户被封禁，仅提示联系客服，不泄露具体处置

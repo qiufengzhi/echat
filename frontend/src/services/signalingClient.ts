@@ -1,9 +1,13 @@
 import type { AITogglePayload, LeavePayload, OutgoingSignalingMessage, SignalingMessage } from '../types/signaling'
+import { getAccessToken, refresh } from './auth'
 
 // 信令心跳间隔要短于常见代理 60 秒空闲超时，避免 WebSocket 长时间无数据被中间层关闭
 const SIGNALING_HEARTBEAT_INTERVAL_MS = 25_000
 // 发出 ping 后如果超过该时间仍未收到 pong，认为连接已死，主动关闭以触发重连
 const SIGNALING_HEARTBEAT_TIMEOUT_MS = 10_000
+
+// KICKED_CLOSE_CODE 服务端主动踢下线（会话吊销/封禁）使用的自定义关闭码，与后端 room 包保持一致
+export const KICKED_CLOSE_CODE = 4001
 
 // 默认重连策略：最多 10 次，首次 1 秒，按 2 倍指数退避，上限 30 秒
 const DEFAULT_RECONNECT_ENABLED = true
@@ -19,6 +23,7 @@ export interface SignalingClientHandlers {
   onError?: (error: Event) => void // 信令 WebSocket 连接失败或异常时的回调
   onClose?: (event: CloseEvent) => void // 信令 WebSocket 最终关闭且不再重连时的回调
   onReconnecting?: (attempt: number, maxAttempts: number) => void // 开始一次重连尝试前的回调
+  onKicked?: () => void // 被服务端强制踢下线（会话吊销/封禁）时的回调
 }
 
 // SignalingClientReconnectOptions 配置断线后的自动重连行为
@@ -43,6 +48,12 @@ export interface SignalingClientOptions {
 export function getDefaultSignalingUrl(): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${protocol}//${window.location.host}/ws`
+}
+
+// withAccessToken 把 access 附加到 WS 地址：浏览器 WS 无法自定义 Header，后端要求握手带 ?token=（spec §9.1）
+function withAccessToken(url: string): string {
+  const token = getAccessToken()
+  return token ? `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}` : url
 }
 
 // SignalingClient 封装和信令服务器之间的 WebSocket 通信，不直接处理 WebRTC 业务
@@ -87,7 +98,7 @@ export class SignalingClient {
       attempt: this.reconnectAttempts,
     })
 
-    const ws = new WebSocket(this.wsUrl)
+    const ws = new WebSocket(withAccessToken(this.wsUrl))
     this.ws = ws
 
     ws.onopen = () => {
@@ -155,6 +166,18 @@ export class SignalingClient {
 
       // 主动关闭时静默清理，上层已在 leaveRoom / 卸载流程中重置状态，无需再通知 onClose
       if (this.intentionallyClosed) {
+        return
+      }
+
+      // 被服务端踢下线：不重连，交给上层展示"已下线"
+      if (event.code === KICKED_CLOSE_CODE) {
+        console.warn('信令 WebSocket 被服务端踢下线:', {
+          url: this.wsUrl,
+          code: event.code,
+          reason: event.reason || '(空)',
+        })
+        this.intentionallyClosed = true
+        this.handlers.onKicked?.()
         return
       }
 
@@ -349,7 +372,8 @@ export class SignalingClient {
 
     this.reconnectTimerId = window.setTimeout(() => {
       this.reconnectTimerId = null
-      this.connect()
+      // access 短命：重连前先刷新一次，避免握手 401 形成的重连死循环
+      void refresh().finally(() => this.connect())
     }, delay)
   }
 

@@ -133,7 +133,12 @@ func (s *Service) ResetPassword(ctx context.Context, token, newPassword string) 
 		_ = tx.Rollback()
 		return ErrInternal
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return ErrInternal
+	}
+	// 重置改了密码并吊销全部会话，实时连接全部踢下线
+	s.publishRevoked(tok.UserID, uuid.Nil, "password.reset")
+	return nil
 }
 
 // ChangePasswordRequest 修改密码请求体（已登录）
@@ -209,5 +214,10 @@ func (s *Service) ChangePassword(ctx context.Context, userID, sessionID uuid.UUI
 		_ = tx.Rollback()
 		return ErrInternal
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return ErrInternal
+	}
+	// 改密只保留当前会话，其余会话吊销 → 踢掉这些会话的实时连接（保留当前连接）
+	s.publishRevoked(userID, sessionID, "password.change")
+	return nil
 }

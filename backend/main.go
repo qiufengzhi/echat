@@ -59,7 +59,8 @@ func main() {
 		logging.L().Fatalw("开发期 schema 迁移失败", "error", err)
 	}
 
-	// 认证域：注册 / 邮箱验证 / 登录与会话 接口
+	// 认证域：注册 / 邮箱验证 / 登录与会话 / 密码 接口
+	// 受保护端点统一走 AccessRequired 中间件（access 签名+有效期+ver 新鲜度校验）
 	authSvc := authn.NewService(st.Ent(), config.Get().Auth, authn.ConsoleMailer{}, config.Get().Auth.VerifyBaseURL)
 	authHandler := authn.NewHandler(authSvc)
 	http.HandleFunc("POST /api/v1/auth/register", authHandler.Register)
@@ -67,16 +68,20 @@ func main() {
 	http.HandleFunc("POST /api/v1/auth/login", authHandler.Login)
 	http.HandleFunc("POST /api/v1/auth/refresh", authHandler.Refresh)
 	http.HandleFunc("POST /api/v1/auth/logout", authHandler.Logout)
-	http.HandleFunc("POST /api/v1/auth/logout-all", authHandler.LogoutAll)
+	http.HandleFunc("POST /api/v1/auth/logout-all", authHandler.AccessRequired(authHandler.LogoutAll))
+	http.HandleFunc("POST /api/v1/auth/email/verify-request", authHandler.AccessRequired(authHandler.EmailBind))
 	http.HandleFunc("POST /api/v1/auth/password/reset-request", authHandler.PasswordResetRequest)
 	http.HandleFunc("POST /api/v1/auth/password/reset", authHandler.PasswordReset)
-	http.HandleFunc("POST /api/v1/auth/password/change", authHandler.PasswordChange)
+	http.HandleFunc("POST /api/v1/auth/password/change", authHandler.AccessRequired(authHandler.PasswordChange))
 
 	http.HandleFunc("/", handlers.IndexHandler)
-	http.HandleFunc("/ws", handlers.WebSocketHandler) // 注册 WebSocket 处理函数
+	http.HandleFunc("/ws", handlers.WebSocketHandler(authSvc)) // 注册带鉴权的 WebSocket 处理函数
 
 	// 启动后台清理协程，定期回收空房间
 	room.StartCleanupLoop()
+
+	// 启动吊销消费协程：会话被吊销/封禁时踢掉对应实时连接（封禁即下线）
+	room.StartRevokedKick()
 
 	// 启动 AI 状态变更广播协程，把唤醒/休眠/静默超时等迁移同步给前端
 	room.StartAIStateBroadcaster()

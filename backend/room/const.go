@@ -38,4 +38,7 @@ const (
 
 	MsgTypeAiStatus = "ai_status" // 服务端回复 AI 语音助手的当前开关状态
 	MsgTypeError    = "error"     // 服务端错误消息，payload.message 可给前端转换成用户提示
+
+	// 会话吊销 / 封禁联动：服务端主动踢下线（spec §9.3）
+	MsgTypeKicked = "kicked" // 连接被吊销/封禁踢下线，payload 带 reason，随后以 4001 关闭码断连
 )

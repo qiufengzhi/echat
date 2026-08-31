@@ -36,6 +36,11 @@ export default defineConfig(({ mode }) => {
       host: true,
       https,
       proxy: {
+        '/api': {
+          // REST 接口转发到后端
+          target: `${backendProtocol}://${backendHost}:${backendPort}`,
+          changeOrigin: true,
+        },
         '/ws': {
           // Keep the browser on the same HTTPS origin while proxying WebSocket traffic to the backend.
           target: `${backendProtocol}://${backendHost}:${backendPort}`,

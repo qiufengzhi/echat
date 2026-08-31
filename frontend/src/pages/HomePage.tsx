@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import type { AuthUser } from '../services/auth'
 import type { JoinRoomInput } from '../types/voiceRoomUi'
 
 interface HomePageProps {
@@ -8,9 +9,16 @@ interface HomePageProps {
   isJoining: boolean
   onCreateRoom: (input: JoinRoomInput) => void
   onJoinRoom: (input: JoinRoomInput) => void
+  // 认证相关的状态与回调：未登录时只显示登录表单，进房前必须已登录（后端 WS 强制鉴权）
+  authedUser: AuthUser | null
+  loggingIn: boolean
+  loginError: string | null
+  onLogin: (identifier: string, password: string) => void
+  onLogout: () => void
 }
 
-// HomePage 是苍月草的首页：Logo + 昵称/房间号 + 创建/加入
+// HomePage 是苍月草的首页：登录 + 昵称/房间号 + 创建/加入
+// 鉴权兜底：后端 /ws 强制要求 access token，未登录无法进房，故首页门槛就是登录表单
 export default function HomePage({
   defaultRoomId,
   defaultUsername,
@@ -18,10 +26,18 @@ export default function HomePage({
   isJoining,
   onCreateRoom,
   onJoinRoom,
+  authedUser,
+  loggingIn,
+  loginError,
+  onLogin,
+  onLogout,
 }: HomePageProps) {
   const [roomId, setRoomId] = useState(defaultRoomId)
   const [username, setUsername] = useState(defaultUsername)
   const [formError, setFormError] = useState<string | null>(null)
+  // 登录表单输入；identifier 支持用户名或邮箱
+  const [identifier, setIdentifier] = useState('')
+  const [password, setPassword] = useState('')
 
   useEffect(() => {
     setRoomId(defaultRoomId)
@@ -30,9 +46,14 @@ export default function HomePage({
 
   const trimmedUsername = username.trim()
   const trimmedRoomId = roomId.trim().toUpperCase()
-  const visibleError = formError || error
+  const visibleError = formError || loginError || error
+  const authed = authedUser !== null
 
   const validate = () => {
+    if (!authed) {
+      setFormError('登录后才能进入房间')
+      return false
+    }
     if (!trimmedUsername) {
       setFormError('取个昵称再进来吧')
       return false
@@ -53,6 +74,15 @@ export default function HomePage({
       return
     }
     onJoinRoom({ roomId: trimmedRoomId, username: trimmedUsername })
+  }
+
+  const handleLoginSubmit = () => {
+    setFormError(null)
+    if (!identifier.trim() || !password) {
+      setFormError('输入账号和密码再登录')
+      return
+    }
+    onLogin(identifier.trim(), password)
   }
 
   return (
@@ -110,36 +140,81 @@ export default function HomePage({
           </div>
         )}
 
-        <label className="field">
-          <span>昵称</span>
-          <input
-            type="text"
-            value={username}
-            onChange={e => { setUsername(e.target.value); setFormError(null) }}
-            maxLength={20}
-            disabled={isJoining}
-          />
-        </label>
+        {!authed ? (
+          // 未登录：只展示登录表单。后端 /ws 强制鉴权，注册流程走后端 API（见 user-system-spec §10）
+          <form
+            className="auth-form"
+            onSubmit={e => { e.preventDefault(); handleLoginSubmit() }}
+          >
+            <label className="field">
+              <span>账号</span>
+              <input
+                type="text"
+                value={identifier}
+                onChange={e => { setIdentifier(e.target.value); setFormError(null) }}
+                autoComplete="username"
+                disabled={loggingIn}
+              />
+            </label>
 
-        <label className="field">
-          <span>房间</span>
-          <input
-            type="text"
-            value={roomId}
-            onChange={e => { setRoomId(e.target.value.toUpperCase()); setFormError(null) }}
-            maxLength={12}
-            disabled={isJoining}
-          />
-        </label>
+            <label className="field">
+              <span>密码</span>
+              <input
+                type="password"
+                value={password}
+                onChange={e => { setPassword(e.target.value); setFormError(null) }}
+                autoComplete="current-password"
+                disabled={loggingIn}
+              />
+            </label>
 
-        <div className="home-actions">
-          <button className="primary-button" type="button" onClick={handleCreate} disabled={isJoining}>
-            {isJoining ? '正在准备…' : '创建房间'}
-          </button>
-          <button className="secondary-button" type="button" onClick={handleJoin} disabled={isJoining}>
-            加入房间
-          </button>
-        </div>
+            <div className="home-actions">
+              <button className="primary-button" type="submit" disabled={loggingIn}>
+                {loggingIn ? '登录中…' : '登录'}
+              </button>
+            </div>
+          </form>
+        ) : (
+          <>
+            <div className="home-userbar">
+              <span className="home-username">{authedUser.display_name || authedUser.username}</span>
+              <button className="secondary-button" type="button" onClick={onLogout}>
+                退出
+              </button>
+            </div>
+
+            <label className="field">
+              <span>昵称</span>
+              <input
+                type="text"
+                value={username}
+                onChange={e => { setUsername(e.target.value); setFormError(null) }}
+                maxLength={20}
+                disabled={isJoining}
+              />
+            </label>
+
+            <label className="field">
+              <span>房间</span>
+              <input
+                type="text"
+                value={roomId}
+                onChange={e => { setRoomId(e.target.value.toUpperCase()); setFormError(null) }}
+                maxLength={12}
+                disabled={isJoining}
+              />
+            </label>
+
+            <div className="home-actions">
+              <button className="primary-button" type="button" onClick={handleCreate} disabled={isJoining}>
+                {isJoining ? '正在准备…' : '创建房间'}
+              </button>
+              <button className="secondary-button" type="button" onClick={handleJoin} disabled={isJoining}>
+                加入房间
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </main>
   )

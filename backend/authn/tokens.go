@@ -59,11 +59,11 @@ func (s *Service) parseAccessToken(tokenStr string) (*AccessClaims, error) {
 		return []byte(s.authCfg.JWTSecret), nil
 	})
 	if err != nil || !tok.Valid {
-		return nil, ErrInvalidToken
+		return nil, ErrAccessTokenInvalid
 	}
 	claims, ok := tok.Claims.(*AccessClaims)
 	if !ok {
-		return nil, ErrInvalidToken
+		return nil, ErrAccessTokenInvalid
 	}
 	return claims, nil
 }
