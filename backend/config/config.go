@@ -133,6 +133,7 @@ type AuthConfig struct {
 	AccessTokenTTL  string       `yaml:"access_token_ttl"`  // access token 有效期，默认 "15m"
 	RefreshTokenTTL string       `yaml:"refresh_token_ttl"` // refresh token 有效期，默认 "720h"（30 天）
 	VerifyBaseURL   string       `yaml:"verify_base_url"`   // 前端邮箱验证页 URL 前缀，用于拼接一次性链接
+	ResetBaseURL    string       `yaml:"reset_base_url"`    // 前端密码重置页 URL 前缀
 	Argon2          Argon2Config `yaml:"argon2"`            // argon2id 密码哈希参数
 }
 
@@ -243,6 +244,7 @@ func DefaultConfig() *Config {
 			AccessTokenTTL:  "15m",
 			RefreshTokenTTL: "720h",
 			VerifyBaseURL:   "http://localhost:5173/verify",
+			ResetBaseURL:    "http://localhost:5173/reset",
 			Argon2: Argon2Config{
 				MemoryKiB:   65536,
 				Iterations:  3,
@@ -456,6 +458,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("AUTH_VERIFY_BASE_URL"); v != "" {
 		cfg.Auth.VerifyBaseURL = v
+	}
+	if v := os.Getenv("AUTH_RESET_BASE_URL"); v != "" {
+		cfg.Auth.ResetBaseURL = v
 	}
 
 	// --- Log ---

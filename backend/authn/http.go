@@ -123,6 +123,60 @@ func (h *Handler) LogoutAll(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// PasswordResetRequest POST /api/v1/auth/password/reset-request 申请重置
+// 无论邮箱是否存在都返回 ok，防枚举（spec §6.1）
+func (h *Handler) PasswordResetRequest(w http.ResponseWriter, r *http.Request) {
+	var req PasswordResetRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, toError(err))
+		return
+	}
+	if err := h.svc.RequestPasswordReset(r.Context(), req); err != nil {
+		writeError(w, toError(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// PasswordReset POST /api/v1/auth/password/reset 令牌重置
+func (h *Handler) PasswordReset(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		// Token 一次性重置令牌
+		Token string `json:"token"`
+		// NewPassword 新密码
+		NewPassword string `json:"new_password"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, toError(err))
+		return
+	}
+	if err := h.svc.ResetPassword(r.Context(), req.Token, req.NewPassword); err != nil {
+		writeError(w, toError(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// PasswordChange POST /api/v1/auth/password/change 已登录改密
+// 需要 Authorization: Bearer access；将吊销本设备之外全部会话
+func (h *Handler) PasswordChange(w http.ResponseWriter, r *http.Request) {
+	claims, err := h.accessClaimsFrom(r)
+	if err != nil {
+		writeError(w, toError(err))
+		return
+	}
+	var req ChangePasswordRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, toError(err))
+		return
+	}
+	if err := h.svc.ChangePassword(r.Context(), claims.SubjectUUID(), claims.SessionID, req); err != nil {
+		writeError(w, toError(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 // accessClaimsFrom 从 Authorization: Bearer 头解析 access 声明；缺失或非法返回 ErrInvalidToken
 func (h *Handler) accessClaimsFrom(r *http.Request) (*AccessClaims, error) {
 	raw := r.Header.Get("Authorization")

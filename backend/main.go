@@ -68,6 +68,9 @@ func main() {
 	http.HandleFunc("POST /api/v1/auth/refresh", authHandler.Refresh)
 	http.HandleFunc("POST /api/v1/auth/logout", authHandler.Logout)
 	http.HandleFunc("POST /api/v1/auth/logout-all", authHandler.LogoutAll)
+	http.HandleFunc("POST /api/v1/auth/password/reset-request", authHandler.PasswordResetRequest)
+	http.HandleFunc("POST /api/v1/auth/password/reset", authHandler.PasswordReset)
+	http.HandleFunc("POST /api/v1/auth/password/change", authHandler.PasswordChange)
 
 	http.HandleFunc("/", handlers.IndexHandler)
 	http.HandleFunc("/ws", handlers.WebSocketHandler) // 注册 WebSocket 处理函数
