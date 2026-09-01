@@ -9,7 +9,7 @@ eChat 是一个基于 **WebRTC SFU + WebSocket 信令**的实时语音聊天系�
 | 后端 | Go + gorilla/websocket + pion/webrtc/v4 + zap + gRPC |
 | AI 服务 | Python（VAD: Silero ONNX / ASR: 阿里云 NLS / LLM: DeepSeek / TTS: 阿里云, iFLYTEK） |
 | 前端 | React 18 + TypeScript + Vite + CSS |
-| 基础设施 | Docker + Nginx + gRPC/Protobuf |
+| 基础设施 | Docker + Nginx + PostgreSQL + NATS + gRPC/Protobuf |
 
 ## 项目结构
 
@@ -63,14 +63,11 @@ cd deploy
 docker compose --env-file .env -f docker-compose.prod.yml up -d
 ```
 
-四个容器：gateway（Nginx TLS 终止）、frontend（静态站点 + 代理）、backend（信令 + SFU）、agent（LLM gRPC）。详细说明见 [`deploy/README.md`](deploy/README.md)。
+`docker-compose.prod.yml` 编排业务服务（gateway Nginx TLS 终止、frontend 静态站点 + 代理、backend 信令 + SFU、agent LLM gRPC）与基础设施服务（PostgreSQL 持久化、NATS 事件骨干）；容器内网互联，不向宿主机暴露端口。详见表 [`deploy/README.md`](deploy/README.md)，编排细节见 [`deploy/docker-compose.prod.yml`](deploy/docker-compose.prod.yml)。
 
 ## 后续
 
-- **房间/用户状态持久化** 
-- **对话记忆持久化**
 - **语音唤醒、打断AI助手**
-- **用户认证**
 - **文字聊天**
 - **录制回放**
 - **视频通话**

@@ -1,10 +1,37 @@
 # eChat 生产环境 Docker Compose 配置
 # 部署前请先配置 .env 文件（参考 .env.example）
+# 基础设施（PostgreSQL + NATS JetStream）与业务服务在同一个 compose 内，单机一键起全栈
 #
 # 启动命令：
 #   docker compose --env-file .env -f docker-compose.prod.yml up -d
 
 services:
+  postgres: # 持久层：账号/会话 + outbox_events + 房间事实表，后端全部读写入口
+    container_name: echat-postgres
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-echat}      # 连接用户名，可通过 .env 覆盖
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-echat}  # 连接密码，生产必须用 .env 覆盖
+      POSTGRES_DB: ${POSTGRES_DB:-echat}          # 默认库名
+    volumes:
+      - echat_prod_pgdata:/var/lib/postgresql/data # 数据持久化，重建容器不丢数据
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-echat} -d ${POSTGRES_DB:-echat}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # 不映射宿主端口：后端经 compose 内部网络以 postgres:5432 访问，减小生产攻击面
+
+  nats: # 事件骨干：事务性 Outbox 向 JetStream 投递的落点，事件流持久化留痕
+    container_name: echat-nats
+    image: nats:2-alpine
+    restart: unless-stopped
+    command: ["-js", "-m", "8222"] # 开启 JetStream，8222 为监控/健康检查端口
+    volumes:
+      - echat_prod_natsdata:/data # 事件流持久化目录，重启不丢已投递事件
+    # 不映射宿主端口：relay/消费者在容器内以 nats:4222 访问，8222 需外联时再映射
+
   gateway: # 最外层 HTTPS 入口，负责 TLS 终止并把请求转发给前端容器
     container_name: echat-gateway # 固定容器名，方便 docker ps 和 docker logs 直接定位
     image: nginx:1.27-alpine # 直接使用官方 Nginx 镜像，避免额外维护自定义网关镜像
@@ -23,13 +50,25 @@ services:
     container_name: echat-backend # 固定容器名，方便 docker logs echat-backend 查日志
     image: ${BACKEND_IMAGE}:${IMAGE_TAG} # 本次部署的后端镜像名和 tag，由 CI 写入 .env
     restart: unless-stopped # 容器异常退出后自动重启，手动停止时不强制拉起
+    depends_on: # 基础设施就绪后再起后端，避免 relay/连接池空转重试
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
     volumes:
       - ./backend/config.yaml:/app/config.yaml:ro
     environment:
-      # 仅密钥通过环境变量注入，其他配置（端口、STUN、ASR 开关等）走 config.yaml
+      # 连接基础设施的地址与凭据走环境变量：地址指向 compose 服务名，凭据经 .env 注入且与 postgres 容器同源
+      # 稳定常量（NATS 流名、库名默认等）留在 backend/config.yaml 单一来源，diff 环境差异时才用 env 覆盖
       ALIBABA_CLOUD_ACCESS_KEY_ID: ${ALIBABA_CLOUD_ACCESS_KEY_ID:-}
       ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${ALIBABA_CLOUD_ACCESS_KEY_SECRET:-}
       NLS_APP_KEY: ${NLS_APP_KEY:-}
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER:-echat}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-echat}
+      DB_NAME: ${POSTGRES_DB:-echat}
+      NATS_URL: nats:4222
     expose:
       - "8080" # HTTP/WebSocket 信令端口，仅在 Compose 内部网络暴露，外部经 gateway HTTPS 进入
     ports:
@@ -52,3 +91,7 @@ services:
       - "50053" # gRPC 端口，仅在 Compose 内部网络暴露
     volumes:
       - ./agent/config.yaml:/app/agent/config.yaml:ro # 挂载 Agent 完整配置（含密钥）
+
+volumes:
+  echat_prod_pgdata: # PostgreSQL 数据卷
+  echat_prod_natsdata: # NATS JetStream 事件流卷

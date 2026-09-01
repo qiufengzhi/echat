@@ -152,6 +152,8 @@ touch /srv/echat/.env
 
 > ⚠️ **注意**：`.env` 文件由 CI 自动管理，每次部署都会覆盖 `BACKEND_IMAGE`、`FRONTEND_IMAGE`、`AGENT_IMAGE`、`IMAGE_TAG` 四个字段。不要手动在 `.env` 中存放持久密钥，敏感配置（ASR 密钥、LLM API Key 等）应统一放在 `backend/config.yaml` 和 `agent/config.yaml` 中。
 
+`docker-compose.prod.yml` 编排 PostgreSQL + NATS 与业务服务；连接参数默认 `echat`/`echat`、库 `echat`。可用 `/srv/echat/.env` 的 `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` 覆盖（后端容器经 `DB_USER` / `DB_PASSWORD` / `DB_NAME` 环境变量同步读取，无需改 `backend/config.yaml`）。持久卷 `echat_prod_pgdata` / `echat_prod_natsdata` 承载数据与事件流；PostgreSQL 与 NATS 不映射宿主端口，仅容器内部网络访问。
+
 4. Let's Encrypt 证书获取：
 
 ```bash
