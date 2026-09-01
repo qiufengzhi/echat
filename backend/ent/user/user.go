@@ -41,6 +41,10 @@ const (
 	EdgeSessions = "sessions"
 	// EdgeAuthTokens holds the string denoting the auth_tokens edge name in mutations.
 	EdgeAuthTokens = "auth_tokens"
+	// EdgeHostedRooms holds the string denoting the hosted_rooms edge name in mutations.
+	EdgeHostedRooms = "hosted_rooms"
+	// EdgeRoomMemberships holds the string denoting the room_memberships edge name in mutations.
+	EdgeRoomMemberships = "room_memberships"
 	// Table holds the table name of the user in the database.
 	Table = "users"
 	// IdentitiesTable is the table that holds the identities relation/edge.
@@ -64,6 +68,20 @@ const (
 	AuthTokensInverseTable = "auth_tokens"
 	// AuthTokensColumn is the table column denoting the auth_tokens relation/edge.
 	AuthTokensColumn = "user_id"
+	// HostedRoomsTable is the table that holds the hosted_rooms relation/edge.
+	HostedRoomsTable = "rooms"
+	// HostedRoomsInverseTable is the table name for the Room entity.
+	// It exists in this package in order to avoid circular dependency with the "room" package.
+	HostedRoomsInverseTable = "rooms"
+	// HostedRoomsColumn is the table column denoting the hosted_rooms relation/edge.
+	HostedRoomsColumn = "host_id"
+	// RoomMembershipsTable is the table that holds the room_memberships relation/edge.
+	RoomMembershipsTable = "room_members"
+	// RoomMembershipsInverseTable is the table name for the RoomMember entity.
+	// It exists in this package in order to avoid circular dependency with the "roommember" package.
+	RoomMembershipsInverseTable = "room_members"
+	// RoomMembershipsColumn is the table column denoting the room_memberships relation/edge.
+	RoomMembershipsColumn = "user_id"
 )
 
 // Columns holds all SQL columns for user fields.
@@ -229,6 +247,34 @@ func ByAuthTokens(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 		sqlgraph.OrderByNeighborTerms(s, newAuthTokensStep(), append([]sql.OrderTerm{term}, terms...)...)
 	}
 }
+
+// ByHostedRoomsCount orders the results by hosted_rooms count.
+func ByHostedRoomsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newHostedRoomsStep(), opts...)
+	}
+}
+
+// ByHostedRooms orders the results by hosted_rooms terms.
+func ByHostedRooms(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newHostedRoomsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
+// ByRoomMembershipsCount orders the results by room_memberships count.
+func ByRoomMembershipsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newRoomMembershipsStep(), opts...)
+	}
+}
+
+// ByRoomMemberships orders the results by room_memberships terms.
+func ByRoomMemberships(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newRoomMembershipsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
 func newIdentitiesStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
@@ -248,5 +294,19 @@ func newAuthTokensStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(AuthTokensInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, AuthTokensTable, AuthTokensColumn),
+	)
+}
+func newHostedRoomsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(HostedRoomsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, HostedRoomsTable, HostedRoomsColumn),
+	)
+}
+func newRoomMembershipsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(RoomMembershipsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, RoomMembershipsTable, RoomMembershipsColumn),
 	)
 }

@@ -6,6 +6,7 @@ import (
 	"echat-backend/ent/authtoken"
 	"echat-backend/ent/identity"
 	"echat-backend/ent/outboxevent"
+	"echat-backend/ent/room"
 	"echat-backend/ent/schema"
 	"echat-backend/ent/session"
 	"echat-backend/ent/user"
@@ -42,6 +43,18 @@ func init() {
 	outboxeventDescCreatedAt := outboxeventFields[9].Descriptor()
 	// outboxevent.DefaultCreatedAt holds the default value on creation for the created_at field.
 	outboxevent.DefaultCreatedAt = outboxeventDescCreatedAt.Default.(func() time.Time)
+	roomFields := schema.Room{}.Fields()
+	_ = roomFields
+	// roomDescCreatedAt is the schema descriptor for created_at field.
+	roomDescCreatedAt := roomFields[5].Descriptor()
+	// room.DefaultCreatedAt holds the default value on creation for the created_at field.
+	room.DefaultCreatedAt = roomDescCreatedAt.Default.(func() time.Time)
+	// roomDescUpdatedAt is the schema descriptor for updated_at field.
+	roomDescUpdatedAt := roomFields[6].Descriptor()
+	// room.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	room.DefaultUpdatedAt = roomDescUpdatedAt.Default.(func() time.Time)
+	// room.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	room.UpdateDefaultUpdatedAt = roomDescUpdatedAt.UpdateDefault.(func() time.Time)
 	sessionFields := schema.Session{}.Fields()
 	_ = sessionFields
 	// sessionDescCreatedAt is the schema descriptor for created_at field.

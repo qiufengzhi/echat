@@ -14,6 +14,8 @@ import (
 	"echat-backend/ent/authtoken"
 	"echat-backend/ent/identity"
 	"echat-backend/ent/outboxevent"
+	"echat-backend/ent/room"
+	"echat-backend/ent/roommember"
 	"echat-backend/ent/session"
 	"echat-backend/ent/user"
 
@@ -35,6 +37,10 @@ type Client struct {
 	Identity *IdentityClient
 	// OutboxEvent is the client for interacting with the OutboxEvent builders.
 	OutboxEvent *OutboxEventClient
+	// Room is the client for interacting with the Room builders.
+	Room *RoomClient
+	// RoomMember is the client for interacting with the RoomMember builders.
+	RoomMember *RoomMemberClient
 	// Session is the client for interacting with the Session builders.
 	Session *SessionClient
 	// User is the client for interacting with the User builders.
@@ -53,6 +59,8 @@ func (c *Client) init() {
 	c.AuthToken = NewAuthTokenClient(c.config)
 	c.Identity = NewIdentityClient(c.config)
 	c.OutboxEvent = NewOutboxEventClient(c.config)
+	c.Room = NewRoomClient(c.config)
+	c.RoomMember = NewRoomMemberClient(c.config)
 	c.Session = NewSessionClient(c.config)
 	c.User = NewUserClient(c.config)
 }
@@ -150,6 +158,8 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		AuthToken:   NewAuthTokenClient(cfg),
 		Identity:    NewIdentityClient(cfg),
 		OutboxEvent: NewOutboxEventClient(cfg),
+		Room:        NewRoomClient(cfg),
+		RoomMember:  NewRoomMemberClient(cfg),
 		Session:     NewSessionClient(cfg),
 		User:        NewUserClient(cfg),
 	}, nil
@@ -174,6 +184,8 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		AuthToken:   NewAuthTokenClient(cfg),
 		Identity:    NewIdentityClient(cfg),
 		OutboxEvent: NewOutboxEventClient(cfg),
+		Room:        NewRoomClient(cfg),
+		RoomMember:  NewRoomMemberClient(cfg),
 		Session:     NewSessionClient(cfg),
 		User:        NewUserClient(cfg),
 	}, nil
@@ -204,21 +216,21 @@ func (c *Client) Close() error {
 // Use adds the mutation hooks to all the entity clients.
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
-	c.AuthToken.Use(hooks...)
-	c.Identity.Use(hooks...)
-	c.OutboxEvent.Use(hooks...)
-	c.Session.Use(hooks...)
-	c.User.Use(hooks...)
+	for _, n := range []interface{ Use(...Hook) }{
+		c.AuthToken, c.Identity, c.OutboxEvent, c.Room, c.RoomMember, c.Session, c.User,
+	} {
+		n.Use(hooks...)
+	}
 }
 
 // Intercept adds the query interceptors to all the entity clients.
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
-	c.AuthToken.Intercept(interceptors...)
-	c.Identity.Intercept(interceptors...)
-	c.OutboxEvent.Intercept(interceptors...)
-	c.Session.Intercept(interceptors...)
-	c.User.Intercept(interceptors...)
+	for _, n := range []interface{ Intercept(...Interceptor) }{
+		c.AuthToken, c.Identity, c.OutboxEvent, c.Room, c.RoomMember, c.Session, c.User,
+	} {
+		n.Intercept(interceptors...)
+	}
 }
 
 // Mutate implements the ent.Mutator interface.
@@ -230,6 +242,10 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Identity.mutate(ctx, m)
 	case *OutboxEventMutation:
 		return c.OutboxEvent.mutate(ctx, m)
+	case *RoomMutation:
+		return c.Room.mutate(ctx, m)
+	case *RoomMemberMutation:
+		return c.RoomMember.mutate(ctx, m)
 	case *SessionMutation:
 		return c.Session.mutate(ctx, m)
 	case *UserMutation:
@@ -670,6 +686,336 @@ func (c *OutboxEventClient) mutate(ctx context.Context, m *OutboxEventMutation) 
 	}
 }
 
+// RoomClient is a client for the Room schema.
+type RoomClient struct {
+	config
+}
+
+// NewRoomClient returns a client for the Room from the given config.
+func NewRoomClient(c config) *RoomClient {
+	return &RoomClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `room.Hooks(f(g(h())))`.
+func (c *RoomClient) Use(hooks ...Hook) {
+	c.hooks.Room = append(c.hooks.Room, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `room.Intercept(f(g(h())))`.
+func (c *RoomClient) Intercept(interceptors ...Interceptor) {
+	c.inters.Room = append(c.inters.Room, interceptors...)
+}
+
+// Create returns a builder for creating a Room entity.
+func (c *RoomClient) Create() *RoomCreate {
+	mutation := newRoomMutation(c.config, OpCreate)
+	return &RoomCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of Room entities.
+func (c *RoomClient) CreateBulk(builders ...*RoomCreate) *RoomCreateBulk {
+	return &RoomCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *RoomClient) MapCreateBulk(slice any, setFunc func(*RoomCreate, int)) *RoomCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &RoomCreateBulk{err: fmt.Errorf("calling to RoomClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*RoomCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &RoomCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for Room.
+func (c *RoomClient) Update() *RoomUpdate {
+	mutation := newRoomMutation(c.config, OpUpdate)
+	return &RoomUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *RoomClient) UpdateOne(_m *Room) *RoomUpdateOne {
+	mutation := newRoomMutation(c.config, OpUpdateOne, withRoom(_m))
+	return &RoomUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *RoomClient) UpdateOneID(id uuid.UUID) *RoomUpdateOne {
+	mutation := newRoomMutation(c.config, OpUpdateOne, withRoomID(id))
+	return &RoomUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for Room.
+func (c *RoomClient) Delete() *RoomDelete {
+	mutation := newRoomMutation(c.config, OpDelete)
+	return &RoomDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *RoomClient) DeleteOne(_m *Room) *RoomDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *RoomClient) DeleteOneID(id uuid.UUID) *RoomDeleteOne {
+	builder := c.Delete().Where(room.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &RoomDeleteOne{builder}
+}
+
+// Query returns a query builder for Room.
+func (c *RoomClient) Query() *RoomQuery {
+	return &RoomQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeRoom},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a Room entity by its id.
+func (c *RoomClient) Get(ctx context.Context, id uuid.UUID) (*Room, error) {
+	return c.Query().Where(room.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *RoomClient) GetX(ctx context.Context, id uuid.UUID) *Room {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryHost queries the host edge of a Room.
+func (c *RoomClient) QueryHost(_m *Room) *UserQuery {
+	query := (&UserClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(room.Table, room.FieldID, id),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, room.HostTable, room.HostColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryMemberships queries the memberships edge of a Room.
+func (c *RoomClient) QueryMemberships(_m *Room) *RoomMemberQuery {
+	query := (&RoomMemberClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(room.Table, room.FieldID, id),
+			sqlgraph.To(roommember.Table, roommember.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, room.MembershipsTable, room.MembershipsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *RoomClient) Hooks() []Hook {
+	return c.hooks.Room
+}
+
+// Interceptors returns the client interceptors.
+func (c *RoomClient) Interceptors() []Interceptor {
+	return c.inters.Room
+}
+
+func (c *RoomClient) mutate(ctx context.Context, m *RoomMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&RoomCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&RoomUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&RoomUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&RoomDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown Room mutation op: %q", m.Op())
+	}
+}
+
+// RoomMemberClient is a client for the RoomMember schema.
+type RoomMemberClient struct {
+	config
+}
+
+// NewRoomMemberClient returns a client for the RoomMember from the given config.
+func NewRoomMemberClient(c config) *RoomMemberClient {
+	return &RoomMemberClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `roommember.Hooks(f(g(h())))`.
+func (c *RoomMemberClient) Use(hooks ...Hook) {
+	c.hooks.RoomMember = append(c.hooks.RoomMember, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `roommember.Intercept(f(g(h())))`.
+func (c *RoomMemberClient) Intercept(interceptors ...Interceptor) {
+	c.inters.RoomMember = append(c.inters.RoomMember, interceptors...)
+}
+
+// Create returns a builder for creating a RoomMember entity.
+func (c *RoomMemberClient) Create() *RoomMemberCreate {
+	mutation := newRoomMemberMutation(c.config, OpCreate)
+	return &RoomMemberCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of RoomMember entities.
+func (c *RoomMemberClient) CreateBulk(builders ...*RoomMemberCreate) *RoomMemberCreateBulk {
+	return &RoomMemberCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *RoomMemberClient) MapCreateBulk(slice any, setFunc func(*RoomMemberCreate, int)) *RoomMemberCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &RoomMemberCreateBulk{err: fmt.Errorf("calling to RoomMemberClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*RoomMemberCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &RoomMemberCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for RoomMember.
+func (c *RoomMemberClient) Update() *RoomMemberUpdate {
+	mutation := newRoomMemberMutation(c.config, OpUpdate)
+	return &RoomMemberUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *RoomMemberClient) UpdateOne(_m *RoomMember) *RoomMemberUpdateOne {
+	mutation := newRoomMemberMutation(c.config, OpUpdateOne, withRoomMember(_m))
+	return &RoomMemberUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *RoomMemberClient) UpdateOneID(id uuid.UUID) *RoomMemberUpdateOne {
+	mutation := newRoomMemberMutation(c.config, OpUpdateOne, withRoomMemberID(id))
+	return &RoomMemberUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for RoomMember.
+func (c *RoomMemberClient) Delete() *RoomMemberDelete {
+	mutation := newRoomMemberMutation(c.config, OpDelete)
+	return &RoomMemberDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *RoomMemberClient) DeleteOne(_m *RoomMember) *RoomMemberDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *RoomMemberClient) DeleteOneID(id uuid.UUID) *RoomMemberDeleteOne {
+	builder := c.Delete().Where(roommember.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &RoomMemberDeleteOne{builder}
+}
+
+// Query returns a query builder for RoomMember.
+func (c *RoomMemberClient) Query() *RoomMemberQuery {
+	return &RoomMemberQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeRoomMember},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a RoomMember entity by its id.
+func (c *RoomMemberClient) Get(ctx context.Context, id uuid.UUID) (*RoomMember, error) {
+	return c.Query().Where(roommember.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *RoomMemberClient) GetX(ctx context.Context, id uuid.UUID) *RoomMember {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryRoom queries the room edge of a RoomMember.
+func (c *RoomMemberClient) QueryRoom(_m *RoomMember) *RoomQuery {
+	query := (&RoomClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(roommember.Table, roommember.FieldID, id),
+			sqlgraph.To(room.Table, room.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, roommember.RoomTable, roommember.RoomColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryUser queries the user edge of a RoomMember.
+func (c *RoomMemberClient) QueryUser(_m *RoomMember) *UserQuery {
+	query := (&UserClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(roommember.Table, roommember.FieldID, id),
+			sqlgraph.To(user.Table, user.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, roommember.UserTable, roommember.UserColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *RoomMemberClient) Hooks() []Hook {
+	return c.hooks.RoomMember
+}
+
+// Interceptors returns the client interceptors.
+func (c *RoomMemberClient) Interceptors() []Interceptor {
+	return c.inters.RoomMember
+}
+
+func (c *RoomMemberClient) mutate(ctx context.Context, m *RoomMemberMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&RoomMemberCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&RoomMemberUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&RoomMemberUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&RoomMemberDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown RoomMember mutation op: %q", m.Op())
+	}
+}
+
 // SessionClient is a client for the Session schema.
 type SessionClient struct {
 	config
@@ -975,6 +1321,38 @@ func (c *UserClient) QueryAuthTokens(_m *User) *AuthTokenQuery {
 	return query
 }
 
+// QueryHostedRooms queries the hosted_rooms edge of a User.
+func (c *UserClient) QueryHostedRooms(_m *User) *RoomQuery {
+	query := (&RoomClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, id),
+			sqlgraph.To(room.Table, room.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.HostedRoomsTable, user.HostedRoomsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryRoomMemberships queries the room_memberships edge of a User.
+func (c *UserClient) QueryRoomMemberships(_m *User) *RoomMemberQuery {
+	query := (&RoomMemberClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, id),
+			sqlgraph.To(roommember.Table, roommember.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.RoomMembershipsTable, user.RoomMembershipsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // Hooks returns the client hooks.
 func (c *UserClient) Hooks() []Hook {
 	return c.hooks.User
@@ -1003,9 +1381,10 @@ func (c *UserClient) mutate(ctx context.Context, m *UserMutation) (Value, error)
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		AuthToken, Identity, OutboxEvent, Session, User []ent.Hook
+		AuthToken, Identity, OutboxEvent, Room, RoomMember, Session, User []ent.Hook
 	}
 	inters struct {
-		AuthToken, Identity, OutboxEvent, Session, User []ent.Interceptor
+		AuthToken, Identity, OutboxEvent, Room, RoomMember, Session,
+		User []ent.Interceptor
 	}
 )

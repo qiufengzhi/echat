@@ -53,6 +53,7 @@ func createRoom(roomID string) *Room {
 
 	r := &Room{
 		ID:      roomID,
+		AggID:   uuid.NewString(), // 内部聚合根 id，事件骨干排列坐标；对外只暴露 roomID 短码
 		Clients: make(map[string]*Client),
 	}
 	allSignalRooms[roomID] = r
@@ -82,7 +83,7 @@ func HandleConnection(conn *websocket.Conn, identity ConnIdentity) {
 		UserID:       identity.UserID,  // 权威用户身份，来自 access token 的 sub
 		SessionID:    identity.SessionID,
 		TokenVersion: identity.TokenVersion,
-		Conn: conn,
+		Conn:         conn,
 		// 使用缓冲队列避免短暂慢客户端立刻阻塞整房广播
 		Send: make(chan []byte, 256),
 	}
@@ -98,7 +99,7 @@ func HandleConnection(conn *websocket.Conn, identity ConnIdentity) {
 
 	// 正常情况下，readPump 会一直阻塞在 conn.ReadMessage()
 	// 连接断开时，readPump 会退出循环并触发 disconnect
-	disconnect(client, "")
+	disconnect(client, "", "disconnect")
 }
 
 // readPump 持续读取客户端发来的 WebSocket 消息，并分发给对应业务处理函数
@@ -197,8 +198,10 @@ func handleAiToggle(client *Client, msg *Message) {
 	roomID := client.RoomID
 	if req.Enable {
 		global.AIStates.SetOnline(roomID) // 开启：直接进入在线状态
+		persistAiToggle(roomID, "online") // 事件记账，AI 状态本体仍由内存状态机持有
 	} else {
 		global.AIStates.SetOffline(roomID) // 关闭：回到离线状态
+		persistAiToggle(roomID, "offline") // 事件记账
 	}
 }
 
@@ -239,6 +242,9 @@ func handleJoin(client *Client, msg *Message) {
 	logger.Infow("用户已加入房间",
 		"username", username, "roomID", roomID, "userCount", userCount, "hostID", hostID,
 	)
+
+	// 当前态写库 + 事件同事务记账；失败仅告警，不阻断实时广播（实时优先策略）
+	persistRoomJoin(r, client)
 
 	// --- SFU 集成：创建 PeerConnection，但不生成 Offer ---
 	// Offer 由客户端发起，服务端收到 sfu_offer 后通过 AcceptOffer 创建 Answer
@@ -417,12 +423,13 @@ func handleLeave(client *Client, payload json.RawMessage) {
 		"username", client.Username,
 		"nextHost", leavePayload.NextHostID,
 	)
-	disconnect(client, strings.TrimSpace(leavePayload.NextHostID))
+	disconnect(client, strings.TrimSpace(leavePayload.NextHostID), "leave")
 }
 
 // disconnect 清理客户端、房间成员关系、SFU PeerConnection 和连接资源
 // preferredNextHostID 只在离开者是当前房主时生效，且必须指向仍在房间内的成员
-func disconnect(client *Client, preferredNextHostID string) {
+// reason 离开来源（leave 主动离开 / disconnect 断线 / kicked 封禁踢下线），供事件记账区分
+func disconnect(client *Client, preferredNextHostID string, reason string) {
 	client.closeOnce.Do(func() {
 		roomID := client.RoomID
 
@@ -442,6 +449,7 @@ func disconnect(client *Client, preferredNextHostID string) {
 			var (
 				shouldDeleteRoom bool   // 房间无人时删除整个房间
 				nextHostID       string // 新房主 ID，用于广播给剩余成员
+				wasHost          bool   // 是否为房主（按用户身份判断）
 			)
 
 			roomLock.RLock()
@@ -449,7 +457,7 @@ func disconnect(client *Client, preferredNextHostID string) {
 			roomLock.RUnlock()
 			if ok {
 				r.Lock.Lock()
-				wasHost := r.HostID == client.UserID // 是否为房主（按用户身份判断）
+				wasHost = r.HostID == client.UserID // 是否为房主（按用户身份判断）
 				delete(r.Clients, client.ConnID)
 				remaining := len(r.Clients)
 
@@ -477,6 +485,10 @@ func disconnect(client *Client, preferredNextHostID string) {
 						})
 					}
 				}
+
+				// 当前态写库 + 事件同事务记账：离开/交接/清空在一个事务内收敛
+				// 失败仅告警，不阻断实时广播（实时优先策略）
+				persistRoomLeave(r, client, wasHost, nextHostID, shouldDeleteRoom, reason)
 			}
 
 			if shouldDeleteRoom {

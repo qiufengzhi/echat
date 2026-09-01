@@ -84,6 +84,9 @@ func main() {
 	// 启动吊销消费协程：会话被吊销/封禁时踢掉对应实时连接（封禁即下线）
 	room.StartRevokedKick()
 
+	// 注入持久层：房间域把 join/leave/切房主/AI 开关的当前态写库并联同事件入 outbox
+	room.SetStore(st.Pool())
+
 	// 启动一致性骨干：事务性 Outbox relay 把 pending 事件投递到 NATS JetStream
 	// NATS 不可用时事件留在 outbox 堆积，连接恢复后自动补发（业务主链路不受影响）
 	streamMaxAge, err := time.ParseDuration(config.Get().NATS.StreamMaxAge)

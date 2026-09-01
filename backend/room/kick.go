@@ -5,8 +5,8 @@ import (
 
 	"echat-backend/global"
 
-	"github.com/gorilla/websocket"
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 )
 
 // kickedCloseCode 服务端主动踢下线使用的自定义关闭码（避开 WebSocket 保留码）
@@ -46,6 +46,6 @@ func kickConnections(ev global.UserRevokedEvent) {
 		_ = c.Conn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(kickedCloseCode, "session revoked"),
 			time.Now().Add(time.Second))
-		disconnect(c, "")
+		disconnect(c, "", "kicked")
 	}
 }

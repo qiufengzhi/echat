@@ -36,7 +36,8 @@ type Client struct {
 
 // Room 表示一个信令房间，后端在这里维护成员列表和权威房主
 type Room struct {
-	ID      string             // 房间唯一标识，由前端创建或输入
+	ID      string             // 房间对外短码，由前端创建或输入（对应持久层 rooms.room_code）
+	AggID   string             // 房间内部聚合根 id（uuid 串），事件骨干的编排坐标，不对外展示
 	HostID  string             // 当前房主的用户 ID；房主离开时会重新选择
 	Clients map[string]*Client // 当前在线成员，以连接 ID（ConnID）为键
 	Lock    sync.RWMutex       // 保护 HostID 和 Clients 的并发读写

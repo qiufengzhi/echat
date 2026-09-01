@@ -7,6 +7,8 @@ import (
 	"echat-backend/ent/authtoken"
 	"echat-backend/ent/identity"
 	"echat-backend/ent/outboxevent"
+	"echat-backend/ent/room"
+	"echat-backend/ent/roommember"
 	"echat-backend/ent/session"
 	"echat-backend/ent/user"
 	"errors"
@@ -80,6 +82,8 @@ func checkColumn(t, c string) error {
 			authtoken.Table:   authtoken.ValidColumn,
 			identity.Table:    identity.ValidColumn,
 			outboxevent.Table: outboxevent.ValidColumn,
+			room.Table:        room.ValidColumn,
+			roommember.Table:  roommember.ValidColumn,
 			session.Table:     session.ValidColumn,
 			user.Table:        user.ValidColumn,
 		})

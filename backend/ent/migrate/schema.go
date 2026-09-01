@@ -102,6 +102,66 @@ var (
 			},
 		},
 	}
+	// RoomsColumns holds the columns for the "rooms" table.
+	RoomsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "room_code", Type: field.TypeString, Unique: true},
+		{Name: "status", Type: field.TypeEnum, Enums: []string{"active", "closed"}, Default: "active"},
+		{Name: "closed_at", Type: field.TypeTime, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+		{Name: "host_id", Type: field.TypeUUID},
+	}
+	// RoomsTable holds the schema information for the "rooms" table.
+	RoomsTable = &schema.Table{
+		Name:       "rooms",
+		Columns:    RoomsColumns,
+		PrimaryKey: []*schema.Column{RoomsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "rooms_users_hosted_rooms",
+				Columns:    []*schema.Column{RoomsColumns[6]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+	}
+	// RoomMembersColumns holds the columns for the "room_members" table.
+	RoomMembersColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "username", Type: field.TypeString},
+		{Name: "joined_at", Type: field.TypeTime},
+		{Name: "left_at", Type: field.TypeTime, Nullable: true},
+		{Name: "room_id", Type: field.TypeUUID},
+		{Name: "user_id", Type: field.TypeUUID},
+	}
+	// RoomMembersTable holds the schema information for the "room_members" table.
+	RoomMembersTable = &schema.Table{
+		Name:       "room_members",
+		Columns:    RoomMembersColumns,
+		PrimaryKey: []*schema.Column{RoomMembersColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "room_members_rooms_memberships",
+				Columns:    []*schema.Column{RoomMembersColumns[4]},
+				RefColumns: []*schema.Column{RoomsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+			{
+				Symbol:     "room_members_users_room_memberships",
+				Columns:    []*schema.Column{RoomMembersColumns[5]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "roommember_room_id_user_id",
+				Unique:  true,
+				Columns: []*schema.Column{RoomMembersColumns[4], RoomMembersColumns[5]},
+			},
+		},
+	}
 	// SessionsColumns holds the columns for the "sessions" table.
 	SessionsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID},
@@ -171,6 +231,8 @@ var (
 		AuthTokensTable,
 		IdentitiesTable,
 		OutboxEventsTable,
+		RoomsTable,
+		RoomMembersTable,
 		SessionsTable,
 		UsersTable,
 	}
@@ -179,5 +241,8 @@ var (
 func init() {
 	AuthTokensTable.ForeignKeys[0].RefTable = UsersTable
 	IdentitiesTable.ForeignKeys[0].RefTable = UsersTable
+	RoomsTable.ForeignKeys[0].RefTable = UsersTable
+	RoomMembersTable.ForeignKeys[0].RefTable = RoomsTable
+	RoomMembersTable.ForeignKeys[1].RefTable = UsersTable
 	SessionsTable.ForeignKeys[0].RefTable = UsersTable
 }

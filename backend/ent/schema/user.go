@@ -80,12 +80,14 @@ func (User) Fields() []ent.Field {
 	}
 }
 
-// Edges 返回 User 的出边：一个用户持有多个身份凭据 / 会话 / 一次性令牌
+// Edges 返回 User 的出边：一个用户持有多个身份凭据 / 会话 / 一次性令牌，可主多个房间、出现在多个房间
 func (User) Edges() []ent.Edge {
 	return []ent.Edge{
 		edge.To("identities", Identity.Type).Comment("该用户的登录凭据集合"),
 		edge.To("sessions", Session.Type).Comment("该用户的会话记录集合"),
 		edge.To("auth_tokens", AuthToken.Type).Comment("该用户的一次性短命令牌集合"),
+		edge.To("hosted_rooms", Room.Type).Comment("该用户担任房主的房间集合"),
+		edge.To("room_memberships", RoomMember.Type).Comment("该用户的房间在场记录集合"),
 	}
 }
 

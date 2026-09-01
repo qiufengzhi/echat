@@ -7,6 +7,8 @@ import (
 	"echat-backend/ent/authtoken"
 	"echat-backend/ent/identity"
 	"echat-backend/ent/predicate"
+	"echat-backend/ent/room"
+	"echat-backend/ent/roommember"
 	"echat-backend/ent/session"
 	"echat-backend/ent/user"
 	"errors"
@@ -220,6 +222,36 @@ func (_u *UserUpdate) AddAuthTokens(v ...*AuthToken) *UserUpdate {
 	return _u.AddAuthTokenIDs(ids...)
 }
 
+// AddHostedRoomIDs adds the "hosted_rooms" edge to the Room entity by IDs.
+func (_u *UserUpdate) AddHostedRoomIDs(ids ...uuid.UUID) *UserUpdate {
+	_u.mutation.AddHostedRoomIDs(ids...)
+	return _u
+}
+
+// AddHostedRooms adds the "hosted_rooms" edges to the Room entity.
+func (_u *UserUpdate) AddHostedRooms(v ...*Room) *UserUpdate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddHostedRoomIDs(ids...)
+}
+
+// AddRoomMembershipIDs adds the "room_memberships" edge to the RoomMember entity by IDs.
+func (_u *UserUpdate) AddRoomMembershipIDs(ids ...uuid.UUID) *UserUpdate {
+	_u.mutation.AddRoomMembershipIDs(ids...)
+	return _u
+}
+
+// AddRoomMemberships adds the "room_memberships" edges to the RoomMember entity.
+func (_u *UserUpdate) AddRoomMemberships(v ...*RoomMember) *UserUpdate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddRoomMembershipIDs(ids...)
+}
+
 // Mutation returns the UserMutation object of the builder.
 func (_u *UserUpdate) Mutation() *UserMutation {
 	return _u.mutation
@@ -286,6 +318,48 @@ func (_u *UserUpdate) RemoveAuthTokens(v ...*AuthToken) *UserUpdate {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveAuthTokenIDs(ids...)
+}
+
+// ClearHostedRooms clears all "hosted_rooms" edges to the Room entity.
+func (_u *UserUpdate) ClearHostedRooms() *UserUpdate {
+	_u.mutation.ClearHostedRooms()
+	return _u
+}
+
+// RemoveHostedRoomIDs removes the "hosted_rooms" edge to Room entities by IDs.
+func (_u *UserUpdate) RemoveHostedRoomIDs(ids ...uuid.UUID) *UserUpdate {
+	_u.mutation.RemoveHostedRoomIDs(ids...)
+	return _u
+}
+
+// RemoveHostedRooms removes "hosted_rooms" edges to Room entities.
+func (_u *UserUpdate) RemoveHostedRooms(v ...*Room) *UserUpdate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveHostedRoomIDs(ids...)
+}
+
+// ClearRoomMemberships clears all "room_memberships" edges to the RoomMember entity.
+func (_u *UserUpdate) ClearRoomMemberships() *UserUpdate {
+	_u.mutation.ClearRoomMemberships()
+	return _u
+}
+
+// RemoveRoomMembershipIDs removes the "room_memberships" edge to RoomMember entities by IDs.
+func (_u *UserUpdate) RemoveRoomMembershipIDs(ids ...uuid.UUID) *UserUpdate {
+	_u.mutation.RemoveRoomMembershipIDs(ids...)
+	return _u
+}
+
+// RemoveRoomMemberships removes "room_memberships" edges to RoomMember entities.
+func (_u *UserUpdate) RemoveRoomMemberships(v ...*RoomMember) *UserUpdate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveRoomMembershipIDs(ids...)
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -520,6 +594,96 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	if _u.mutation.HostedRoomsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.HostedRoomsTable,
+			Columns: []string{user.HostedRoomsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(room.FieldID, field.TypeUUID),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedHostedRoomsIDs(); len(nodes) > 0 && !_u.mutation.HostedRoomsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.HostedRoomsTable,
+			Columns: []string{user.HostedRoomsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(room.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.HostedRoomsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.HostedRoomsTable,
+			Columns: []string{user.HostedRoomsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(room.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.RoomMembershipsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.RoomMembershipsTable,
+			Columns: []string{user.RoomMembershipsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(roommember.FieldID, field.TypeUUID),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedRoomMembershipsIDs(); len(nodes) > 0 && !_u.mutation.RoomMembershipsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.RoomMembershipsTable,
+			Columns: []string{user.RoomMembershipsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(roommember.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RoomMembershipsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.RoomMembershipsTable,
+			Columns: []string{user.RoomMembershipsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(roommember.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{user.Label}
@@ -728,6 +892,36 @@ func (_u *UserUpdateOne) AddAuthTokens(v ...*AuthToken) *UserUpdateOne {
 	return _u.AddAuthTokenIDs(ids...)
 }
 
+// AddHostedRoomIDs adds the "hosted_rooms" edge to the Room entity by IDs.
+func (_u *UserUpdateOne) AddHostedRoomIDs(ids ...uuid.UUID) *UserUpdateOne {
+	_u.mutation.AddHostedRoomIDs(ids...)
+	return _u
+}
+
+// AddHostedRooms adds the "hosted_rooms" edges to the Room entity.
+func (_u *UserUpdateOne) AddHostedRooms(v ...*Room) *UserUpdateOne {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddHostedRoomIDs(ids...)
+}
+
+// AddRoomMembershipIDs adds the "room_memberships" edge to the RoomMember entity by IDs.
+func (_u *UserUpdateOne) AddRoomMembershipIDs(ids ...uuid.UUID) *UserUpdateOne {
+	_u.mutation.AddRoomMembershipIDs(ids...)
+	return _u
+}
+
+// AddRoomMemberships adds the "room_memberships" edges to the RoomMember entity.
+func (_u *UserUpdateOne) AddRoomMemberships(v ...*RoomMember) *UserUpdateOne {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddRoomMembershipIDs(ids...)
+}
+
 // Mutation returns the UserMutation object of the builder.
 func (_u *UserUpdateOne) Mutation() *UserMutation {
 	return _u.mutation
@@ -794,6 +988,48 @@ func (_u *UserUpdateOne) RemoveAuthTokens(v ...*AuthToken) *UserUpdateOne {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveAuthTokenIDs(ids...)
+}
+
+// ClearHostedRooms clears all "hosted_rooms" edges to the Room entity.
+func (_u *UserUpdateOne) ClearHostedRooms() *UserUpdateOne {
+	_u.mutation.ClearHostedRooms()
+	return _u
+}
+
+// RemoveHostedRoomIDs removes the "hosted_rooms" edge to Room entities by IDs.
+func (_u *UserUpdateOne) RemoveHostedRoomIDs(ids ...uuid.UUID) *UserUpdateOne {
+	_u.mutation.RemoveHostedRoomIDs(ids...)
+	return _u
+}
+
+// RemoveHostedRooms removes "hosted_rooms" edges to Room entities.
+func (_u *UserUpdateOne) RemoveHostedRooms(v ...*Room) *UserUpdateOne {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveHostedRoomIDs(ids...)
+}
+
+// ClearRoomMemberships clears all "room_memberships" edges to the RoomMember entity.
+func (_u *UserUpdateOne) ClearRoomMemberships() *UserUpdateOne {
+	_u.mutation.ClearRoomMemberships()
+	return _u
+}
+
+// RemoveRoomMembershipIDs removes the "room_memberships" edge to RoomMember entities by IDs.
+func (_u *UserUpdateOne) RemoveRoomMembershipIDs(ids ...uuid.UUID) *UserUpdateOne {
+	_u.mutation.RemoveRoomMembershipIDs(ids...)
+	return _u
+}
+
+// RemoveRoomMemberships removes "room_memberships" edges to RoomMember entities.
+func (_u *UserUpdateOne) RemoveRoomMemberships(v ...*RoomMember) *UserUpdateOne {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveRoomMembershipIDs(ids...)
 }
 
 // Where appends a list predicates to the UserUpdate builder.
@@ -1051,6 +1287,96 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(authtoken.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.HostedRoomsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.HostedRoomsTable,
+			Columns: []string{user.HostedRoomsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(room.FieldID, field.TypeUUID),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedHostedRoomsIDs(); len(nodes) > 0 && !_u.mutation.HostedRoomsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.HostedRoomsTable,
+			Columns: []string{user.HostedRoomsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(room.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.HostedRoomsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.HostedRoomsTable,
+			Columns: []string{user.HostedRoomsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(room.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.RoomMembershipsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.RoomMembershipsTable,
+			Columns: []string{user.RoomMembershipsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(roommember.FieldID, field.TypeUUID),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedRoomMembershipsIDs(); len(nodes) > 0 && !_u.mutation.RoomMembershipsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.RoomMembershipsTable,
+			Columns: []string{user.RoomMembershipsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(roommember.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RoomMembershipsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.RoomMembershipsTable,
+			Columns: []string{user.RoomMembershipsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(roommember.FieldID, field.TypeUUID),
 			},
 		}
 		for _, k := range nodes {

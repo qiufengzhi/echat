@@ -705,6 +705,52 @@ func HasAuthTokensWith(preds ...predicate.AuthToken) predicate.User {
 	})
 }
 
+// HasHostedRooms applies the HasEdge predicate on the "hosted_rooms" edge.
+func HasHostedRooms() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, HostedRoomsTable, HostedRoomsColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasHostedRoomsWith applies the HasEdge predicate on the "hosted_rooms" edge with a given conditions (other predicates).
+func HasHostedRoomsWith(preds ...predicate.Room) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newHostedRoomsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasRoomMemberships applies the HasEdge predicate on the "room_memberships" edge.
+func HasRoomMemberships() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, RoomMembershipsTable, RoomMembershipsColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasRoomMembershipsWith applies the HasEdge predicate on the "room_memberships" edge with a given conditions (other predicates).
+func HasRoomMembershipsWith(preds ...predicate.RoomMember) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newRoomMembershipsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // And groups predicates with the AND operator between them.
 func And(predicates ...predicate.User) predicate.User {
 	return predicate.User(sql.AndPredicates(predicates...))

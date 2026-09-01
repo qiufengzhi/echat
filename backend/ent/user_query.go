@@ -8,6 +8,8 @@ import (
 	"echat-backend/ent/authtoken"
 	"echat-backend/ent/identity"
 	"echat-backend/ent/predicate"
+	"echat-backend/ent/room"
+	"echat-backend/ent/roommember"
 	"echat-backend/ent/session"
 	"echat-backend/ent/user"
 	"fmt"
@@ -23,13 +25,15 @@ import (
 // UserQuery is the builder for querying User entities.
 type UserQuery struct {
 	config
-	ctx            *QueryContext
-	order          []user.OrderOption
-	inters         []Interceptor
-	predicates     []predicate.User
-	withIdentities *IdentityQuery
-	withSessions   *SessionQuery
-	withAuthTokens *AuthTokenQuery
+	ctx                 *QueryContext
+	order               []user.OrderOption
+	inters              []Interceptor
+	predicates          []predicate.User
+	withIdentities      *IdentityQuery
+	withSessions        *SessionQuery
+	withAuthTokens      *AuthTokenQuery
+	withHostedRooms     *RoomQuery
+	withRoomMemberships *RoomMemberQuery
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -125,6 +129,50 @@ func (_q *UserQuery) QueryAuthTokens() *AuthTokenQuery {
 			sqlgraph.From(user.Table, user.FieldID, selector),
 			sqlgraph.To(authtoken.Table, authtoken.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, user.AuthTokensTable, user.AuthTokensColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryHostedRooms chains the current query on the "hosted_rooms" edge.
+func (_q *UserQuery) QueryHostedRooms() *RoomQuery {
+	query := (&RoomClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, selector),
+			sqlgraph.To(room.Table, room.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.HostedRoomsTable, user.HostedRoomsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryRoomMemberships chains the current query on the "room_memberships" edge.
+func (_q *UserQuery) QueryRoomMemberships() *RoomMemberQuery {
+	query := (&RoomMemberClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, selector),
+			sqlgraph.To(roommember.Table, roommember.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.RoomMembershipsTable, user.RoomMembershipsColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -319,14 +367,16 @@ func (_q *UserQuery) Clone() *UserQuery {
 		return nil
 	}
 	return &UserQuery{
-		config:         _q.config,
-		ctx:            _q.ctx.Clone(),
-		order:          append([]user.OrderOption{}, _q.order...),
-		inters:         append([]Interceptor{}, _q.inters...),
-		predicates:     append([]predicate.User{}, _q.predicates...),
-		withIdentities: _q.withIdentities.Clone(),
-		withSessions:   _q.withSessions.Clone(),
-		withAuthTokens: _q.withAuthTokens.Clone(),
+		config:              _q.config,
+		ctx:                 _q.ctx.Clone(),
+		order:               append([]user.OrderOption{}, _q.order...),
+		inters:              append([]Interceptor{}, _q.inters...),
+		predicates:          append([]predicate.User{}, _q.predicates...),
+		withIdentities:      _q.withIdentities.Clone(),
+		withSessions:        _q.withSessions.Clone(),
+		withAuthTokens:      _q.withAuthTokens.Clone(),
+		withHostedRooms:     _q.withHostedRooms.Clone(),
+		withRoomMemberships: _q.withRoomMemberships.Clone(),
 		// clone intermediate query.
 		sql:  _q.sql.Clone(),
 		path: _q.path,
@@ -363,6 +413,28 @@ func (_q *UserQuery) WithAuthTokens(opts ...func(*AuthTokenQuery)) *UserQuery {
 		opt(query)
 	}
 	_q.withAuthTokens = query
+	return _q
+}
+
+// WithHostedRooms tells the query-builder to eager-load the nodes that are connected to
+// the "hosted_rooms" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *UserQuery) WithHostedRooms(opts ...func(*RoomQuery)) *UserQuery {
+	query := (&RoomClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withHostedRooms = query
+	return _q
+}
+
+// WithRoomMemberships tells the query-builder to eager-load the nodes that are connected to
+// the "room_memberships" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *UserQuery) WithRoomMemberships(opts ...func(*RoomMemberQuery)) *UserQuery {
+	query := (&RoomMemberClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withRoomMemberships = query
 	return _q
 }
 
@@ -444,10 +516,12 @@ func (_q *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 	var (
 		nodes       = []*User{}
 		_spec       = _q.querySpec()
-		loadedTypes = [3]bool{
+		loadedTypes = [5]bool{
 			_q.withIdentities != nil,
 			_q.withSessions != nil,
 			_q.withAuthTokens != nil,
+			_q.withHostedRooms != nil,
+			_q.withRoomMemberships != nil,
 		}
 	)
 	_spec.ScanValues = func(columns []string) ([]any, error) {
@@ -486,6 +560,20 @@ func (_q *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 		if err := _q.loadAuthTokens(ctx, query, nodes,
 			func(n *User) { n.Edges.AuthTokens = []*AuthToken{} },
 			func(n *User, e *AuthToken) { n.Edges.AuthTokens = append(n.Edges.AuthTokens, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withHostedRooms; query != nil {
+		if err := _q.loadHostedRooms(ctx, query, nodes,
+			func(n *User) { n.Edges.HostedRooms = []*Room{} },
+			func(n *User, e *Room) { n.Edges.HostedRooms = append(n.Edges.HostedRooms, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withRoomMemberships; query != nil {
+		if err := _q.loadRoomMemberships(ctx, query, nodes,
+			func(n *User) { n.Edges.RoomMemberships = []*RoomMember{} },
+			func(n *User, e *RoomMember) { n.Edges.RoomMemberships = append(n.Edges.RoomMemberships, e) }); err != nil {
 			return nil, err
 		}
 	}
@@ -567,6 +655,66 @@ func (_q *UserQuery) loadAuthTokens(ctx context.Context, query *AuthTokenQuery, 
 	}
 	query.Where(predicate.AuthToken(func(s *sql.Selector) {
 		s.Where(sql.InValues(s.C(user.AuthTokensColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.UserID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "user_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *UserQuery) loadHostedRooms(ctx context.Context, query *RoomQuery, nodes []*User, init func(*User), assign func(*User, *Room)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[uuid.UUID]*User)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(room.FieldHostID)
+	}
+	query.Where(predicate.Room(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(user.HostedRoomsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.HostID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "host_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *UserQuery) loadRoomMemberships(ctx context.Context, query *RoomMemberQuery, nodes []*User, init func(*User), assign func(*User, *RoomMember)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[uuid.UUID]*User)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(roommember.FieldUserID)
+	}
+	query.Where(predicate.RoomMember(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(user.RoomMembershipsColumn), fks...))
 	}))
 	neighbors, err := query.All(ctx)
 	if err != nil {

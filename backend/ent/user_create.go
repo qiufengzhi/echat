@@ -6,6 +6,8 @@ import (
 	"context"
 	"echat-backend/ent/authtoken"
 	"echat-backend/ent/identity"
+	"echat-backend/ent/room"
+	"echat-backend/ent/roommember"
 	"echat-backend/ent/session"
 	"echat-backend/ent/user"
 	"errors"
@@ -189,6 +191,36 @@ func (_c *UserCreate) AddAuthTokens(v ...*AuthToken) *UserCreate {
 		ids[i] = v[i].ID
 	}
 	return _c.AddAuthTokenIDs(ids...)
+}
+
+// AddHostedRoomIDs adds the "hosted_rooms" edge to the Room entity by IDs.
+func (_c *UserCreate) AddHostedRoomIDs(ids ...uuid.UUID) *UserCreate {
+	_c.mutation.AddHostedRoomIDs(ids...)
+	return _c
+}
+
+// AddHostedRooms adds the "hosted_rooms" edges to the Room entity.
+func (_c *UserCreate) AddHostedRooms(v ...*Room) *UserCreate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddHostedRoomIDs(ids...)
+}
+
+// AddRoomMembershipIDs adds the "room_memberships" edge to the RoomMember entity by IDs.
+func (_c *UserCreate) AddRoomMembershipIDs(ids ...uuid.UUID) *UserCreate {
+	_c.mutation.AddRoomMembershipIDs(ids...)
+	return _c
+}
+
+// AddRoomMemberships adds the "room_memberships" edges to the RoomMember entity.
+func (_c *UserCreate) AddRoomMemberships(v ...*RoomMember) *UserCreate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddRoomMembershipIDs(ids...)
 }
 
 // Mutation returns the UserMutation object of the builder.
@@ -388,6 +420,38 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(authtoken.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.HostedRoomsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.HostedRoomsTable,
+			Columns: []string{user.HostedRoomsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(room.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.RoomMembershipsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.RoomMembershipsTable,
+			Columns: []string{user.RoomMembershipsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(roommember.FieldID, field.TypeUUID),
 			},
 		}
 		for _, k := range nodes {

@@ -16,6 +16,8 @@ import (
 func main() {
 	url := flag.String("url", "", "ws 地址，如 ws://127.0.0.1:8081/ws?token=xxx")
 	join := flag.Bool("join", false, "连接成功后发送 join 进房")
+	ai := flag.Bool("ai", false, "join 后发送 ai_toggle 开启请求（验证 AI 开关事件）")
+	roomID := flag.String("room", "TESTAUTH", "加入的房间短码")
 	readTimeout := flag.Duration("read-timeout", 30*time.Second, "整体读取时长上限，超时主动收尾")
 	flag.Parse()
 
@@ -38,11 +40,19 @@ func main() {
 	fmt.Println("CONNECTED")
 
 	if *join {
-		if err := conn.WriteJSON(map[string]any{"type": "join", "room_id": "TESTAUTH", "payload": "wsprobe"}); err != nil {
+		if err := conn.WriteJSON(map[string]any{"type": "join", "room_id": *roomID, "payload": "wsprobe"}); err != nil {
 			fmt.Printf("JOIN_SEND_FAIL err=%v\n", err)
 			return
 		}
 		fmt.Println("JOIN_SENT")
+	}
+
+	if *ai {
+		if err := conn.WriteJSON(map[string]any{"type": "ai_toggle", "room_id": *roomID, "payload": map[string]any{"enable": true}}); err != nil {
+			fmt.Printf("AI_SEND_FAIL err=%v\n", err)
+			return
+		}
+		fmt.Println("AI_SENT")
 	}
 
 	start := time.Now()

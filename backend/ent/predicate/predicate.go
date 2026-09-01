@@ -15,6 +15,12 @@ type Identity func(*sql.Selector)
 // OutboxEvent is the predicate function for outboxevent builders.
 type OutboxEvent func(*sql.Selector)
 
+// Room is the predicate function for room builders.
+type Room func(*sql.Selector)
+
+// RoomMember is the predicate function for roommember builders.
+type RoomMember func(*sql.Selector)
+
 // Session is the predicate function for session builders.
 type Session func(*sql.Selector)
 

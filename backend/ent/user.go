@@ -53,9 +53,13 @@ type UserEdges struct {
 	Sessions []*Session `json:"sessions,omitempty"`
 	// 该用户的一次性短命令牌集合
 	AuthTokens []*AuthToken `json:"auth_tokens,omitempty"`
+	// 该用户担任房主的房间集合
+	HostedRooms []*Room `json:"hosted_rooms,omitempty"`
+	// 该用户的房间在场记录集合
+	RoomMemberships []*RoomMember `json:"room_memberships,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [3]bool
+	loadedTypes [5]bool
 }
 
 // IdentitiesOrErr returns the Identities value or an error if the edge
@@ -83,6 +87,24 @@ func (e UserEdges) AuthTokensOrErr() ([]*AuthToken, error) {
 		return e.AuthTokens, nil
 	}
 	return nil, &NotLoadedError{edge: "auth_tokens"}
+}
+
+// HostedRoomsOrErr returns the HostedRooms value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) HostedRoomsOrErr() ([]*Room, error) {
+	if e.loadedTypes[3] {
+		return e.HostedRooms, nil
+	}
+	return nil, &NotLoadedError{edge: "hosted_rooms"}
+}
+
+// RoomMembershipsOrErr returns the RoomMemberships value or an error if the edge
+// was not loaded in eager-loading.
+func (e UserEdges) RoomMembershipsOrErr() ([]*RoomMember, error) {
+	if e.loadedTypes[4] {
+		return e.RoomMemberships, nil
+	}
+	return nil, &NotLoadedError{edge: "room_memberships"}
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -208,6 +230,16 @@ func (_m *User) QuerySessions() *SessionQuery {
 // QueryAuthTokens queries the "auth_tokens" edge of the User entity.
 func (_m *User) QueryAuthTokens() *AuthTokenQuery {
 	return NewUserClient(_m.config).QueryAuthTokens(_m)
+}
+
+// QueryHostedRooms queries the "hosted_rooms" edge of the User entity.
+func (_m *User) QueryHostedRooms() *RoomQuery {
+	return NewUserClient(_m.config).QueryHostedRooms(_m)
+}
+
+// QueryRoomMemberships queries the "room_memberships" edge of the User entity.
+func (_m *User) QueryRoomMemberships() *RoomMemberQuery {
+	return NewUserClient(_m.config).QueryRoomMemberships(_m)
 }
 
 // Update returns a builder for updating this User.
