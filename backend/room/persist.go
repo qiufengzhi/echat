@@ -124,6 +124,15 @@ func persistRoomJoin(r *Room, c *Client) {
 
 	if err = tx.Commit(ctx); err != nil {
 		factErr("提交房间加入事实失败", r.ID, err)
+		return
+	}
+
+	// 权威聚合根 id 与内存不一致时同步，保证 join/leave/ai 事件 subject 对齐
+	// 复开已关闭事实行或并发回查会把事务内权威 id 收敛为 DB 行 id，内存 fresh 值需跟随
+	if aggStr := aggID.String(); aggStr != r.AggID {
+		r.Lock.Lock()
+		r.AggID = aggStr
+		r.Lock.Unlock()
 	}
 }
 
