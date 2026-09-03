@@ -1,12 +1,20 @@
 import type { AITogglePayload, LeavePayload, OutgoingSignalingMessage, SignalingMessage } from '../types/signaling'
-import { getAccessToken, refresh } from './auth'
+import { refresh } from './auth'
+import {
+  KICKED_MESSAGE,
+  createPreferredTransport,
+  getDefaultWebTransportUrl,
+  type SignalTransport,
+  type TransportHandlers,
+} from './signalTransports'
 
-// 信令心跳间隔要短于常见代理 60 秒空闲超时，避免 WebSocket 长时间无数据被中间层关闭
+// 信令心跳间隔要短于常见代理 60 秒空闲超时，避免信令通道长时间无数据被中间层关闭
 const SIGNALING_HEARTBEAT_INTERVAL_MS = 25_000
 // 发出 ping 后如果超过该时间仍未收到 pong，认为连接已死，主动关闭以触发重连
 const SIGNALING_HEARTBEAT_TIMEOUT_MS = 10_000
 
 // KICKED_CLOSE_CODE 服务端主动踢下线（会话吊销/封禁）使用的自定义关闭码，与后端 room 包保持一致
+// WebSocket 通道仍以该关闭码兜底识别；WebTransport 通道无关闭码语义，靠 kicked 应用消息检测
 export const KICKED_CLOSE_CODE = 4001
 
 // 默认重连策略：最多 10 次，首次 1 秒，按 2 倍指数退避，上限 30 秒
@@ -16,12 +24,12 @@ const DEFAULT_RECONNECT_INITIAL_DELAY_MS = 1_000
 const DEFAULT_RECONNECT_MAX_DELAY_MS = 30_000
 const DEFAULT_RECONNECT_BACKOFF_MULTIPLIER = 2
 
-// SignalingClientHandlers 是信令 WebSocket 生命周期事件的回调集合
+// SignalingClientHandlers 是信令通道生命周期事件的回调集合，与传输通道类型无关
 export interface SignalingClientHandlers {
-  onOpen?: () => void // 信令服务器连接成功或重连成功后的回调
+  onOpen?: () => void // 信令连接成功或重连成功后的回调
   onMessage: (message: SignalingMessage) => void // 收到信令服务器消息后的回调
-  onError?: (error: Event) => void // 信令 WebSocket 连接失败或异常时的回调
-  onClose?: (event: CloseEvent) => void // 信令 WebSocket 最终关闭且不再重连时的回调
+  onError?: (error: Event) => void // 信令连接失败或异常时的回调
+  onClose?: (event: CloseEvent) => void // 信令最终关闭且不再重连时的回调
   onReconnecting?: (attempt: number, maxAttempts: number) => void // 开始一次重连尝试前的回调
   onKicked?: () => void // 被服务端强制踢下线（会话吊销/封禁）时的回调
 }
@@ -40,7 +48,9 @@ export interface SignalingClientOptions {
   roomId: string // 当前要加入的房间 ID
   username: string // 当前用户进入房间时使用的显示名称
   url?: string // 可选的信令服务器地址；默认使用当前页面同源 /ws
-  handlers: SignalingClientHandlers // 信令 WebSocket 的事件处理函数
+  webTransportUrl?: string // 可选的 WebTransport 高优先级通道地址；默认同主机 :4433
+  preferWebTransport?: boolean // 浏览器支持时是否优先 WebTransport(QUIC)，默认 true
+  handlers: SignalingClientHandlers // 信令通道的事件处理函数
   reconnect?: SignalingClientReconnectOptions // 可选的断线重连策略
 }
 
@@ -50,20 +60,17 @@ export function getDefaultSignalingUrl(): string {
   return `${protocol}//${window.location.host}/ws`
 }
 
-// withAccessToken 把 access 附加到 WS 地址：浏览器 WS 无法自定义 Header，后端要求握手带 ?token=（spec §9.1）
-function withAccessToken(url: string): string {
-  const token = getAccessToken()
-  return token ? `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}` : url
-}
-
-// SignalingClient 封装和信令服务器之间的 WebSocket 通信，不直接处理 WebRTC 业务
+// SignalingClient 封装信令服务器双通道通信：WebTransport(QUIC) 优先，失败自动降级 WebSocket
+// 内部持有传输适配层（SignalTransport），对上层暴露与通道无关的生命周期与消息方法
 export class SignalingClient {
   private readonly roomId: string // 当前信令连接所属房间
   private readonly username: string // 当前信令连接对应的用户显示名
-  private readonly wsUrl: string // 实际连接的信令服务器 WebSocket 地址
+  private readonly wsUrl: string // 降级通道（WebSocket）地址
+  private readonly wtUrl: string // 首选通道（WebTransport）地址
+  private readonly preferWebTransport: boolean // 是否启用 WebTransport 优先策略
   private readonly handlers: SignalingClientHandlers // 上层传入的事件处理函数
   private readonly reconnectOptions: Required<SignalingClientReconnectOptions> // 重连策略的完整配置
-  private ws: WebSocket | null = null // 当前 WebSocket 实例，未连接或已关闭时为 null
+  private transport: SignalTransport | null = null // 当前使用的信令传输通道
   private heartbeatTimerId: number | null = null // 浏览器定时发送业务 ping 的计时器 ID
   private heartbeatTimeoutId: number | null = null // 等待服务端 pong 回应的超时计时器 ID
   private reconnectTimerId: number | null = null // 重连定时器 ID
@@ -74,6 +81,8 @@ export class SignalingClient {
     this.roomId = options.roomId
     this.username = options.username
     this.wsUrl = options.url || getDefaultSignalingUrl()
+    this.wtUrl = options.webTransportUrl || getDefaultWebTransportUrl()
+    this.preferWebTransport = options.preferWebTransport ?? true
     this.handlers = options.handlers
     this.reconnectOptions = {
       enabled: options.reconnect?.enabled ?? DEFAULT_RECONNECT_ENABLED,
@@ -88,124 +97,29 @@ export class SignalingClient {
     window.addEventListener('offline', this.handleOffline)
   }
 
-  // connect 建立信令服务器 WebSocket 连接，并绑定浏览器 WebSocket 事件
+  // connect 建立信令通道：首次选择 WebTransport 优先通道，重连时复用当前通道
   // 异常断线后会在内部按指数退避自动重连；上层通过 onReconnecting / onOpen / onClose 感知状态
-  connect(): WebSocket {
-    console.log('正在连接信令 WebSocket:', {
-      wsUrl: this.wsUrl,
-      roomId: this.roomId,
-      username: this.username,
-      attempt: this.reconnectAttempts,
-    })
-
-    const ws = new WebSocket(withAccessToken(this.wsUrl))
-    this.ws = ws
-
-    ws.onopen = () => {
-      console.log('信令 WebSocket 已连接:', {
-        wsUrl: this.wsUrl,
-        roomId: this.roomId,
-        username: this.username,
-      })
-      // 连接成功后重置重连计数并清理重连定时器
-      this.reconnectAttempts = 0
-      this.stopReconnect()
-      this.startHeartbeat()
-      this.handlers.onOpen?.()
+  connect(): void {
+    if (!this.transport) {
+      this.transport = createPreferredTransport(
+        this.preferWebTransport ? this.wtUrl : this.wsUrl,
+        this.transportHandlers(),
+        this.preferWebTransport,
+      )
     }
-
-    ws.onmessage = event => {
-      console.log('收到信令 WebSocket 消息:', {
-        wsUrl: this.wsUrl,
-        data: event.data,
-      })
-      const message = JSON.parse(event.data) as SignalingMessage
-      if (message.type === 'pong') {
-        console.log('收到信令 WebSocket pong:', {
-          wsUrl: this.wsUrl,
-          roomId: this.roomId,
-          time: new Date().toISOString(),
-        })
-        this.stopHeartbeatTimeout()
-        return
-      }
-      this.handlers.onMessage(message)
-    }
-
-    ws.onerror = error => {
-      // onerror 不会暴露太多底层原因，因此把信令服务器地址和当前房间一起打出来方便和后端/Nginx 日志对齐
-      console.error('信令 WebSocket 连接失败:', {
-        wsUrl: this.wsUrl,
-        roomId: this.roomId,
-        readyState: ws.readyState,
-        time: new Date().toISOString(),
-        error,
-      })
-      this.stopHeartbeat()
-      // 重连过程中不再向上层抛 error，避免 UI 闪烁；最终失败会由 onClose 通知
-      if (!this.isReconnecting()) {
-        this.handlers.onError?.(error)
-      }
-    }
-
-    ws.onclose = event => {
-      // 记录浏览器能拿到的关闭细节，排查代理超时或异常断开时重点看 code 和 wasClean
-      console.log('信令 WebSocket 已关闭:', {
-        wsUrl: this.wsUrl,
-        code: event.code,
-        reason: event.reason || '(空)',
-        wasClean: event.wasClean,
-        readyState: ws.readyState,
-        roomId: this.roomId,
-        time: new Date().toISOString(),
-      })
-      this.stopHeartbeat()
-      if (this.ws === ws) {
-        this.ws = null
-      }
-
-      // 主动关闭时静默清理，上层已在 leaveRoom / 卸载流程中重置状态，无需再通知 onClose
-      if (this.intentionallyClosed) {
-        return
-      }
-
-      // 被服务端踢下线：不重连，交给上层展示"已下线"
-      if (event.code === KICKED_CLOSE_CODE) {
-        console.warn('信令 WebSocket 被服务端踢下线:', {
-          url: this.wsUrl,
-          code: event.code,
-          reason: event.reason || '(空)',
-        })
-        this.intentionallyClosed = true
-        this.handlers.onKicked?.()
-        return
-      }
-
-      // 如果已经有新的连接在进行中（例如网络恢复后立刻触发重连），忽略旧连接的关闭事件
-      if (this.ws !== null && this.ws.readyState !== WebSocket.CLOSED) {
-        return
-      }
-
-      // 异常关闭时进入自动重连流程
-      this.scheduleReconnect()
-    }
-
-    return ws
+    this.transport.connect()
   }
 
-  // send 把结构化信令消息序列化后发给信令服务器
+  // send 把结构化信令消息序列化后交给当前通道发送
   send<TPayload>(message: OutgoingSignalingMessage<TPayload>): void {
-    if (this.ws?.readyState !== WebSocket.OPEN) {
-      console.warn('信令 WebSocket 未打开，跳过消息:', {
-        wsUrl: this.wsUrl,
+    if (!this.transport) {
+      console.warn('信令通道未建立，跳过消息:', {
         roomId: this.roomId,
-        readyState: this.ws?.readyState,
         messageType: message.type,
       })
       return
     }
-
-    this.ws.send(JSON.stringify(message))
+    this.transport.send(JSON.stringify(message))
   }
 
   // sendJoin 告诉信令服务器当前用户要进入哪个房间
@@ -217,7 +131,7 @@ export class SignalingClient {
     })
   }
 
-  // sendPing 发送业务层心跳，保活信令 WebSocket
+  // sendPing 发送业务层心跳，保活信令通道
   // 发送后会启动 pong 超时检测，避免移动端断网时浏览器长时间不触发 close 事件
   sendPing(): void {
     this.send({
@@ -281,19 +195,94 @@ export class SignalingClient {
     })
   }
 
-  // close 主动关闭信令 WebSocket，通常在用户离开房间或组件卸载时调用
+  // close 主动关闭信令通道，通常在用户离开房间或组件卸载时调用
   // 主动关闭会取消任何进行中的重连，避免离开后仍继续尝试连接
   close(): void {
     this.intentionallyClosed = true
     this.stopReconnect()
     this.stopHeartbeat()
-    this.ws?.close()
-    this.ws = null
+    this.transport?.close()
+    this.transport = null
     window.removeEventListener('online', this.handleOnline)
     window.removeEventListener('offline', this.handleOffline)
   }
 
-  // startHeartbeat 在信令连接成功后定时发送业务 ping，避免代理层认为连接空闲
+  // transportHandlers 生成绑定到当前通道的事件转发集合
+  // onFallback 仅在 WebTransport 通道内触发：未能建立 QUIC 会话时切到 WebSocket
+  private transportHandlers(): TransportHandlers {
+    return {
+      onOpen: () => this.handleTransportOpen(),
+      onMessage: text => this.handleTransportMessage(text),
+      onError: error => this.handleTransportError(error),
+      onClose: code => this.handleTransportClose(code),
+      onFallback: () => this.fallbackToWebSocket(),
+    }
+  }
+
+  // handleTransportOpen 通道连接成功后统一重置重连状态并启动心跳
+  private handleTransportOpen(): void {
+    console.log('[signaling] 信令通道已连接', { roomId: this.roomId, kind: this.transport?.kind })
+    this.reconnectAttempts = 0
+    this.stopReconnect()
+    this.startHeartbeat()
+    this.handlers.onOpen?.()
+  }
+
+  // handleTransportMessage 统一的收帧入口：pong 心响应答、踢下线消息、业务消息分派
+  // kicked 通道无关的应用消息（WebTransport 无关闭码），收到即视为强制下线
+  private handleTransportMessage(text: string): void {
+    const message = JSON.parse(text) as SignalingMessage
+    if (message.type === 'pong') {
+      this.stopHeartbeatTimeout()
+      return
+    }
+    if (message.type === KICKED_MESSAGE) {
+      console.warn('[signaling] 信令通道被服务端踢下线', { roomId: this.roomId })
+      this.intentionallyClosed = true
+      this.stopHeartbeat()
+      this.handlers.onKicked?.()
+      return
+    }
+    this.handlers.onMessage(message)
+  }
+
+  // handleTransportError 通道异常时的统一处理；重连中不重复向上层抛错误避免 UI 闪烁
+  private handleTransportError(error: unknown): void {
+    console.error('[signaling] 信令通道错误', { roomId: this.roomId, kind: this.transport?.kind, error })
+    this.stopHeartbeat()
+    if (!this.isReconnecting()) {
+      this.handlers.onError?.(error as Event)
+    }
+  }
+
+  // handleTransportClose 通道关闭后的统一决策：主动关闭静默、踢下线交给上层、异常走重连
+  private handleTransportClose(code?: number): void {
+    this.stopHeartbeat()
+
+    // 主动关闭时静默清理，上层已在 leaveRoom / 卸载流程中重置状态，无需再通知 onClose
+    if (this.intentionallyClosed) {
+      return
+    }
+
+    // WebSocket 通道兜底的踢下线识别：应用消息先到则 intentionallyClosed 已置位，此处直接返回
+    if (code === KICKED_CLOSE_CODE) {
+      console.warn('[signaling] 信令通道被服务端踢下线（关闭码）', { code })
+      this.intentionallyClosed = true
+      this.handlers.onKicked?.()
+      return
+    }
+
+    this.scheduleReconnect()
+  }
+
+  // fallbackToWebSocket WebTransport 首选通道不可用时降级到 WebSocket 并立即连接
+  private fallbackToWebSocket(): void {
+    console.log('[signaling] WebTransport 不可用，降级 WebSocket', { roomId: this.roomId })
+    this.transport = createPreferredTransport(this.wsUrl, this.transportHandlers(), false)
+    this.transport.connect()
+  }
+
+  // startHeartbeat 在信令通道连接成功后定时发送业务 ping，避免代理层认为连接空闲
   // 连接建立后立即发送一次 ping，以便尽快启动 pong 超时检测
   private startHeartbeat(): void {
     this.stopHeartbeat()
@@ -303,7 +292,7 @@ export class SignalingClient {
     }, SIGNALING_HEARTBEAT_INTERVAL_MS)
   }
 
-  // stopHeartbeat 停止业务心跳，避免连接关闭后计时器继续运行
+  // stopHeartbeat 停止业务心跳，避免通道关闭后计时器继续运行
   private stopHeartbeat(): void {
     if (this.heartbeatTimerId === null) return
 
@@ -314,16 +303,15 @@ export class SignalingClient {
   }
 
   // startHeartbeatTimeout 在发送 ping 后启动超时检测
-  // 如果超时仍未收到 pong，主动关闭 WebSocket 以尽快触发重连流程
+  // 如果超时仍未收到 pong，主动关闭通道以尽快触发重连流程
   private startHeartbeatTimeout(): void {
     this.stopHeartbeatTimeout()
     this.heartbeatTimeoutId = window.setTimeout(() => {
-      console.warn('信令 WebSocket 心跳超时，主动关闭连接触发重连:', {
-        wsUrl: this.wsUrl,
+      console.warn('[signaling] 信令心跳超时，主动关闭通道触发重连', {
         roomId: this.roomId,
-        time: new Date().toISOString(),
+        kind: this.transport?.kind,
       })
-      this.ws?.close()
+      this.transport?.close()
     }, SIGNALING_HEARTBEAT_TIMEOUT_MS)
   }
 
@@ -349,8 +337,7 @@ export class SignalingClient {
     }
 
     if (this.reconnectAttempts >= this.reconnectOptions.maxAttempts) {
-      console.error('信令 WebSocket 重连次数耗尽:', {
-        wsUrl: this.wsUrl,
+      console.error('[signaling] 信令重连次数耗尽', {
         roomId: this.roomId,
         maxAttempts: this.reconnectOptions.maxAttempts,
       })
@@ -364,9 +351,9 @@ export class SignalingClient {
       this.reconnectOptions.maxDelayMs,
     )
 
-    console.log(`信令 WebSocket 将在 ${delay}ms 后进行第 ${this.reconnectAttempts}/${this.reconnectOptions.maxAttempts} 次重连`, {
-      wsUrl: this.wsUrl,
+    console.log(`[signaling] 信令通道将在 ${delay}ms 后进行第 ${this.reconnectAttempts}/${this.reconnectOptions.maxAttempts} 次重连`, {
       roomId: this.roomId,
+      kind: this.transport?.kind,
     })
     this.handlers.onReconnecting?.(this.reconnectAttempts, this.reconnectOptions.maxAttempts)
 
@@ -388,11 +375,10 @@ export class SignalingClient {
   // handleOnline 在浏览器感知到网络恢复时触发
   // 如果当前正在等待重连且没有进行中的连接，立即跳过剩余退避时间尝试连接
   private handleOnline = (): void => {
-    if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) return
+    if (this.transport?.isOpen()) return
     if (!this.isReconnecting()) return
 
-    console.log('网络已恢复，立即尝试重连:', {
-      wsUrl: this.wsUrl,
+    console.log('[signaling] 网络已恢复，立即尝试重连:', {
       roomId: this.roomId,
       time: new Date().toISOString(),
     })
@@ -401,15 +387,14 @@ export class SignalingClient {
   }
 
   // handleOffline 在浏览器感知到网络断开时触发
-  // 如果当前有打开的连接，主动关闭以尽快进入重连流程，避免等 TCP 超时
+  // 如果当前有打开的连接，主动关闭以尽快进入重连流程，避免等 TCP/QUIC 超时
   private handleOffline = (): void => {
-    if (this.intentionallyClosed || this.ws?.readyState !== WebSocket.OPEN) return
+    if (this.intentionallyClosed || !this.transport?.isOpen()) return
 
-    console.log('网络已断开，主动关闭 WebSocket 触发重连:', {
-      wsUrl: this.wsUrl,
+    console.log('[signaling] 网络已断开，主动关闭信令通道触发重连:', {
       roomId: this.roomId,
       time: new Date().toISOString(),
     })
-    this.ws.close()
+    this.transport.close()
   }
 }

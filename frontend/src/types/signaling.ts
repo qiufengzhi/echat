@@ -25,6 +25,7 @@ export type SignalingServerMessageType =
   | 'sfu_ice'     // SFU：服务端转发 ICE Candidate 给前端
   | 'sfu_renegotiation_offer' // SFU：服务端在 AddTrack 后发送的 renegotiation Offer
   | 'ai_status'   // 服务端回复发送者当前 AI 语音助手的开关状态
+  | 'kicked'      // 服务端主动踢下线（会话吊销/封禁），WebTransport 通道无关闭码语义据此识别
 
 // SignalingMessageType 是前后端 WebSocket 共用的完整消息类型集合
 export type SignalingMessageType = SignalingClientMessageType | SignalingServerMessageType
