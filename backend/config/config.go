@@ -28,6 +28,7 @@ type Config struct {
 	Log      LogConfig      `yaml:"log"`      // 日志配置
 	NATS     NATSConfig     `yaml:"nats"`     // NATS JetStream 一致性骨干配置
 	Redis    RedisConfig    `yaml:"redis"`    // 登录限流与在线热状态共享的 Redis 配置
+	SpiceDB  SpiceDBConfig  `yaml:"spicedb"`  // SpiceDB(Zanzibar) 对象级授权服务配置
 	Outbox   OutboxConfig   `yaml:"outbox"`   // 事务性 Outbox relay 参数
 }
 
@@ -138,6 +139,16 @@ type NATSConfig struct {
 	Stream         string   `yaml:"stream"`          // JetStream 流名，事件按 subject 落入该流
 	StreamSubjects []string `yaml:"stream_subjects"` // 流覆盖的 subject 前缀，如 user.> / room.>
 	StreamMaxAge   string   `yaml:"stream_max_age"`  // 事件保留时长，过期由 JetStream 自动回收
+}
+
+// SpiceDBConfig 对象级授权服务配置（关系元组写入与权限判定）
+type SpiceDBConfig struct {
+	// Enabled 是否启用授权服务，开发默认开（dev compose 已编排），生产按需
+	Enabled bool `yaml:"enabled"`
+	// Addr gRPC 地址（host:port），默认 127.0.0.1:50051
+	Addr string `yaml:"addr"`
+	// PresharedKey gRPC 预共享密钥，dev 明文传输，生产必须走 TLS
+	PresharedKey string `yaml:"preshared_key"`
 }
 
 // OutboxConfig 事务性 Outbox relay 参数
@@ -295,6 +306,11 @@ func DefaultConfig() *Config {
 		Redis: RedisConfig{
 			Addr:     "127.0.0.1:6379",
 			Password: "",
+		},
+		SpiceDB: SpiceDBConfig{
+			Enabled:      true,
+			Addr:         "127.0.0.1:50051",
+			PresharedKey: "dev-secret-local",
 		},
 		Outbox: OutboxConfig{
 			PollInterval: "1s",
@@ -541,6 +557,17 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("REDIS_PASSWORD"); v != "" {
 		cfg.Redis.Password = v
+	}
+
+	// --- SpiceDB ---
+	if v := os.Getenv("SPICEDB_ENABLED"); v != "" {
+		cfg.SpiceDB.Enabled = strings.EqualFold(v, "true")
+	}
+	if v := os.Getenv("SPICEDB_GRPC_ADDR"); v != "" {
+		cfg.SpiceDB.Addr = v
+	}
+	if v := os.Getenv("SPICEDB_PRESHARED_KEY"); v != "" {
+		cfg.SpiceDB.PresharedKey = v
 	}
 
 	// --- Outbox relay ---

@@ -5,6 +5,7 @@ import (
 
 	"echat-backend/asr_cli"
 	"echat-backend/authn"
+	"echat-backend/authz"
 	"echat-backend/config"
 	"echat-backend/global"
 	"echat-backend/handlers"
@@ -88,6 +89,26 @@ func main() {
 
 	http.HandleFunc("/", handlers.IndexHandler)
 	http.HandleFunc("/ws", handlers.WebSocketHandler(authSvc)) // 注册带鉴权的 WebSocket 处理函数
+
+	// 注入 SpiceDB 授权服务：控制面鉴权用（kick/manage_ai/mod_mic/speak 校验、交接），媒体路径永不查
+	// 连接失败不阻断启动：授权判定在 room 域逐点接入（#21）时判空降级
+	spiceCfg := config.Get().SpiceDB
+	if spiceCfg.Enabled {
+		authzSvc, err := authz.NewClient(spiceCfg.Addr, spiceCfg.PresharedKey)
+		if err != nil {
+			logging.L().Warnw("SpiceDB 客户端初始化失败，授权服务降级", "addr", spiceCfg.Addr, "error", err)
+		} else {
+			// EnsureSchema 幂等（已存在则略过），成功即证明连接与 schema 均就绪，作为挂载判据
+			authzCtx, authzCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			if err = authzSvc.EnsureSchema(authzCtx); err != nil {
+				logging.L().Warnw("SpiceDB schema 水合失败，授权服务降级（room 域鉴权暂跳过）", "addr", spiceCfg.Addr, "error", err)
+			} else {
+				global.AuthZ = authzSvc
+				logging.L().Infow("SpiceDB 授权服务就绪", "addr", spiceCfg.Addr)
+			}
+			authzCancel()
+		}
+	}
 
 	// 启动后台清理协程，定期回收空房间
 	room.StartCleanupLoop()

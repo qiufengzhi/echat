@@ -1,0 +1,39 @@
+// SpiceDB(Zanzibar) 授权 Schema：房间角色关系 + 派生权限（对齐 frontier-blueprint §3.5.2）
+// 业务侧不做「角色名判断」，权限裁决全部落到派生权限 Check
+// 变更走评审：关系/权限改动先改本文件，再 EnsureSchema 幂等应用
+
+definition user {}
+
+definition room {
+  // 角色关系：出任任一角色即视为成员（成员身份由派生 permission 推导）
+  relation host: user
+  relation cohost: user
+  relation speaker: user
+  relation listener: user
+  // 状态叠加：静音/禁言（负向覆盖）
+  relation muted: user
+
+  // 成员 = 任一角色（派生 permission，SpiceDB 关系不支持 relation-to-relation）
+  permission member         = host + cohost + speaker + listener
+
+  // 原子权限 → 派生权限表达式（对齐「角色 = 权限组合」）
+  permission edit_room     = host
+  permission transfer_host = host
+  // co-host 派生继承 host 的管理权限
+  permission manage_ai     = host + cohost
+  permission kick          = host + cohost
+  permission mod_mic       = host + cohost
+  // 排除被静音者：muted 覆盖 speak
+  permission speak         = (host + cohost + speaker) - muted
+  permission hand_raise    = member
+  permission listen        = member
+  permission invite        = member
+}
+
+// 未来：录制回放可见性由关系推导（参与者/被@ 一次性写入，view 表达式推导）
+definition recording {
+  relation owner: user
+  relation participant: user
+  relation mentioned: user
+  permission view = owner + participant + mentioned
+}

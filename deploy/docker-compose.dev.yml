@@ -68,6 +68,24 @@ services:
       postgres:
         condition: service_healthy
 
+  # SpiceDB(Zanzibar) 对象级授权服务：关系元组存储复用 Postgres（echat_spicedb 库），不加新存储
+  spicedb:
+    container_name: echat-dev-spicedb
+    image: ghcr.io/authzed/spicedb:latest
+    restart: unless-stopped
+    command: ["serve"]
+    ports:
+      - "50051:50051"                 # gRPC 鉴权接口（control-plane 权限裁决）
+    environment:
+      SPICEDB_GRPC_PRESHARED_KEY: dev-secret-local  # 与 config.yaml 默认一致
+      SPICEDB_DATASTORE_ENGINE: postgres            # 复用同一 Postgres，spicedb 自建库表
+      SPICEDB_DATASTORE_CONN_URI: postgres://echat:echat@postgres:5432/echat_spicedb?sslmode=disable
+      SPICEDB_DATASTORE_REVISION_QUANTIZATION: 1s   # 降低可读版本推进粒度，控制面强一致读等待上限
+      SPICEDB_LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   echat_dev_pgdata:
   echat_dev_natsdata:
