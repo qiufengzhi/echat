@@ -22,6 +22,16 @@ const (
 	EventTypeRoomClosed = "room.closed"
 	// EventTypeRoomAiToggled AI 语音助手开关变更
 	EventTypeRoomAiToggled = "room.ai_toggled"
+	// EventTypeRoomHandRaised 成员举手请求上麦
+	EventTypeRoomHandRaised = "room.hand_raised"
+	// EventTypeRoomMicApproved 房主批准成员上麦
+	EventTypeRoomMicApproved = "room.mic_approved"
+	// EventTypeRoomMicRejected 房主拒绝成员上麦
+	EventTypeRoomMicRejected = "room.mic_rejected"
+	// EventTypeRoomMicKicked 房主请成员下麦
+	EventTypeRoomMicKicked = "room.mic_kicked"
+	// EventTypeRoomMuted 房主静音/解除静音成员
+	EventTypeRoomMuted = "room.muted"
 )
 
 // RoomEvent 一条待写入 outbox 的房间域事件

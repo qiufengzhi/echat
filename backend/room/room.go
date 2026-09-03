@@ -55,8 +55,9 @@ func createRoom(roomID string) *Room {
 		ID:      roomID,
 		AggID:   uuid.NewString(), // 内部聚合根 id，事件骨干排列坐标；对外只暴露 roomID 短码
 		Clients: make(map[string]*Client),
-		RoleOf:  make(map[string]string), // 互斥角色快照，join/transfer 时写，leave 时清
-		MutedOf: make(map[string]bool),   // 静音叠加集合，静音管理信令接入后写入
+		RoleOf:    make(map[string]string), // 互斥角色快照，join/transfer 时写，leave 时清
+		MutedOf:   make(map[string]bool),   // 静音叠加集合，静音管理信令接入后写入
+		WaitingOf: make(map[string]bool),   // 举手集合，审批/拒绝时收敛，离开时清除
 	}
 	allSignalRooms[roomID] = r
 	logger.Infow("房间已创建", "roomID", roomID)
@@ -185,6 +186,16 @@ func handleMessage(client *Client, msg *Message) {
 		sendToClient(client, MsgTypePong, nil, client.RoomID)
 	case MsgTypeAiToggle:
 		handleAiToggle(client, msg)
+	case MsgTypeRaiseHand: // 听众举手请求上麦
+		handleRaiseHand(client)
+	case MsgTypeApproveMic: // 房主批准上麦
+		handleApproveMic(client, msg.Payload)
+	case MsgTypeRejectMic: // 房主拒绝上麦
+		handleRejectMic(client, msg.Payload)
+	case MsgTypeKickMic: // 房主请下麦
+		handleKickMic(client, msg.Payload)
+	case MsgTypeMuteMic: // 房主静音/解除静音
+		handleMuteMic(client, msg.Payload)
 	}
 }
 
@@ -489,6 +500,7 @@ func disconnect(client *Client, preferredNextHostID string, reason string) {
 				r.Lock.Lock()
 				wasHost = r.HostID == client.UserID // 是否为房主（按用户身份判断）
 				delete(r.Clients, client.ConnID)
+				delete(r.WaitingOf, client.UserID) // 离开即撤销举手态，避免悬空审批
 				remaining := len(r.Clients)
 
 				if remaining == 0 { // 房间无人，删除整个房间

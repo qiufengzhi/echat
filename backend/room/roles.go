@@ -100,8 +100,17 @@ func projectUserLeave(r *Room, wasHost bool, to, userID string) {
 }
 
 // canManageAI 判定用户是否可管理 AI 助手（manage_ai = host + cohost）
-// AuthZ 未注入时放行保持原有行为；判定出错保守拒绝并告警
 func canManageAI(roomID, userID string) bool {
+	return canPerm(roomID, userID, "manage_ai")
+}
+
+// canModMic 判定用户是否可管理麦克风（mod_mic = host + cohost，审批/请下麦/静音前置）
+func canModMic(roomID, userID string) bool {
+	return canPerm(roomID, userID, "mod_mic")
+}
+
+// canPerm 判权查询 SpiceDB 派生权限：AuthZ 未注入时放行保持原有行为；判定出错保守拒绝并告警
+func canPerm(roomID, userID, permission string) bool {
 	if global.AuthZ == nil {
 		return true
 	}
@@ -111,9 +120,9 @@ func canManageAI(roomID, userID string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), authzTimeout)
 	defer cancel()
-	allowed, err := global.AuthZ.Can(ctx, "manage_ai", r.AggID, userID)
+	allowed, err := global.AuthZ.Can(ctx, permission, r.AggID, userID)
 	if err != nil {
-		logger.Warnw("AI 权限判定失败，拒绝操作", "roomID", roomID, "userID", userID, "error", err)
+		logger.Warnw("权限判定失败，拒绝操作", "roomID", roomID, "userID", userID, "permission", permission, "error", err)
 		return false
 	}
 	return allowed

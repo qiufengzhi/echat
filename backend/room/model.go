@@ -42,7 +42,8 @@ type Room struct {
 	Clients map[string]*Client // 当前在线成员，以连接 ID（ConnID）为键
 	RoleOf  map[string]string  // 成员权威角色映射（userID -> host/cohost/speaker/listener），互斥，缺失即 listener
 	MutedOf map[string]bool    // 被静音成员集合（叠加的负向状态，覆盖 speak 权限）
-	Lock    sync.RWMutex       // 保护 HostID、Clients、RoleOf、MutedOf 的并发读写
+	WaitingOf map[string]bool  // 举手待上麦成员集合（userID -> 已举手），approve/reject 时收敛，leave 时清除
+	Lock    sync.RWMutex       // 保护 HostID、Clients、RoleOf、MutedOf、WaitingOf 的并发读写
 }
 
 // RoomUser 是返回给前端的成员摘要，只包含 UI 展示和身份判断必需字段
@@ -143,6 +144,37 @@ func SFUPayloadFromICECandidateInit(candidate webrtc.ICECandidateInit) SFUICEPay
 // AiToggleReq  AI 助手开关req
 type AiToggleReq struct {
 	Enable bool `json:"enable"` // 是否启用 AI 助手
+}
+
+// TargetUserPayload 管理类信令的通用目标载荷
+type TargetUserPayload struct {
+	TargetUserID string `json:"target_user_id"` // 被管理成员的用户 ID
+	Muted        bool   `json:"muted,omitempty"` // 是否为静音操作：true 静音 / false 解除静音
+}
+
+// HandRaisedPayload 举手广播载荷
+type HandRaisedPayload struct {
+	UserID   string `json:"user_id"`   // 举手成员的用户 ID
+	Username string `json:"username"`  // 举手成员昵称，前端审批入口可展示
+}
+
+// RoleChangedPayload 上麦/下麦后的角色更新广播载荷
+type RoleChangedPayload struct {
+	UserID   string `json:"user_id"`  // 角色发生变化的成员用户 ID
+	Username string `json:"username"` // 成员昵称，用于席位展示
+	Role     string `json:"role"`     // 变更后的角色：speaker / listener
+}
+
+// MicRejectedPayload 上麦被拒定向通知载荷
+type MicRejectedPayload struct {
+	UserID string `json:"user_id"` // 被拒成员的用户 ID
+}
+
+// MutedPayload 静音状态变化广播载荷
+type MutedPayload struct {
+	UserID   string `json:"user_id"`  // 被静音成员的用户 ID
+	Username string `json:"username"` // 成员昵称，用于席位展示
+	Muted    bool   `json:"muted"`    // 静音状态：true 已静音 / false 已解除
 }
 
 // AiToggleRes 是服务端回复客户端当前 AI 语音助手状态的载荷

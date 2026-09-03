@@ -11,6 +11,13 @@ const (
 	MsgTypePing     = "ping"      // 心跳探测，服务端收到后回复 pong，避免 WebSocket 被空闲断开
 	MsgTypeAiToggle = "ai_toggle" // 切换 AI 助手开关
 
+	// 成员管理信令：客户端 -> 服务端
+	MsgTypeRaiseHand  = "raise_hand"   // 听众举手请求上麦，无需 payload
+	MsgTypeApproveMic = "approve_mic"  // 房主/副主持批准举手上麦，payload 带 target_user_id
+	MsgTypeRejectMic  = "reject_mic"   // 房主/副主持拒绝举手，payload 带 target_user_id
+	MsgTypeKickMic    = "kick_mic"     // 房主/副主持请 speaker 下麦，payload 带 target_user_id
+	MsgTypeMuteMic    = "mute_mic"     // 房主/副主持静音/解除 speaker，payload 带 target_user_id + muted
+
 	// SFU 信令：客户端 -> 服务端
 	// 客户端创建 SDP Offer 后通过 sfu_offer 发给 SFU 引擎
 	MsgTypeSFUOffer = "sfu_offer" // 客户端发起的 SDP Offer
@@ -38,6 +45,13 @@ const (
 
 	MsgTypeAiStatus = "ai_status" // 服务端回复 AI 语音助手的当前开关状态
 	MsgTypeError    = "error"     // 服务端错误消息，payload.message 可给前端转换成用户提示
+
+	// 成员管理信令：服务端 -> 客户端
+	MsgTypeHandRaised  = "hand_raised"  // 有人举手，广播给全房间，房主展示审批入口
+	MsgTypeMicApproved = "mic_approved" // 上麦获批，广播给全房间，席位角色更新为 speaker
+	MsgTypeMicRejected = "mic_rejected" // 上麦被拒，定向发给举手人
+	MsgTypeMicKicked   = "mic_kicked"   // 被请下麦，广播给全房间，席位角色更新为 listener
+	MsgTypeMuted       = "muted"        // 被静音/解除静音，广播给全房间，叠加状态变化
 
 	// 会话吊销 / 封禁联动：服务端主动踢下线（spec §9.3）
 	MsgTypeKicked = "kicked" // 连接被吊销/封禁踢下线，payload 带 reason，随后以 4001 关闭码断连
