@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -29,7 +28,7 @@ type Client struct {
 	RoomID       string          // 客户端当前所在房间 ID，尚未加入房间时为空
 	Username     string          // 用户进入房间时填写的展示昵称
 	JoinedAt     time.Time       // 加入房间时间，用于生成稳定的成员列表排序
-	Conn         *websocket.Conn // 与浏览器保持的 WebSocket 连接实例
+	Conn         MessageFramer // 信令传输帧通道（WebSocket 连接或 WebTransport 双向流适配器）
 	Send         chan []byte     // 单客户端发送队列，由 writePump 串行写入 WebSocket
 	closeOnce    sync.Once       // 确保离开/断连清理只执行一次，避免重复关闭通道或连接
 }

@@ -1,0 +1,2 @@
+# 运行期自签 TLS 证书（openssl 生成，不入库）
+certs/

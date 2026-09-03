@@ -16,6 +16,7 @@ import (
 	"echat-backend/sfu"
 	"echat-backend/store"
 	"echat-backend/tts_cli"
+	"echat-backend/wt"
 	"github.com/redis/go-redis/v9"
 	"net/http"
 	"time"
@@ -113,6 +114,23 @@ func main() {
 
 	// 启动后台清理协程，定期回收空房间
 	room.StartCleanupLoop()
+
+	// WebTransport/QUIC 信令端点：QUIC 走 UDP，握手复用 WebSocket 的 access token 鉴权
+	// 与 WS 共用同一套房间域信令处理；UDP 受限/证书不受信时前端自动降级 WebSocket
+	wtCfg := config.Get().WT
+	if wtCfg.Enabled {
+		wtSrv, err := wt.NewServer(wtCfg, authSvc)
+		if err != nil {
+			logging.L().Warnw("WebTransport 端点初始化失败，前端将降级 WebSocket", "error", err)
+		} else {
+			go func() {
+				if err := wtSrv.ListenAndServe(); err != nil {
+					logging.L().Warnw("WebTransport 服务退出", "error", err)
+				}
+			}()
+			logging.L().Infow("WebTransport 服务就绪", "addr", wtCfg.Addr)
+		}
+	}
 
 	// 启动吊销消费协程：会话被吊销/封禁时踢掉对应实时连接（封禁即下线）
 	room.StartRevokedKick()

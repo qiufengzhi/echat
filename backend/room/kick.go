@@ -40,12 +40,15 @@ func kickConnections(ev global.UserRevokedEvent) {
 
 	for _, c := range targets {
 		logger.Warnw("会话吊销，踢下线", "userID", c.UserID, "sessionID", c.SessionID, "reason", ev.Reason)
-		// 先尽力推送 kicked 应用消息，再以自定义关闭码断连；前端以关闭码为准防丢
+		// 尽力推送 kicked 应用消息后再断连；前端以关闭码为准防丢
 		sendToClient(c, MsgTypeKicked, map[string]string{"reason": ev.Reason}, c.RoomID)
-		// WriteControl 允许与 writePump 并发，关闭帧可安全立即发送
-		_ = c.Conn.WriteControl(websocket.CloseMessage,
-			websocket.FormatCloseMessage(kickedCloseCode, "session revoked"),
-			time.Now().Add(time.Second))
+		// WebTransport 无控制帧概念，仅对原生 WebSocket 发送关闭帧
+		if wsc, ok := c.Conn.(*websocket.Conn); ok {
+			// WriteControl 允许与 writePump 并发，关闭帧可安全立即发送
+			_ = wsc.WriteControl(websocket.CloseMessage,
+				websocket.FormatCloseMessage(kickedCloseCode, "session revoked"),
+				time.Now().Add(time.Second))
+		}
 		disconnect(c, "", "kicked")
 	}
 }

@@ -79,10 +79,11 @@ func getOrCreateRoom(roomID string) *Room {
 	return createRoom(roomID)
 }
 
-// HandleConnection 为新 WebSocket 连接创建客户端对象并绑定鉴权身份，然后启动读写协程
+// HandleConnection 为新信令连接创建客户端对象并绑定鉴权身份，然后启动读写协程
+// conn 是传输无关的帧通道（WebSocket 连接或 WebTransport 双向流适配器）
 // conn 的生命周期由 readPump/writePump/disconnect 共同管理
 // identity 握手阶段鉴权后的身份（用户/会话/版本），取代早期每连接随机 UUID
-func HandleConnection(conn *websocket.Conn, identity ConnIdentity) {
+func HandleConnection(conn MessageFramer, identity ConnIdentity) {
 	client := &Client{
 		ConnID:       uuid.NewString(), // 连接级唯一 id，仅作为通道/房间键，不是身份
 		UserID:       identity.UserID,  // 权威用户身份，来自 access token 的 sub

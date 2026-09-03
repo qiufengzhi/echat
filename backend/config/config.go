@@ -30,6 +30,7 @@ type Config struct {
 	Redis    RedisConfig    `yaml:"redis"`    // 登录限流与在线热状态共享的 Redis 配置
 	SpiceDB  SpiceDBConfig  `yaml:"spicedb"`  // SpiceDB(Zanzibar) 对象级授权服务配置
 	Outbox   OutboxConfig   `yaml:"outbox"`   // 事务性 Outbox relay 参数
+	WT       WTConfig       `yaml:"webtransport"` // WebTransport/QUIC 信令端点配置
 }
 
 // ServerConfig HTTP/HTTPS 服务配置
@@ -104,6 +105,18 @@ type RoomConfig struct {
 	WSReadBuffer  int    `yaml:"ws_read_buffer"`  // WebSocket 读缓冲区大小（字节）
 	WSWriteBuffer int    `yaml:"ws_write_buffer"` // WebSocket 写缓冲区大小（字节）
 	WSCheckOrigin bool   `yaml:"ws_check_origin"` // 是否校验 WebSocket 来源
+}
+
+// WTConfig WebTransport/QUIC 信令端点配置（QUIC 走 UDP，需独立 TLS 证书）
+type WTConfig struct {
+	// Enabled 是否启用 WebTransport 端点，开发默认开
+	Enabled bool `yaml:"enabled"`
+	// Addr 监听地址（host:port），QUIC UDP 端口默认 :4433
+	Addr string `yaml:"addr"`
+	// CertFile QUIC 握手用 TLS 证书文件，浏览器 WebTransport 需要受信 CA
+	CertFile string `yaml:"cert_file"`
+	// KeyFile 与 CertFile 配套的私钥文件
+	KeyFile string `yaml:"key_file"`
 }
 
 // AIConfig AI 语音助手配置
@@ -311,6 +324,12 @@ func DefaultConfig() *Config {
 			Enabled:      true,
 			Addr:         "127.0.0.1:50051",
 			PresharedKey: "dev-secret-local",
+		},
+		WT: WTConfig{
+			Enabled:  true,
+			Addr:     "127.0.0.1:4433",
+			CertFile: "certs/dev.crt",
+			KeyFile:  "certs/dev.key",
 		},
 		Outbox: OutboxConfig{
 			PollInterval: "1s",
@@ -583,5 +602,19 @@ func applyEnvOverrides(cfg *Config) {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.Outbox.MaxAttempts = n
 		}
+	}
+
+	// --- WebTransport/QUIC ---
+	if v := os.Getenv("WT_ENABLED"); v != "" {
+		cfg.WT.Enabled = strings.EqualFold(v, "true")
+	}
+	if v := os.Getenv("WT_ADDR"); v != "" {
+		cfg.WT.Addr = v
+	}
+	if v := os.Getenv("WT_CERT_FILE"); v != "" {
+		cfg.WT.CertFile = v
+	}
+	if v := os.Getenv("WT_KEY_FILE"); v != "" {
+		cfg.WT.KeyFile = v
 	}
 }
