@@ -34,6 +34,22 @@ services:
     volumes:
       - echat_dev_natsdata:/data    # 事件流持久化目录
 
+  redis:
+    container_name: echat-dev-redis
+    image: docker.m.daocloud.io/library/redis:7-alpine  # 本机走 DaoCloud 加速器路径拉取，Docker Hub 直连不可达
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]  # 开启 AOF 持久化，重启不丢热状态
+    ports:
+      - "6379:6379"                 # 登录限流 / 在线热状态读写
+    volumes:
+      - echat_dev_redisdata:/data   # 数据 AOF 持久化目录
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 volumes:
   echat_dev_pgdata:
   echat_dev_natsdata:
+  echat_dev_redisdata:
