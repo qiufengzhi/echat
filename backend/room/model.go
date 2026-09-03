@@ -34,19 +34,22 @@ type Client struct {
 	closeOnce    sync.Once       // 确保离开/断连清理只执行一次，避免重复关闭通道或连接
 }
 
-// Room 表示一个信令房间，后端在这里维护成员列表和权威房主
+// Room 表示一个信令房间，后端在这里维护成员列表、权威房主与互斥角色
 type Room struct {
 	ID      string             // 房间对外短码，由前端创建或输入（对应持久层 rooms.room_code）
-	AggID   string             // 房间内部聚合根 id（uuid 串），事件骨干的编排坐标，不对外展示
+	AggID   string             // 房间内部聚合根 id（uuid 串），事件骨干与授权投影的编排坐标，不对外展示
 	HostID  string             // 当前房主的用户 ID；房主离开时会重新选择
 	Clients map[string]*Client // 当前在线成员，以连接 ID（ConnID）为键
-	Lock    sync.RWMutex       // 保护 HostID 和 Clients 的并发读写
+	RoleOf  map[string]string  // 成员权威角色映射（userID -> host/cohost/speaker/listener），互斥，缺失即 listener
+	MutedOf map[string]bool    // 被静音成员集合（叠加的负向状态，覆盖 speak 权限）
+	Lock    sync.RWMutex       // 保护 HostID、Clients、RoleOf、MutedOf 的并发读写
 }
 
 // RoomUser 是返回给前端的成员摘要，只包含 UI 展示和身份判断必需字段
 type RoomUser struct {
 	ID       string `json:"id"`       // 成员 ID（鉴权后的用户 id），前端席位/成员列表主键
 	Username string `json:"username"` // 成员昵称，用于席位和成员列表展示
+	Role     string `json:"role"`     // 成员当前角色：host/cohost/speaker/listener，前端据此打角色标记
 }
 
 // WaitingPayload 在房间只有一个成员时发送，让首位用户立即看到自己是房主

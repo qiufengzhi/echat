@@ -55,6 +55,8 @@ func createRoom(roomID string) *Room {
 		ID:      roomID,
 		AggID:   uuid.NewString(), // 内部聚合根 id，事件骨干排列坐标；对外只暴露 roomID 短码
 		Clients: make(map[string]*Client),
+		RoleOf:  make(map[string]string), // 互斥角色快照，join/transfer 时写，leave 时清
+		MutedOf: make(map[string]bool),   // 静音叠加集合，静音管理信令接入后写入
 	}
 	allSignalRooms[roomID] = r
 	logger.Infow("房间已创建", "roomID", roomID)
@@ -196,6 +198,17 @@ func handleAiToggle(client *Client, msg *Message) {
 	}
 
 	roomID := client.RoomID
+	if roomID == "" {
+		sendError(client, "join a room first")
+		return
+	}
+
+	// 权限控制面：manage_ai 仅房主/副主持可切换 AI，越权请求拒绝
+	if !canManageAI(roomID, client.UserID) {
+		sendError(client, "无权限管理 AI 助手")
+		return
+	}
+
 	if req.Enable {
 		global.AIStates.SetOnline(roomID) // 开启：直接进入在线状态
 		persistAiToggle(roomID, "online") // 事件记账，AI 状态本体仍由内存状态机持有
@@ -237,6 +250,18 @@ func handleJoin(client *Client, msg *Message) {
 	}
 	hostID := r.HostID
 	userCount := len(r.Clients)
+
+	// 首次建立互斥角色：首房主为 host，普通加入者为 listener；多连接同用户不覆盖已分配角色
+	projectedRole := ""
+	if _, exists := r.RoleOf[client.UserID]; !exists {
+		if r.HostID == client.UserID {
+			r.RoleOf[client.UserID] = RoleHost
+			projectedRole = RoleHost
+		} else {
+			r.RoleOf[client.UserID] = RoleListener
+			projectedRole = RoleListener
+		}
+	}
 	r.Lock.Unlock()
 
 	logger.Infow("用户已加入房间",
@@ -245,6 +270,11 @@ func handleJoin(client *Client, msg *Message) {
 
 	// 当前态写库 + 事件同事务记账；失败仅告警，不阻断实时广播（实时优先策略）
 	persistRoomJoin(r, client)
+
+	// 授权投影：新角色写入 SpiceDB 关系元组（用事务收敛后的聚合根 id 作对象 id），失败降级告警
+	if projectedRole != "" && r.AggID != "" {
+		projectAssign(r, client.UserID, projectedRole)
+	}
 
 	// --- SFU 集成：创建 PeerConnection，但不生成 Offer ---
 	// Offer 由客户端发起，服务端收到 sfu_offer 后通过 AcceptOffer 创建 Answer
@@ -489,6 +519,10 @@ func disconnect(client *Client, preferredNextHostID string, reason string) {
 				// 当前态写库 + 事件同事务记账：离开/交接/清空在一个事务内收敛
 				// 失败仅告警，不阻断实时广播（实时优先策略）
 				persistRoomLeave(r, client, wasHost, nextHostID, shouldDeleteRoom, reason)
+
+				// 授权投影：离开者角色清理 + 房主交接写 SpiceDB（write-through，失败降级）
+				// 仅对实际加入过房间的成员执行，投影用收敛后的聚合根 id 作对象 id
+				projectUserLeave(r, wasHost, nextHostID, client.UserID)
 			}
 
 			if shouldDeleteRoom {
@@ -662,6 +696,10 @@ func getRoomUsers(roomID string) []RoomUser {
 	for _, client := range r.Clients {
 		clients = append(clients, client)
 	}
+	roles := make(map[string]string, len(r.RoleOf))
+	for id, role := range r.RoleOf {
+		roles[id] = role
+	}
 	r.Lock.RUnlock()
 
 	slices.SortFunc(clients, func(a, b *Client) int {
@@ -683,9 +721,14 @@ func getRoomUsers(roomID string) []RoomUser {
 
 	users := make([]RoomUser, 0, len(clients))
 	for _, client := range clients {
+		role := roles[client.UserID]
+		if role == "" {
+			role = RoleListener // 缺失角色视为默认听众
+		}
 		users = append(users, RoomUser{
 			ID:       client.UserID,
 			Username: client.Username,
+			Role:     role,
 		})
 	}
 
