@@ -23,10 +23,12 @@ var logger = logging.New("room")
 // sfuServer 是全局 SFU 引擎实例，管理所有房间的 WebRTC PeerConnection 和音频转发
 var sfuServer = sfu.NewSFUServer()
 
-// StartCleanupLoop 启动空房间清理协程
+// StartCleanupLoop 启动空房间清理协程与在线热状态扫刷协程
 // 正常离开时房间会立即尝试删除；这里主要兜底处理异常断开后残留的空房间
+// 在线扫刷兜底收敛超时无心跳的 Redis 在线成员，防僵尸席位
 func StartCleanupLoop() {
 	go cleanupIdleRooms()
+	go sweepOnlineLoop()
 }
 
 // StartAIStateBroadcaster 启动协程，消费 global 的 AI 状态变更事件并广播给对应房间全体成员
@@ -182,7 +184,10 @@ func handleMessage(client *Client, msg *Message) {
 		handleRenegotiationAnswer(client, msg.Payload)
 	case MsgTypeLeave: // 用户主动离开，可能携带房主交接目标
 		handleLeave(client, msg.Payload)
-	case MsgTypePing: // 心跳响应
+	case MsgTypePing: // 心跳响应 + 在线心跳上报（刷新房间在线集合分数）
+		if client.RoomID != "" {
+			markOnline(client.RoomID, client.UserID)
+		}
 		sendToClient(client, MsgTypePong, nil, client.RoomID)
 	case MsgTypeAiToggle:
 		handleAiToggle(client, msg)
@@ -286,6 +291,9 @@ func handleJoin(client *Client, msg *Message) {
 	if projectedRole != "" && r.AggID != "" {
 		projectAssign(r, client.UserID, projectedRole)
 	}
+
+	// 在线热状态：加入即上报心跳，加入房间在线集合（瞬态层）
+	markOnline(roomID, client.UserID)
 
 	// --- SFU 集成：创建 PeerConnection，但不生成 Offer ---
 	// Offer 由客户端发起，服务端收到 sfu_offer 后通过 AcceptOffer 创建 Answer
@@ -535,6 +543,9 @@ func disconnect(client *Client, preferredNextHostID string, reason string) {
 				// 授权投影：离开者角色清理 + 房主交接写 SpiceDB（write-through，失败降级）
 				// 仅对实际加入过房间的成员执行，投影用收敛后的聚合根 id 作对象 id
 				projectUserLeave(r, wasHost, nextHostID, client.UserID)
+
+				// 在线热状态：离开即从房间在线集合移除（瞬态层）
+				markOffline(roomID, client.UserID)
 			}
 
 			if shouldDeleteRoom {

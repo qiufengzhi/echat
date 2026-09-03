@@ -73,6 +73,7 @@ func main() {
 		logging.L().Warnw("Redis 不可用，登录限流降级为进程内实现", "addr", config.Get().Redis.Addr, "error", err)
 	} else {
 		authSvc.SetLoginLimiter(authn.NewRedisLoginLimiter(rdb))
+		room.SetOnlineStore(rdb) // 在线热状态瞬态层复用同一连接，心跳写入 ZSET
 	}
 	pingCancel()
 	authHandler := authn.NewHandler(authSvc)
