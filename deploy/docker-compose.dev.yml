@@ -49,6 +49,25 @@ services:
       timeout: 3s
       retries: 10
 
+  # 一次性（run --rm）Atlas 版本化迁移服务：对 dev 库 apply backend/migrations
+  # 用法：docker compose -f deploy/docker-compose.dev.yml run --rm migrate
+  migrate:
+    container_name: echat-dev-migrate
+    image: docker.m.daocloud.io/arigaio/atlas:latest  # 本机走 DaoCloud 加速器路径拉取
+    restart: "no"
+    command:
+      - migrate
+      - apply
+      - --dir
+      - file:///migrations
+      - --url
+      - postgres://echat:echat@postgres:5432/echat_dev?sslmode=disable
+    volumes:
+      - ../backend/migrations:/migrations:ro  # 挂载版本化迁移目录，只读
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   echat_dev_pgdata:
   echat_dev_natsdata:

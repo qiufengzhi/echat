@@ -10,7 +10,10 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"echat-backend/config"
@@ -70,13 +73,60 @@ func (s *Store) Ent() *ent.Client {
 	return s.ent
 }
 
-// Migrate 按当前 Schema 自动建表/变更表结构（开发期使用）
-// 生产环境的迁移由 Atlas 生成版本化 SQL 文件管理，此处仅为本地开发提供便利
+// migrationDir 版本化迁移文件目录（相对运行目录，与 config.yaml 同级）
+const migrationDir = "migrations"
+
+// revisionsTable Atlas 迁移日记表（新版本放于同名 schema，旧版为 public.atlas_schema_migrations）
+const revisionsTable = "atlas_schema_revisions.atlas_schema_revisions"
+
+// Migrate 校验版本化迁移已应用到最新，防「代码 schema 与 DB 漂移」
+// schema 演进交由 backend/migrations 版本化 SQL 管理（Atlas 格式，日记表 atlas_schema_revisions），
+// 由 dev compose 的 migrate 服务执行 apply；启动期只校验，未应用/落后均返回错误并提示迁移命令
 func (s *Store) Migrate(ctx context.Context) error {
-	if err := s.ent.Schema.Create(ctx); err != nil {
-		return fmt.Errorf("执行开发期 schema 迁移: %w", err)
+	latest, err := latestMigrationVersion()
+	if err != nil {
+		return err
+	}
+	var applied string
+	err = s.std.QueryRowContext(ctx,
+		`SELECT version FROM `+revisionsTable+` WHERE type = 2 ORDER BY executed_at DESC LIMIT 1`).Scan(&applied)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("数据库尚未应用版本化迁移——请先运行: docker compose -f deploy/docker-compose.dev.yml run --rm migrate")
+	case err != nil:
+		return fmt.Errorf("读取迁移日记表 %s: %w", revisionsTable, err)
+	}
+	if applied != latest {
+		return fmt.Errorf("数据库已应用迁移 %s 落后于最新 %s，schema 漂移——请运行迁移服务后重启", applied, latest)
 	}
 	return nil
+}
+
+// latestMigrationVersion 返回迁移目录中最新迁移文件的版本号
+// Atlas 迁移文件命名规范 {version}_{description}.sql，version 为第一个下划线前段（如 20260903）
+func latestMigrationVersion() (string, error) {
+	entries, err := os.ReadDir(migrationDir)
+	if err != nil {
+		return "", fmt.Errorf("读取迁移目录 %s: %w", migrationDir, err)
+	}
+	var latest string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+			continue
+		}
+		base := strings.TrimSuffix(e.Name(), ".sql")
+		version := base
+		if i := strings.Index(base, "_"); i > 0 {
+			version = base[:i]
+		}
+		if version > latest {
+			latest = version
+		}
+	}
+	if latest == "" {
+		return "", fmt.Errorf("迁移目录 %s 下没有版本化 SQL 文件", migrationDir)
+	}
+	return latest, nil
 }
 
 // Close 关闭连接池，进程退出前应 defer 调用
