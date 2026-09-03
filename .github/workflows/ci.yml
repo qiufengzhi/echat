@@ -305,9 +305,9 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }} # SSH 登录用户名。
           password: ${{ secrets.DEPLOY_PASSWORD }} # SSH 登录密码，适用于当前服务器的密码登录方式。
           port: ${{ secrets.DEPLOY_PORT || '22' }} # SSH 端口。
-          source: "deploy/docker-compose.prod.yml,deploy/nginx/gateway.prod.conf" # 上传 compose 文件和 Nginx 生产配置。
+          source: "deploy/docker-compose.prod.yml,deploy/nginx/gateway.prod.conf,deploy/postgres-init" # 上传 compose 文件、Nginx 生产配置与 postgres-init 建库脚本
           target: ${{ secrets.DEPLOY_PATH }} # 服务器上的目标目录。
-          strip_components: 1 # 去掉本地 deploy/ 目录层级，保留 nginx 子目录结构。
+          strip_components: 1 # 去掉本地 deploy/ 目录层级，保留 nginx、postgres-init 子目录结构。
           overwrite: true # 如果目标文件已存在，则直接覆盖。
 
       - name: Pull and restart services # 在服务器上登录 ACR、拉镜像并重启所有服务。

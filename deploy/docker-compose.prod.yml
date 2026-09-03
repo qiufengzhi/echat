@@ -1,6 +1,6 @@
 # eChat 生产环境 Docker Compose 配置
-# 部署前请先配置 .env 文件（参考 .env.example）
-# 基础设施（PostgreSQL + NATS JetStream）与业务服务在同一个 compose 内，单机一键起全栈
+# 镜像名等变量由 CI 写入 .env（服务器首次部署先 touch .env 占位）
+# 基础设施（PostgreSQL + NATS + Redis + SpiceDB）与业务服务在同一个 compose 内，单机一键起全栈
 #
 # 启动命令：
 #   docker compose --env-file .env -f docker-compose.prod.yml up -d
@@ -12,10 +12,11 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-echat}      # 连接用户名，可通过 .env 覆盖
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-echat}  # 连接密码，生产必须用 .env 覆盖
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-echat}  # 连接密码,生产用 .env 覆盖,且 backend config.yaml 的 database.password 须与此一致
       POSTGRES_DB: ${POSTGRES_DB:-echat}          # 默认库名
     volumes:
       - echat_prod_pgdata:/var/lib/postgresql/data # 数据持久化，重建容器不丢数据
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro # 首次初始化数据卷时自动创建附属库（SpiceDB 元组存储库）
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-echat} -d ${POSTGRES_DB:-echat}"]
       interval: 5s
@@ -31,6 +32,37 @@ services:
     volumes:
       - echat_prod_natsdata:/data # 事件流持久化目录，重启不丢已投递事件
     # 不映射宿主端口：relay/消费者在容器内以 nats:4222 访问，8222 需外联时再映射
+
+  redis: # 热状态与限流共享存储：登录限流计数 + 在线成员心跳 ZSET，统一收口到 Redis
+    container_name: echat-redis
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-echat}"] # AOF 持久化热状态，重启不丢；requirepass 须与 backend config.yaml 的 redis.password 一致
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-echat} # 供健康检查使用，生产必须用 .env 覆盖
+    volumes:
+      - echat_prod_redisdata:/data # Redis 持久化目录，重启不丢限流/在线状态
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep PONG"] # 带密码探活
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # 不映射宿主端口：后端经 compose 内部网络以 redis:6379 访问
+
+  spicedb: # 对象级授权（Zanzibar）：关系元组存储复用 Postgres（echat_spicedb 库，postgres-init 自动建库）
+    container_name: echat-spicedb
+    image: ghcr.io/authzed/spicedb:latest
+    restart: unless-stopped
+    command: ["serve"]
+    environment:
+      SPICEDB_GRPC_PRESHARED_KEY: ${SPICEDB_PRESHARED_KEY:-dev-secret-local} # 须与 backend config.yaml 的 spicedb.preshared_key 一致
+      SPICEDB_DATASTORE_ENGINE: postgres # 关系元组落 Postgres，不引入新存储
+      SPICEDB_DATASTORE_CONN_URI: postgres://${POSTGRES_USER:-echat}:${POSTGRES_PASSWORD:-echat}@postgres:5432/echat_spicedb?sslmode=disable
+      SPICEDB_DATASTORE_REVISION_QUANTIZATION: 1s # 降低可读版本推进粒度，控制面强一致读等待上限
+    depends_on:
+      postgres:
+        condition: service_healthy # postgres-init 建库脚本在首次初始化时已执行，spicedb 启动即有元组库
+    # 不映射宿主端口：后端经 compose 内部网络以 spicedb:50051 访问
 
   gateway: # 最外层 HTTPS 入口，负责 TLS 终止并把请求转发给前端容器
     container_name: echat-gateway # 固定容器名，方便 docker ps 和 docker logs 直接定位
@@ -55,24 +87,19 @@ services:
         condition: service_healthy
       nats:
         condition: service_started
+      redis:
+        condition: service_healthy
+      spicedb:
+        condition: service_started
     volumes:
-      - ./backend/config.yaml:/app/config.yaml:ro
-    environment:
-      # 连接基础设施的地址与凭据走环境变量：地址指向 compose 服务名，凭据经 .env 注入且与 postgres 容器同源
-      # 稳定常量（NATS 流名、库名默认等）留在 backend/config.yaml 单一来源，diff 环境差异时才用 env 覆盖
-      ALIBABA_CLOUD_ACCESS_KEY_ID: ${ALIBABA_CLOUD_ACCESS_KEY_ID:-}
-      ALIBABA_CLOUD_ACCESS_KEY_SECRET: ${ALIBABA_CLOUD_ACCESS_KEY_SECRET:-}
-      NLS_APP_KEY: ${NLS_APP_KEY:-}
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      DB_USER: ${POSTGRES_USER:-echat}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-echat}
-      DB_NAME: ${POSTGRES_DB:-echat}
-      NATS_URL: nats:4222
+      - ./backend/config.yaml:/app/config.yaml:ro # 后端唯一配置源：连接地址 + 全部凭据(ASR/TTS/DB/Redis/SpiceDB/JWT)都在此文件,不入 git,直接维护在服务器(以 config.yaml.prod.example 为模板)
+      - /etc/letsencrypt/live/echat.qxbnx.cn:/etc/letsencrypt/live/echat.qxbnx.cn:ro # WebTransport/QUIC 握手证书，与 gateway 共用 Let's Encrypt 续期
     expose:
       - "8080" # HTTP/WebSocket 信令端口，仅在 Compose 内部网络暴露，外部经 gateway HTTPS 进入
+      - "4433/udp" # WebTransport/QUIC 信令端口，仅在 Compose 内部网络暴露，外部经宿主映射进入
     ports:
       - "50000-50100:50000-50100/udp" # 映射 WebRTC 媒体流 UDP 端口范围到宿主机，浏览器直连必需
+      - "4433:4433/udp" # 映射 WebTransport/QUIC 信令 UDP 端口到宿主机，浏览器直连必需
 
   frontend: # 前端静态站点和 Nginx 反向代理入口
     container_name: echat-frontend # 固定容器名
@@ -95,3 +122,4 @@ services:
 volumes:
   echat_prod_pgdata: # PostgreSQL 数据卷
   echat_prod_natsdata: # NATS JetStream 事件流卷
+  echat_prod_redisdata: # Redis 热状态与限流计数持久化卷
