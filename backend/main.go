@@ -15,6 +15,7 @@ import (
 	"echat-backend/sfu"
 	"echat-backend/store"
 	"echat-backend/tts_cli"
+	"github.com/redis/go-redis/v9"
 	"net/http"
 	"time"
 )
@@ -63,6 +64,16 @@ func main() {
 	// 认证域：注册 / 邮箱验证 / 登录与会话 / 密码 接口
 	// 受保护端点统一走 AccessRequired 中间件（access 签名+有效期+ver 新鲜度校验）
 	authSvc := authn.NewService(st.Ent(), config.Get().Auth, authn.ConsoleMailer{}, config.Get().Auth.VerifyBaseURL)
+	// 登录限流：Redis 分布式计数优先；Redis 连不上降级进程内实现（限流失效不阻断登录主链路）
+	// rdb 为共享客户端，后续在线热状态层（#23 心跳 ZSET）复用同一连接
+	rdb := redis.NewClient(&redis.Options{Addr: config.Get().Redis.Addr, Password: config.Get().Redis.Password})
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	if err := rdb.Ping(pingCtx).Err(); err != nil {
+		logging.L().Warnw("Redis 不可用，登录限流降级为进程内实现", "addr", config.Get().Redis.Addr, "error", err)
+	} else {
+		authSvc.SetLoginLimiter(authn.NewRedisLoginLimiter(rdb))
+	}
+	pingCancel()
 	authHandler := authn.NewHandler(authSvc)
 	http.HandleFunc("POST /api/v1/auth/register", authHandler.Register)
 	http.HandleFunc("POST /api/v1/auth/verify", authHandler.Verify)

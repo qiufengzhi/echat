@@ -27,6 +27,7 @@ type Config struct {
 	Auth     AuthConfig     `yaml:"auth"`     // 用户系统认证与密码哈希配置
 	Log      LogConfig      `yaml:"log"`      // 日志配置
 	NATS     NATSConfig     `yaml:"nats"`     // NATS JetStream 一致性骨干配置
+	Redis    RedisConfig    `yaml:"redis"`    // 登录限流与在线热状态共享的 Redis 配置
 	Outbox   OutboxConfig   `yaml:"outbox"`   // 事务性 Outbox relay 参数
 }
 
@@ -121,6 +122,14 @@ type DatabaseConfig struct {
 	Password string `yaml:"password"`  // 连接密码
 	Name     string `yaml:"name"`      // 数据库名
 	TimeZone string `yaml:"time_zone"` // 会话时区，默认 Asia/Shanghai
+}
+
+// RedisConfig 热状态与限流的共享 Redis 连接配置
+type RedisConfig struct {
+	// Addr Redis 地址（host:port），默认 127.0.0.1:6379
+	Addr string `yaml:"addr"`
+	// Password 连接密码，本地开发默认空；生产必须用环境变量覆盖
+	Password string `yaml:"password"`
 }
 
 // NATSConfig NATS JetStream 一致性骨干配置（事务性 Outbox 事件的投递目的地）
@@ -282,6 +291,10 @@ func DefaultConfig() *Config {
 			Stream:         "echat_events",
 			StreamSubjects: []string{"user.>", "room.>"},
 			StreamMaxAge:   "168h",
+		},
+		Redis: RedisConfig{
+			Addr:     "127.0.0.1:6379",
+			Password: "",
 		},
 		Outbox: OutboxConfig{
 			PollInterval: "1s",
@@ -520,6 +533,14 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("NATS_STREAM_MAX_AGE"); v != "" {
 		cfg.NATS.StreamMaxAge = v
+	}
+
+	// --- Redis ---
+	if v := os.Getenv("REDIS_ADDR"); v != "" {
+		cfg.Redis.Addr = v
+	}
+	if v := os.Getenv("REDIS_PASSWORD"); v != "" {
+		cfg.Redis.Password = v
 	}
 
 	// --- Outbox relay ---
