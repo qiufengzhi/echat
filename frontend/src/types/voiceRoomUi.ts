@@ -13,8 +13,10 @@ export type RoomConnectionTone =
   | 'reconnecting' // 连接短暂异常，页面应温和提示正在恢复
 
 export type RoomParticipantRole =
-  | 'host' // 房主，通常是创建房间的人
-  | 'member' // 普通成员，已经进入当前声聊间
+  | 'host' // 房主，通常是创建房间的人，拥有全部管理权限
+  | 'cohost' // 副主持，继承房主的管理权限（manage_ai / mod_mic）
+  | 'speaker' // 上麦者，可发言，受静音叠加状态覆盖
+  | 'listener' // 听众，默认角色，可听不可言，可通过举手申请上麦
   | 'ai' // AI 助手席位，系统固定的虚拟成员
   | 'empty' // 空席位，用于邀请更多朋友加入
 
@@ -27,6 +29,7 @@ export interface VoiceRoomMember {
   isSpeaking: boolean // 该成员是否正在说话，第一阶段主要用于 UI 表达和后续音量检测扩展
   isOnline: boolean // 该成员是否在线，空席位和已离开成员为 false
   hasAudio: boolean // SFU 下该成员是否有远端音频流到达
+  isWaiting?: boolean // 该成员是否正在举手等待上麦，仅举手态成员为 true
   aiState?: AIAssistantState // AI 席位专用：当前 AI 三态，仅 role === 'ai' 时有值
 }
 

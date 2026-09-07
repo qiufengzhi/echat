@@ -50,7 +50,7 @@ function buildMembers(
   const realMembers: VoiceRoomMember[] = knownUsers.map(user => ({
     id: user.id,
     name: user.username,
-    role: user.id === hostId ? 'host' : 'member',
+    role: user.id === hostId ? 'host' : 'listener',
     isSelf: user.username === username,
     isMuted: user.username === username ? isMuted : user.isMuted,
     isSpeaking: user.username === username ? !isMuted && isConnected : user.isSpeaking,
@@ -62,7 +62,7 @@ function buildMembers(
     realMembers.unshift({
       id: 'local-user',
       name: username || '我',
-      role: isHost ? 'host' : 'member',
+      role: isHost ? 'host' : 'listener',
       isSelf: true,
       isMuted,
       isSpeaking: !isMuted && isConnected,
@@ -80,7 +80,7 @@ function buildMembers(
       realMembers.push({
         id: userId,
         name: '朋友',
-        role: 'member',
+        role: 'listener',
         isSelf: false,
         isMuted: false,
         isSpeaking: true,

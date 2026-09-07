@@ -1,4 +1,4 @@
-import type { AITogglePayload, LeavePayload, OutgoingSignalingMessage, SignalingMessage } from '../types/signaling'
+import type { AITogglePayload, LeavePayload, ManageMicPayload, OutgoingSignalingMessage, SignalingMessage } from '../types/signaling'
 import { refresh } from './auth'
 import {
   KICKED_MESSAGE,
@@ -182,6 +182,53 @@ export class SignalingClient {
       type: 'ai_toggle',
       room_id: this.roomId,
       payload: { enable },
+    })
+  }
+
+  // --- 成员管理信令 ---
+  // 服务端广播会排除操作者自身，前端在本侧做乐观更新，信令只负责让他人看到变更
+
+  // sendRaiseHand 听众举手请求上麦，消息无载荷，服务端广播 hand_raised
+  sendRaiseHand(): void {
+    this.send({
+      type: 'raise_hand',
+      room_id: this.roomId,
+    })
+  }
+
+  // sendApproveMic 房主/副主持批准目标成员上麦，服务端广播 mic_approved
+  sendApproveMic(targetUserId: string): void {
+    this.send<ManageMicPayload>({
+      type: 'approve_mic',
+      room_id: this.roomId,
+      payload: { target_user_id: targetUserId },
+    })
+  }
+
+  // sendRejectMic 房主/副主持拒绝目标成员举手，服务端定向通知被拒者 mic_rejected
+  sendRejectMic(targetUserId: string): void {
+    this.send<ManageMicPayload>({
+      type: 'reject_mic',
+      room_id: this.roomId,
+      payload: { target_user_id: targetUserId },
+    })
+  }
+
+  // sendKickMic 房主/副主持请目标成员（speaker）下麦，服务端广播 mic_kicked
+  sendKickMic(targetUserId: string): void {
+    this.send<ManageMicPayload>({
+      type: 'kick_mic',
+      room_id: this.roomId,
+      payload: { target_user_id: targetUserId },
+    })
+  }
+
+  // sendMuteMic 房主/副主持静音或解除静音目标成员，服务端广播 muted
+  sendMuteMic(targetUserId: string, muted: boolean): void {
+    this.send<ManageMicPayload>({
+      type: 'mute_mic',
+      room_id: this.roomId,
+      payload: { target_user_id: targetUserId, muted },
     })
   }
 
