@@ -1,7 +1,7 @@
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
 
 import AppLayout from './components/layout/AppLayout'
-import ChannelSeat from './pages/ChannelSeat'
+import ChannelPage from './pages/ChannelPage'
 import MainShell from './pages/MainShell'
 import LoginPage from './pages/auth/LoginPage'
 import RegisterPage from './pages/auth/RegisterPage'
@@ -26,7 +26,7 @@ function App() {
 
         <Route element={<RequireAuth />}>
           <Route path="/" element={<MainShell />} />
-          <Route path="/channel/:roomId" element={<ChannelSeat />} />
+          <Route path="/channel/:roomId" element={<ChannelPage />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/" replace />} />

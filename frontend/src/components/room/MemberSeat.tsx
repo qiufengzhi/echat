@@ -7,7 +7,9 @@ interface MemberSeatProps {
 
 // 按成员 id 取色板索引，确保同一个人颜色稳定
 const GRADIENT_CLASSES = ['g1', 'g2', 'g3', 'g4', 'g5', 'g6']
-function avatarGradient(id: string) {
+
+// avatarGradient 根据成员 ID 计算稳定的渐变头像色板类名，供席位与成员面板共用
+export function avatarGradient(id: string) {
   let hash = 0
   for (let i = 0; i < id.length; i++) {
     hash = id.charCodeAt(i) + ((hash << 5) - hash)
@@ -40,7 +42,14 @@ export default function MemberSeat({ member, onInvite }: MemberSeatProps) {
   }
 
   const isSpeaking = member.isSpeaking && !member.isMuted
-  const statusText = member.isMuted ? '已静音' : member.isSpeaking ? '说话中' : '在线'
+  // 状态优先级：被静音 > 举手中 > 说话中 > 在线，静音/举手都显示文字，说话中只显示音波
+  const statusText = member.isMuted
+    ? '已静音'
+    : member.isWaiting
+      ? '举手中'
+      : member.isSpeaking
+        ? '说话中'
+        : '在线'
   const gradientClass = avatarGradient(member.id)
 
   return (
@@ -48,6 +57,8 @@ export default function MemberSeat({ member, onInvite }: MemberSeatProps) {
       <div className={`ava ${gradientClass}`}>
         {member.name.slice(0, 1)}
         {member.role === 'host' && <span className="badge-host">👑</span>}
+        {member.role === 'cohost' && <span className="badge-role cohost">副</span>}
+        {member.isWaiting && <span className="raise-ic">🙌</span>}
         {member.isMuted && <span className="badge-mute">🔇</span>}
       </div>
       {isSpeaking && (
