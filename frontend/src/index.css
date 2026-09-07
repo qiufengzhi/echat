@@ -568,12 +568,6 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   padding-bottom: 116px;
 }
 
-.room-topbar {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 16px 16px 0;
-}
 .room-chip {
   flex: 1;
   display: flex;
@@ -595,25 +589,6 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   font-size: 12px;
   font-weight: 800;
   color: var(--ink-soft);
-}
-.icon-round {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: 1px solid var(--line);
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  background: #fff;
-  color: var(--ink-soft);
-  font-size: 16px;
-  box-shadow: var(--shadow-sm);
-  flex: none;
-}
-.icon-round.leave {
-  background: #fff;
-  border: 1.5px solid #FFCCD5;
-  color: #E0486F;
 }
 
 .status-pill {
@@ -1167,82 +1142,6 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .db.on .ic {
   outline: 2px solid var(--pink);
   outline-offset: 2px;
-}
-
-/* ============================================================
-   离开页
-   ============================================================ */
-.leave-page {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 100vh;
-  padding: 28px;
-}
-
-.leave-main {
-  text-align: center;
-  max-width: 360px;
-  width: 100%;
-}
-
-.leave-icon {
-  width: 64px;
-  height: 64px;
-  border-radius: 50%;
-  background: var(--pink-softer);
-  color: var(--pink-deep);
-  display: grid;
-  place-items: center;
-  font-size: 28px;
-  font-weight: 900;
-  margin: 0 auto;
-}
-
-.leave-main h1 {
-  font-size: 24px;
-  font-weight: 900;
-  margin-top: 16px;
-}
-.leave-main .sub {
-  color: var(--ink-soft);
-  font-size: 13.5px;
-  margin-top: 8px;
-  line-height: 1.7;
-}
-
-.leave-summary {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 9px;
-  margin: 22px 0;
-  width: 100%;
-}
-.leave-summary .sum-cell {
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-sm);
-  padding: 13px 6px;
-}
-.leave-summary .sum-cell span {
-  display: block;
-  font-size: 11px;
-  color: var(--ink-soft);
-  font-weight: 700;
-}
-.leave-summary .sum-cell b {
-  display: block;
-  font-size: 16px;
-  color: var(--pink-deep);
-  font-weight: 900;
-  margin-top: 3px;
-}
-
-.leave-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 11px;
 }
 
 /* ============================================================

@@ -2,11 +2,6 @@
 
 import type { AIAssistantState } from './signaling'
 
-export type AppView =
-  | 'home' // 首页/进入页，用户在这里创建或加入声聊间
-  | 'room' // 声聊间页，用户已经进入房间并开始连麦或等待朋友
-  | 'left' // 离开页，用户已经退出房间并释放麦克风
-
 export type RoomConnectionTone =
   | 'ready' // 当前连接可用，页面可以显示稳定状态
   | 'waiting' // 已进入房间但还在等待其他成员
@@ -37,22 +32,4 @@ export interface RoomStatusCopy {
   connectionText: string // 顶部连接状态文案，例如“连接成功”或“正在重新连接”
   qualityText: string // 声音体验状态文案，例如“声音流畅”或“等待朋友”
   tone: RoomConnectionTone // 状态颜色和强调程度
-}
-
-export interface RoomActivityItem {
-  id: string // 动态唯一标识，用于 React 渲染列表
-  title: string // 动态主文案，例如“你已进入声聊间”
-  detail: string // 动态补充说明，解释当前状态或下一步
-}
-
-export interface LeaveRoomSummary {
-  roomId: string // 刚刚离开的房间号
-  username: string // 当前用户昵称，用于重新加入时复用
-  durationText: string // 本次停留时长的展示文案
-  memberCount: number // 离开前页面知道的成员数量
-}
-
-export interface JoinRoomInput {
-  roomId: string // 用户输入或页面生成的房间号
-  username: string // 用户填写的昵称
 }
