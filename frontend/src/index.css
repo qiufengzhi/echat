@@ -34,15 +34,134 @@ html { min-height: 100%; }
 body {
   font-family: var(--font);
   color: var(--ink);
-  background: var(--page);
+  /* 移动壳之外露出的浅紫背景，衬托居中的白色手机壳 */
+  background: #EFE6F2;
   -webkit-font-smoothing: antialiased;
-  padding: 20px 16px 120px;
+  padding: 0;
   min-height: 100vh;
 }
 
 button, input, select { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .55; }
+
+/* ============================================================
+   移动壳容器：430px 居中，桌面端即窄栏居中
+   ============================================================ */
+.app-layout {
+  max-width: 430px;
+  margin: 0 auto;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--page);
+  box-shadow: 0 0 48px rgba(61, 42, 53, .10);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ============================================================
+   认证页：登录 / 注册 / 找回密码
+   ============================================================ */
+.auth-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 30px 26px 36px;
+}
+.auth-body .auth-logo {
+  align-self: center;
+  margin-bottom: 26px;
+}
+.h1 {
+  font-size: 21px;
+  font-weight: 900;
+  text-align: center;
+  line-height: 1.4;
+}
+.slogan {
+  font-size: 13px;
+  color: var(--ink-soft);
+  text-align: center;
+  margin: 8px 0 4px;
+  font-weight: 600;
+  line-height: 1.7;
+}
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 18px;
+}
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0;
+  color: var(--ink-faint);
+  font-size: 11px;
+  font-weight: 700;
+}
+.divider::before, .divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.auth-switch {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+}
+.auth-mt {
+  margin-top: 20px;
+  display: block;
+  text-align: center;
+  text-decoration: none;
+}
+.switch-line {
+  text-align: center;
+  font-size: 13px;
+  color: var(--ink-soft);
+  margin-top: 16px;
+  font-weight: 600;
+}
+.switch-line a {
+  color: var(--pink-deep);
+  font-weight: 800;
+  text-decoration: none;
+  margin-left: 4px;
+}
+.auth-tip {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  background: #EAF7FB;
+  color: #1E7FA8;
+  font-size: 12.5px;
+  font-weight: 700;
+  border-radius: var(--r-md);
+  padding: 11px 14px;
+  margin-top: 16px;
+  line-height: 1.5;
+}
+.field .field-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.field .field-link {
+  color: var(--pink-deep);
+  text-decoration: none;
+  font-weight: 800;
+}
+.field .field-hint {
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-weight: 600;
+  margin: 6px 4px 0;
+}
 
 .app-shell {
   max-width: 1240px;
@@ -199,6 +318,8 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  /* 底部固定控制栏占位：内容滚动到末尾时不至于被控制栏遮挡 */
+  padding-bottom: 116px;
 }
 
 .room-topbar {

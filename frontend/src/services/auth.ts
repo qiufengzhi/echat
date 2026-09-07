@@ -76,3 +76,36 @@ export function logout(): void {
   window.localStorage.removeItem(USER_KEY)
   void fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {})
 }
+
+// RegisterInput 是注册接口的请求体，username 为唯一句柄、password 满足强度、email 可选
+export interface RegisterInput {
+  username: string // 用户唯一句柄（3-20 位字母数字 _ -）
+  password: string // 登录密码（后端要求至少 8 位）
+  email?: string // 联系邮箱；不填则注册为本地账号，填了则进入邮箱验证流程
+}
+
+// RegisterResult 是注册接口的响应，注册成功不签发 token，前端需另调 login 完成自动登录
+export interface RegisterResult {
+  id: string // 新用户全局唯一 id
+  username: string // 已注册的用户句柄
+  email: string | null // 绑定的邮箱；未填邮箱为 null
+  status: string // 账户状态：本地账号 active，邮箱路径 pending
+  need_verify: boolean // 是否需邮箱验证（填了 email 为 true，此时不能自动登录）
+}
+
+// register 创建账号；带 email 走邮箱验证路径（返回 need_verify），否则本地账号直接可用
+export async function register(input: RegisterInput): Promise<RegisterResult> {
+  const body: Record<string, string> = { username: input.username, password: input.password }
+  if (input.email) body.email = input.email
+  const res = await fetch('/api/v1/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(body),
+  })
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(data?.error?.message || '注册失败，请稍后重试')
+  }
+  return data as RegisterResult
+}
