@@ -495,13 +495,20 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   box-shadow: var(--shadow-sm);
 }
 .me-menu .item {
+  width: 100%;
   display: flex;
   align-items: center;
   gap: 11px;
   padding: 14px 15px;
+  border: none;
   border-top: 1px solid var(--pink-bg);
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
 }
 .me-menu .item:first-child { border-top: none; }
+.me-menu .item:active { background: var(--pink-bg); }
 .me-menu .item .mi { font-size: 16px; }
 .me-menu .item b { font-size: 14px; font-weight: 800; }
 .me-menu .item .chev { margin-left: auto; font-size: 13px; color: var(--ink-faint); }
@@ -517,6 +524,73 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   padding: 12px 0;
   width: 100%;
   cursor: pointer;
+}
+
+/* ---------- 我的二级子页 ---------- */
+.me-sub {
+  min-height: 100vh;
+  padding-bottom: 24px;
+}
+.history-list,
+.settings-list {
+  list-style: none;
+  margin: 14px 18px 0;
+  padding: 0;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+.history-list li button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 14px 15px;
+  border: none;
+  border-top: 1px solid var(--pink-bg);
+  background: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.history-list li:first-child button { border-top: none; }
+.history-list li button:active { background: var(--pink-bg); }
+.hl-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.hl-main b { font-size: 15px; font-weight: 900; color: var(--ink); letter-spacing: .5px; }
+.hl-main span { font-size: 11.5px; color: var(--ink-soft); font-weight: 700; }
+.history-list .chev {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--ink-faint);
+}
+.settings-list li {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 14px 15px;
+  border-top: 1px solid var(--pink-bg);
+}
+.settings-list li:first-child { border-top: none; }
+.settings-list li .mi { font-size: 16px; }
+.sl-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.sl-main b { font-size: 14px; font-weight: 800; color: var(--ink); }
+.sl-main span { font-size: 11.5px; color: var(--ink-soft); font-weight: 700; }
+.settings-list .chev {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--ink-faint);
 }
 
 .form-message {

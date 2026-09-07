@@ -9,6 +9,7 @@ import RemoteAudio from '../components/room/RemoteAudio'
 import type { User } from '../hooks/useVoiceRoom'
 import { useVoiceRoom } from '../hooks/useVoiceRoom'
 import { getAuthUser } from '../services/auth'
+import { recordRoomVisit } from '../services/history'
 import type { AIAssistantState } from '../types/signaling'
 import type { RoomParticipantRole, RoomStatusCopy, VoiceRoomMember } from '../types/voiceRoomUi'
 
@@ -157,7 +158,12 @@ export default function ChannelPage() {
     joinedRef.current = true
     void (async () => {
       const ok = await voiceRoom.joinRoom(normalizedRoomId, username)
-      if (!ok) setJoinError('无法连接频道，请确认服务可用后重试')
+      if (!ok) {
+        setJoinError('无法连接频道，请确认服务可用后重试')
+        return
+      }
+      // 进房成功即落本地历史，供「我的-历史记录」子页展示与深链直达
+      recordRoomVisit(normalizedRoomId)
     })()
   }, [normalizedRoomId, username, voiceRoom])
 

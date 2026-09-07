@@ -3,6 +3,8 @@ import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
 import AppLayout from './components/layout/AppLayout'
 import ChannelPage from './pages/ChannelPage'
 import MainShell from './pages/MainShell'
+import HistoryPage from './pages/me/HistoryPage'
+import SettingsPage from './pages/me/SettingsPage'
 import LoginPage from './pages/auth/LoginPage'
 import RegisterPage from './pages/auth/RegisterPage'
 import ResetPasswordPage from './pages/auth/ResetPasswordPage'
@@ -27,6 +29,8 @@ function App() {
         <Route element={<RequireAuth />}>
           <Route path="/" element={<MainShell />} />
           <Route path="/channel/:roomId" element={<ChannelPage />} />
+          <Route path="/me/history" element={<HistoryPage />} />
+          <Route path="/me/settings" element={<SettingsPage />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/" replace />} />

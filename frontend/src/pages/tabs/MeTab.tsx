@@ -29,16 +29,16 @@ export default function MeTab() {
       </div>
 
       <div className="me-menu">
-        <div className="item">
+        <button className="item" type="button" onClick={() => navigate('/me/history')}>
           <span className="mi">🕘</span>
           <b>历史记录</b>
           <span className="chev">›</span>
-        </div>
-        <div className="item">
+        </button>
+        <button className="item" type="button" onClick={() => navigate('/me/settings')}>
           <span className="mi">⚙️</span>
           <b>设置</b>
           <span className="chev">›</span>
-        </div>
+        </button>
       </div>
 
       <div className="logout-btn">
