@@ -1,0 +1,45 @@
+import { useState } from 'react'
+
+// ChatSeg 是「聊天」页的分段维度：消息与会话分开展示
+type ChatSeg = 'messages' | 'friends'
+
+// ChatsTab 是主界面「聊天」页：消息/好友分段切换，两区均为空态
+// 产品当前不做文本会话持久化，好友关系也尚未接入，仅提供结构占位
+export default function ChatsTab() {
+  const [seg, setSeg] = useState<ChatSeg>('messages')
+
+  return (
+    <div className="chats-tab">
+      <div className="chat-seg">
+        <button
+          type="button"
+          className={seg === 'messages' ? 'active' : ''}
+          onClick={() => setSeg('messages')}
+        >
+          消息
+        </button>
+        <button
+          type="button"
+          className={seg === 'friends' ? 'active' : ''}
+          onClick={() => setSeg('friends')}
+        >
+          好友
+        </button>
+      </div>
+
+      {seg === 'messages' ? (
+        <div className="empty-state">
+          <span className="es-ic">💬</span>
+          <b>还没有消息</b>
+          <p>当前产品不做文本聊天，之后可通过频道动态交流</p>
+        </div>
+      ) : (
+        <div className="empty-state">
+          <span className="es-ic">🤝</span>
+          <b>还没有好友</b>
+          <p>好友关系与在线状态在规划中，后续版本开放</p>
+        </div>
+      )}
+    </div>
+  )
+}

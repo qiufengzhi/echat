@@ -197,24 +197,69 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 }
 
 /* ============================================================
-   首页
+   主界面：移动壳内的三 Tab（频道/聊天/我的）
    ============================================================ */
-.home-page {
+.main-shell {
+  flex: 1;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  min-height: 100vh;
-  padding: 16px 0;
+  min-height: 0;
 }
-
-.home-top {
+.main-top {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0 20px;
-  width: 100%;
-  max-width: 400px;
+  padding: 16px 18px 8px;
+  flex: none;
 }
+.main-top .avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: linear-gradient(150deg, #FFB7C5, #FB7299);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 900;
+  font-size: 14px;
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: var(--shadow-sm);
+  font-family: inherit;
+  padding: 0;
+}
+.tab-panel {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.tab-panel::-webkit-scrollbar { display: none; }
+.bottom-tabs {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  background: #fff;
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -6px 20px rgba(61, 42, 53, .05);
+  flex: none;
+}
+.b-tab {
+  border: none;
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 9px 0 12px;
+  flex: 1;
+  color: var(--ink-faint);
+  transition: color .15s;
+}
+.b-tab .bi { font-size: 21px; line-height: 1; }
+.b-tab .bl { font-size: 10.5px; font-weight: 800; }
+.b-tab.active { color: var(--pink); }
 
 .wordmark {
   display: flex;
@@ -231,19 +276,247 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   background: var(--pink);
 }
 
-.home-body {
-  flex: 1;
+/* ---------- 频道 Tab ---------- */
+.search-bar {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  background: #fff;
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-pill);
+  padding: 10px 15px;
+  margin: 6px 18px 12px;
+}
+.search-bar .si { font-size: 14px; color: var(--ink-faint); }
+.search-bar input {
+  border: none;
+  outline: none;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
   width: 100%;
-  max-width: 400px;
-  padding: 0 24px;
+  background: none;
+}
+.create-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: calc(100% - 36px);
+  margin: 2px 18px 0;
+  background: linear-gradient(135deg, #FFE0E9, #FFD6EC);
+  border: none;
+  border-radius: var(--r-lg);
+  padding: 15px 16px;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  color: inherit;
+}
+.create-banner .cb-ic {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--pink);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  font-weight: 900;
+  box-shadow: 0 6px 14px rgba(251, 114, 153, .4);
+  flex: none;
+}
+.create-banner .cb-txt { flex: 1; }
+.create-banner .cb-txt b {
+  font-size: 15px;
+  font-weight: 900;
+  display: block;
+  color: var(--ink);
+}
+.create-banner .cb-txt span {
+  font-size: 12px;
+  color: #C05A77;
+  font-weight: 600;
+  display: block;
+  margin-top: 2px;
+}
+.join-card {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 12px 18px 0;
+}
+.join-card input {
+  flex: 1;
+  min-width: 0;
+  border: 1.5px solid var(--line);
+  outline: none;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  background: #fff;
+  border-radius: var(--r-pill);
+  padding: 11px 15px;
+  transition: border-color .15s;
+}
+.join-card input:focus { border-color: var(--pink); }
+.join-card button {
+  border: none;
+  border-radius: var(--r-pill);
+  background: var(--pink);
+  color: #fff;
+  font-family: inherit;
+  font-weight: 800;
+  font-size: 13.5px;
+  padding: 11px 18px;
+  flex: none;
+}
+.sec-title {
+  font-size: 13px;
+  font-weight: 900;
+  color: var(--ink);
+  padding: 0 18px;
+  margin: 16px 0 9px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.taglist {
+  display: flex;
+  gap: 7px;
+  overflow-x: auto;
+  padding: 2px 18px;
+}
+.taglist::-webkit-scrollbar { display: none; }
+.chip-tag {
+  flex: none;
+  font-size: 12px;
+  font-weight: 800;
+  background: #fff;
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  border-radius: 999px;
+  padding: 6px 13px;
+}
+.room-list {
+  display: grid;
+  gap: 9px;
+  padding: 2px 18px 14px;
 }
 
-.home-hero {
-  margin-bottom: 30px;
+/* ---------- 空态 / 聊天分段 ---------- */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 52px 30px;
   text-align: center;
+}
+.empty-state .es-ic {
+  width: 66px;
+  height: 66px;
+  border-radius: 50%;
+  background: var(--pink-bg);
+  display: grid;
+  place-items: center;
+  font-size: 30px;
+  margin-bottom: 15px;
+}
+.empty-state b { font-size: 15px; font-weight: 900; }
+.empty-state p {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  font-weight: 600;
+  margin-top: 6px;
+  line-height: 1.6;
+}
+.chat-seg {
+  display: flex;
+  background: var(--pink-bg);
+  border-radius: var(--r-pill);
+  padding: 3px;
+  margin: 6px 18px 4px;
+}
+.chat-seg button {
+  flex: 1;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--ink-soft);
+  border-radius: var(--r-pill);
+  padding: 8px 0;
+  cursor: pointer;
+}
+.chat-seg button.active {
+  background: #fff;
+  color: var(--pink-deep);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---------- 我的 Tab ---------- */
+.me-body { padding-bottom: 16px; }
+.me-cover {
+  background: linear-gradient(135deg, #FBD0DD, #FB7299, #E5D3FB);
+  border-radius: var(--r-lg);
+  height: 92px;
+  margin: 0 18px;
+  position: relative;
+}
+.me-cover .me-ava {
+  position: absolute;
+  left: 18px;
+  bottom: -26px;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: linear-gradient(150deg, #FFB7C5, #FB7299);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 900;
+  font-size: 26px;
+  border: 3px solid #fff;
+  box-shadow: var(--shadow-md);
+}
+.me-info { margin-top: 38px; padding: 0 20px; }
+.me-info .row { display: flex; align-items: center; gap: 8px; }
+.me-info .row b { font-size: 19px; font-weight: 900; }
+.me-info .id { font-size: 13px; color: var(--ink-soft); margin-top: 5px; font-weight: 600; }
+.me-menu {
+  margin: 18px 18px 0;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+.me-menu .item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 14px 15px;
+  border-top: 1px solid var(--pink-bg);
+}
+.me-menu .item:first-child { border-top: none; }
+.me-menu .item .mi { font-size: 16px; }
+.me-menu .item b { font-size: 14px; font-weight: 800; }
+.me-menu .item .chev { margin-left: auto; font-size: 13px; color: var(--ink-faint); }
+.logout-btn { margin: 18px 18px 6px; }
+.logout-btn button {
+  background: #fff;
+  border: 1.5px solid #FFCCD5;
+  color: #E0486F;
+  font-family: inherit;
+  font-weight: 800;
+  font-size: 14px;
+  border-radius: var(--r-pill);
+  padding: 12px 0;
+  width: 100%;
+  cursor: pointer;
 }
 
 .form-message {
@@ -283,33 +556,6 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   transition: border-color .15s ease;
 }
 .field input:focus { border-color: var(--pink); }
-
-.home-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 11px;
-  margin-top: 6px;
-}
-
-.home-userbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 4px;
-}
-.home-username {
-  font-weight: 800;
-  color: var(--ink);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.auth-form {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
 
 /* ============================================================
    声聊间
