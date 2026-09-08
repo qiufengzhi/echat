@@ -1,0 +1,4 @@
+# Atlas 迁移文件与校验和文件强制 LF 行尾
+# 避免 Windows 检出时 autocrlf 转 CRLF 导致 atlas.sum checksum mismatch
+*.sql text eol=lf
+atlas.sum text eol=lf
