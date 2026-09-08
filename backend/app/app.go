@@ -15,8 +15,8 @@ import (
 	"echat-backend/config"
 	"echat-backend/handlers"
 	"echat-backend/logging"
+	"echat-backend/room/api"
 	"echat-backend/room/projection"
-	"echat-backend/room/signaling"
 	"echat-backend/store"
 	"echat-backend/transport"
 
@@ -83,11 +83,11 @@ func New(cfg *config.Config) (*App, error) {
 	return a, nil
 }
 
-// Mount 各领域路由注册到同一 mux（本阶段认证域 + 房间存在性 + 静态/WS 入口）
+// Mount 各领域路由注册到同一 mux（认证域 + 房间查询 API + 静态/WS 入口）
 // 后续阶段收编 SFU/ASR/LLM/TTS 等领域时在此追加各领域 Register
 func (a *App) Mount() {
 	a.auth.Register(a.mux)
-	a.mountRoomRoutes()
+	api.NewHandler(a.store.Pool(), a.rdb, a.auth).Register(a.mux)
 	a.mountTransportEntry()
 }
 
@@ -112,16 +112,7 @@ func (a *App) Redis() *redis.Client {
 	return a.rdb
 }
 
-// mountRoomRoutes 注册房间域过渡期 HTTP 接口（P6-2 将收编为 room/api 读模型查询）
-// 房间存在性校验：加入频道前先确认频道号当前有在线房间，避免误建新房
-func (a *App) mountRoomRoutes() {
-	a.mux.HandleFunc("GET /api/v1/rooms/{code}", transport.Adapt(a.auth.AccessRequired(func(w http.ResponseWriter, r *http.Request) error {
-		transport.WriteJSON(w, http.StatusOK, map[string]bool{"exists": signaling.Exists(r.PathValue("code"))})
-		return nil
-	})))
-}
-
-// mountTransportEntry 注册静态首页与 WebSocket 信令入口（后续阶段收编进 room/gateway）
+// mountTransportEntry 注册静态首页与 WebSocket 信令入口
 func (a *App) mountTransportEntry() {
 	a.mux.HandleFunc("/", handlers.IndexHandler)
 	a.mux.HandleFunc("/ws", handlers.WebSocketHandler(a.authSvc))

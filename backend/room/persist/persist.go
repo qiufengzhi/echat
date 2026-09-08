@@ -79,8 +79,9 @@ func (p *Persister) JoinRoom(ctx context.Context, room *aggregate.Room, member a
 		`SELECT id, status FROM rooms WHERE room_code = $1`, room.ID).Scan(&aggID, &status)
 	switch {
 	case err == nil:
-		if status == "closed" {
-			// 复用被关闭的事实行，重置为 active，房主由当前首位成员担任
+		// closed 或 scheduled 的事实行可被首位成员复开/激活为 active
+		// 复用既有权威聚合根 id，房主由当前首位成员担任
+		if status == aggregate.RoomStatusClosed || status == aggregate.RoomStatusScheduled {
 			if _, uerr := tx.Exec(ctx,
 				`UPDATE rooms SET status = 'active', host_id = $1, updated_at = now() WHERE id = $2`,
 				userID, aggID); uerr != nil {
