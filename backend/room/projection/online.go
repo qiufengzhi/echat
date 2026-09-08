@@ -1,13 +1,13 @@
-// online.go Redis 在线热状态：事实/瞬态分层的瞬态层
+// online.go Redis 在线热状态投影：事实/瞬态分层的瞬态层
 //
-// 分层：事实层 = Postgres rooms / room_members（谁来过、历史在场，权威落库，见 persist.go）
+// 分层：事实层 = Postgres rooms / room_members（谁来过、历史在场，权威落库，见 room/persist）
 // 瞬态层 = Redis 房间在线 ZSET（现在谁在线，毫秒级心跳，不落事实）
 // 结构：room:online:{roomID} ZSET，member = userID，score = 最近心跳 Unix 秒
 //   - join/心跳刷新 score 并续 key 级 TTL（兜底防挂机残留）
 //   - leave/断线 ZREM 移除；集合清空后 key 自动过期删除（Redis 键生命周期完整）
 //   - 定期 sweep 清走超 5 分钟无心跳的成员，避免僵尸成员占用席位
-// Redis 不可用时心跳静默跳过（告警一次），在线热状态降级为空集合，不影响实时信令主链路
-package room
+// Redis 不可用时心跳静默跳过，在线热状态降级为空集合，不影响实时信令主链路
+package projection
 
 import (
 	"context"
@@ -17,7 +17,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// onlineRdb Redis 客户端引用，由 main 注入（与登录限流共享同一连接）
+// onlineRdb Redis 客户端引用，由编排层注入（与登录限流共享同一连接）
 var onlineRdb *redis.Client
 
 // onlineTTL 房间在线集合在无心跳后的存活时长：到期视为全员离线，key 清理
@@ -42,9 +42,9 @@ func onlineKey(roomID string) string {
 	return onlineKeyPrefix + roomID
 }
 
-// markOnline 记录用户在线心跳：ZADD 刷新 score 为当前时刻并续 key 级 TTL
+// MarkOnline 记录用户在线心跳：ZADD 刷新 score 为当前时刻并续 key 级 TTL
 // roomID 房间短码，userID 鉴权用户身份
-func markOnline(roomID, userID string) {
+func MarkOnline(roomID, userID string) {
 	if onlineRdb == nil || roomID == "" || userID == "" {
 		return
 	}
@@ -58,8 +58,8 @@ func markOnline(roomID, userID string) {
 	}
 }
 
-// markOffline 用户离开/断线时从房间在线集合移除
-func markOffline(roomID, userID string) {
+// MarkOffline 用户离开/断线时从房间在线集合移除
+func MarkOffline(roomID, userID string) {
 	if onlineRdb == nil || roomID == "" || userID == "" {
 		return
 	}
@@ -98,6 +98,11 @@ func IsUserOnline(roomID, userID string) bool {
 		return false
 	}
 	return time.Since(time.Unix(int64(n), 0)) <= onlineTTL
+}
+
+// StartOnlineSweep 启动在线热状态扫刷协程，兜底收敛超时无心跳的 Redis 在线成员
+func StartOnlineSweep() {
+	go sweepOnlineLoop()
 }
 
 // sweepOnlineLoop 定期扫刷所有房间在线集合：清走超时成员并回收空 key

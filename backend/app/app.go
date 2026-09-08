@@ -15,7 +15,8 @@ import (
 	"echat-backend/config"
 	"echat-backend/handlers"
 	"echat-backend/logging"
-	"echat-backend/room"
+	"echat-backend/room/projection"
+	"echat-backend/room/signaling"
 	"echat-backend/store"
 	"echat-backend/transport"
 
@@ -67,7 +68,7 @@ func New(cfg *config.Config) (*App, error) {
 		logging.L().Warnw("Redis 不可用，登录限流降级为进程内实现", "addr", cfg.Redis.Addr, "error", err)
 	} else {
 		authSvc.SetLoginLimiter(authn.NewRedisLoginLimiter(rdb))
-		room.SetOnlineStore(rdb) // 在线热状态瞬态层复用同一连接
+		projection.SetOnlineStore(rdb) // 在线热状态瞬态层复用同一连接
 	}
 	pingCancel()
 
@@ -110,7 +111,7 @@ func (a *App) Store() *store.Store {
 // 房间存在性校验：加入频道前先确认频道号当前有在线房间，避免误建新房
 func (a *App) mountRoomRoutes() {
 	a.mux.HandleFunc("GET /api/v1/rooms/{code}", transport.Adapt(a.auth.AccessRequired(func(w http.ResponseWriter, r *http.Request) error {
-		transport.WriteJSON(w, http.StatusOK, map[string]bool{"exists": room.Exists(r.PathValue("code"))})
+		transport.WriteJSON(w, http.StatusOK, map[string]bool{"exists": signaling.Exists(r.PathValue("code"))})
 		return nil
 	})))
 }

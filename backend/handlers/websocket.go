@@ -9,7 +9,8 @@ import (
 	"echat-backend/authn"
 	"echat-backend/config"
 	"echat-backend/logging"
-	"echat-backend/room"
+	"echat-backend/room/gateway"
+	"echat-backend/room/signaling"
 
 	"github.com/gorilla/websocket"
 )
@@ -45,7 +46,7 @@ func WebSocketHandler(authSvc *authn.Service) http.HandlerFunc {
 			return
 		}
 
-		room.HandleConnection(conn, room.ConnIdentity{
+		signaling.HandleConnection(conn, gateway.ConnIdentity{
 			UserID:       claims.SubjectUUID().String(),
 			SessionID:    claims.SessionID.String(),
 			TokenVersion: claims.TokenVersion,

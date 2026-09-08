@@ -20,7 +20,8 @@ import (
 	"echat-backend/authn"
 	"echat-backend/config"
 	"echat-backend/logging"
-	"echat-backend/room"
+	"echat-backend/room/gateway"
+	"echat-backend/room/signaling"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
@@ -88,7 +89,7 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 		logger.Warnw("WebTransport 会话升级失败", "error", err)
 		return
 	}
-	go s.serveSession(sess, room.ConnIdentity{
+	go s.serveSession(sess, gateway.ConnIdentity{
 		UserID:       claims.SubjectUUID().String(),
 		SessionID:    claims.SessionID.String(),
 		TokenVersion: claims.TokenVersion,
@@ -97,7 +98,7 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 
 // serveSession 处理单个 WebTransport 会话：等待首条双向信令流并交给房间域处理
 // 会话生命周期绑定信令流：会话结束流读取自然出错，readPump 退出并触发连接清理
-func (s *Server) serveSession(sess *webtransport.Session, identity room.ConnIdentity) {
+func (s *Server) serveSession(sess *webtransport.Session, identity gateway.ConnIdentity) {
 	defer sess.CloseWithError(0, "signal session done")
 	stream, err := sess.AcceptStream(sess.Context())
 	if err != nil {
@@ -105,7 +106,7 @@ func (s *Server) serveSession(sess *webtransport.Session, identity room.ConnIden
 		return
 	}
 	logger.Infow("WebTransport 信令流已建立", "userID", identity.UserID)
-	room.HandleConnection(&streamFramer{stream: stream}, identity)
+	signaling.HandleConnection(&streamFramer{stream: stream}, identity)
 }
 
 // ListenAndServe 启动 WebTransport UDP 监听，阻塞直到错误

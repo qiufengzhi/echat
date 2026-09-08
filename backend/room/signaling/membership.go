@@ -1,4 +1,4 @@
-// membership.go 成员管理信令协议：举手上麦、审批、请下麦与静音
+// membership.go 成员管理用例编排：举手上麦、审批、请下麦与静音
 //
 // 状态机：
 //
@@ -9,7 +9,7 @@
 //	          --mute_mic(muted=false)--> speaker（解除）
 //
 // 举手态仅存内存（WaitingOf），角色变更投影 SpiceDB 并记 outbox 领域事件，失败均告警不阻断信令
-package room
+package signaling
 
 import (
 	"context"
@@ -17,11 +17,15 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"echat-backend/room/aggregate"
+	"echat-backend/room/events"
+	"echat-backend/room/gateway"
 )
 
 // handleRaiseHand 听众举手请求上麦（成员天生可举手，不鉴权）
 // 已在麦上（host/cohost/speaker）的成员重复举手被拒；举手写入内存并广播全房间
-func handleRaiseHand(client *Client) {
+func handleRaiseHand(client *gateway.Client) {
 	roomID := client.RoomID
 	if roomID == "" {
 		sendError(client, "join a room first")
@@ -34,7 +38,7 @@ func handleRaiseHand(client *Client) {
 	r.Lock.RLock()
 	role := r.RoleOf[client.UserID]
 	r.Lock.RUnlock()
-	if role == RoleHost || role == RoleCohost || role == RoleSpeaker {
+	if role == aggregate.RoleHost || role == aggregate.RoleCohost || role == aggregate.RoleSpeaker {
 		sendError(client, "已在麦上无需举手")
 		return
 	}
@@ -42,7 +46,7 @@ func handleRaiseHand(client *Client) {
 	r.WaitingOf[client.UserID] = true
 	r.Lock.Unlock()
 
-	persistMembershipEvent(roomID, r, EventTypeRoomHandRaised,
+	recordMembershipEvent(r, roomID, events.EventTypeRoomHandRaised,
 		map[string]any{"user_id": client.UserID, "username": client.Username})
 	broadcastToRoom(roomID, client.ConnID, MsgTypeHandRaised, HandRaisedPayload{
 		UserID:   client.UserID,
@@ -52,7 +56,7 @@ func handleRaiseHand(client *Client) {
 
 // handleApproveMic 房主/副主持批准举手成员上麦（mod_mic 鉴权）
 // 目标必须处于举手态；批准后 listener -> speaker 并投影 SpiceDB
-func handleApproveMic(client *Client, payload json.RawMessage) {
+func handleApproveMic(client *gateway.Client, payload json.RawMessage) {
 	roomID, r := manageContext(client)
 	targetID, _, ok := parseTargetUser(payload)
 	if r == nil {
@@ -75,23 +79,23 @@ func handleApproveMic(client *Client, payload json.RawMessage) {
 	}
 	delete(r.WaitingOf, targetID)
 	prev := r.RoleOf[targetID]
-	r.RoleOf[targetID] = RoleSpeaker
-	name, _ := roomMemberName(r, targetID)
+	r.RoleOf[targetID] = aggregate.RoleSpeaker
+	name, _ := memberName(r, targetID)
 	r.Lock.Unlock()
 
-	if prev != "" && prev != RoleSpeaker {
-		projectRemove(r, targetID, prev)
+	if prev != "" && prev != aggregate.RoleSpeaker {
+		removeProjectedRole(r, targetID, prev)
 	}
-	projectAssign(r, targetID, RoleSpeaker)
-	persistMembershipEvent(roomID, r, EventTypeRoomMicApproved,
+	assignRole(r, targetID, aggregate.RoleSpeaker)
+	recordMembershipEvent(r, roomID, events.EventTypeRoomMicApproved,
 		map[string]any{"user_id": targetID, "actor": client.UserID})
 	broadcastToRoom(roomID, client.ConnID, MsgTypeMicApproved, RoleChangedPayload{
-		UserID: targetID, Username: name, Role: RoleSpeaker,
+		UserID: targetID, Username: name, Role: aggregate.RoleSpeaker,
 	})
 }
 
 // handleRejectMic 房主/副主持拒绝举手（mod_mic 鉴权），清理举手态并定向通知举手人
-func handleRejectMic(client *Client, payload json.RawMessage) {
+func handleRejectMic(client *gateway.Client, payload json.RawMessage) {
 	roomID, r := manageContext(client)
 	targetID, _, ok := parseTargetUser(payload)
 	if r == nil {
@@ -112,18 +116,20 @@ func handleRejectMic(client *Client, payload json.RawMessage) {
 		return
 	}
 	delete(r.WaitingOf, targetID)
-	_, targetConn := roomMemberName(r, targetID)
+	_, targetConn := memberName(r, targetID)
 	r.Lock.Unlock()
 
-	persistMembershipEvent(roomID, r, EventTypeRoomMicRejected,
+	recordMembershipEvent(r, roomID, events.EventTypeRoomMicRejected,
 		map[string]any{"user_id": targetID, "actor": client.UserID})
 	if targetConn != "" {
-		sendToClient(findClientByConnID(r, targetConn), MsgTypeMicRejected, MicRejectedPayload{UserID: targetID}, roomID)
+		if target := clientIn(r, targetConn); target != nil {
+			sendToClient(target, MsgTypeMicRejected, MicRejectedPayload{UserID: targetID}, roomID)
+		}
 	}
 }
 
 // handleKickMic 房主/副主持请 speaker 下麦（mod_mic 鉴权），speaker -> listener 并投影
-func handleKickMic(client *Client, payload json.RawMessage) {
+func handleKickMic(client *gateway.Client, payload json.RawMessage) {
 	roomID, r := manageContext(client)
 	targetID, _, ok := parseTargetUser(payload)
 	if r == nil {
@@ -138,27 +144,27 @@ func handleKickMic(client *Client, payload json.RawMessage) {
 		return
 	}
 	r.Lock.Lock()
-	if r.RoleOf[targetID] != RoleSpeaker {
+	if r.RoleOf[targetID] != aggregate.RoleSpeaker {
 		r.Lock.Unlock()
 		sendError(client, "目标不在麦上")
 		return
 	}
-	r.RoleOf[targetID] = RoleListener
+	r.RoleOf[targetID] = aggregate.RoleListener
 	delete(r.WaitingOf, targetID)
-	name, _ := roomMemberName(r, targetID)
+	name, _ := memberName(r, targetID)
 	r.Lock.Unlock()
 
-	projectRemove(r, targetID, RoleSpeaker)
-	projectAssign(r, targetID, RoleListener)
-	persistMembershipEvent(roomID, r, EventTypeRoomMicKicked,
+	removeProjectedRole(r, targetID, aggregate.RoleSpeaker)
+	assignRole(r, targetID, aggregate.RoleListener)
+	recordMembershipEvent(r, roomID, events.EventTypeRoomMicKicked,
 		map[string]any{"user_id": targetID, "actor": client.UserID})
 	broadcastToRoom(roomID, client.ConnID, MsgTypeMicKicked, RoleChangedPayload{
-		UserID: targetID, Username: name, Role: RoleListener,
+		UserID: targetID, Username: name, Role: aggregate.RoleListener,
 	})
 }
 
 // handleMuteMic 房主/副主持静音/解除静音 speaker（mod_mic 鉴权），叠加 muted 关系覆盖 speak
-func handleMuteMic(client *Client, payload json.RawMessage) {
+func handleMuteMic(client *gateway.Client, payload json.RawMessage) {
 	roomID, r := manageContext(client)
 	targetID, muted, ok := parseTargetUser(payload)
 	if r == nil {
@@ -173,7 +179,7 @@ func handleMuteMic(client *Client, payload json.RawMessage) {
 		return
 	}
 	r.Lock.Lock()
-	if r.RoleOf[targetID] != RoleSpeaker {
+	if r.RoleOf[targetID] != aggregate.RoleSpeaker {
 		r.Lock.Unlock()
 		sendError(client, "目标不在麦上")
 		return
@@ -183,15 +189,15 @@ func handleMuteMic(client *Client, payload json.RawMessage) {
 	} else {
 		delete(r.MutedOf, targetID)
 	}
-	name, _ := roomMemberName(r, targetID)
+	name, _ := memberName(r, targetID)
 	r.Lock.Unlock()
 
 	if muted {
-		projectAssign(r, targetID, RoleMuted)
+		assignRole(r, targetID, aggregate.RoleMuted)
 	} else {
-		projectRemove(r, targetID, RoleMuted)
+		removeProjectedRole(r, targetID, aggregate.RoleMuted)
 	}
-	persistMembershipEvent(roomID, r, EventTypeRoomMuted,
+	recordMembershipEvent(r, roomID, events.EventTypeRoomMuted,
 		map[string]any{"user_id": targetID, "muted": muted, "actor": client.UserID})
 	broadcastToRoom(roomID, client.ConnID, MsgTypeMuted, MutedPayload{
 		UserID: targetID, Username: name, Muted: muted,
@@ -211,7 +217,7 @@ func parseTargetUser(payload json.RawMessage) (targetID string, muted bool, ok b
 }
 
 // manageContext 获取管理操作的房间上下文；未入房返回 nil 房间
-func manageContext(client *Client) (string, *Room) {
+func manageContext(client *gateway.Client) (string, *aggregate.Room) {
 	roomID := client.RoomID
 	if roomID == "" {
 		sendError(client, "join a room first")
@@ -220,43 +226,54 @@ func manageContext(client *Client) (string, *Room) {
 	return roomID, getRoomByID(roomID)
 }
 
-// roomMemberName 在房间锁已持有的前提下，返回目标成员昵称与其任一连接 ID
+// memberName 在房间锁已持有的前提下，返回目标成员昵称与其任一连接 ID
 // 调用方必须已持有 r.Lock；连接 ID 用于定向通知（reject），空串表示目标已离场
-func roomMemberName(r *Room, userID string) (name string, connID string) {
+func memberName(r *aggregate.Room, userID string) (name string, connID string) {
 	for _, c := range r.Clients {
-		if c.UserID == userID {
-			return c.Username, c.ConnID
+		if c.SessionUserID() == userID {
+			return c.SessionUsername(), c.SessionConnID()
 		}
 	}
 	return "", ""
 }
 
-// findClientByConnID 按连接 ID 返回客户端对象，用于定向消息
-func findClientByConnID(r *Room, connID string) *Client {
+// clientIn 按连接 ID 从房间成员表反查真实传输连接，用于定向消息
+// 成员表以抽象 Session 存储，实际值即 gateway.Client，断言失败返回 nil
+func clientIn(r *aggregate.Room, connID string) *gateway.Client {
 	r.Lock.RLock()
 	defer r.Lock.RUnlock()
-	return r.Clients[connID]
+	sess, ok := r.Clients[connID]
+	if !ok {
+		return nil
+	}
+	if c, ok := sess.(*gateway.Client); ok {
+		return c
+	}
+	return nil
 }
 
-// persistMembershipEvent 记录成员管理领域事件到事务性 outbox（举手/审批/请下麦/静音）
+// recordMembershipEvent 记录成员管理领域事件到事务性 outbox（举手/审批/请下麦/静音）
 // 失败仅告警，不阻断实时广播（实时优先策略）
-func persistMembershipEvent(roomID string, r *Room, eventType string, payload map[string]any) {
-	if pool == nil || r.AggID == "" {
+func recordMembershipEvent(r *aggregate.Room, roomID string, eventType string, payload map[string]any) {
+	if recorder == nil || r.AggID == "" {
 		return
 	}
 	aggID, err := uuid.Parse(r.AggID)
 	if err != nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
-	defer cancel()
 	payload["room_code"] = roomID
-	if err := recordEvent(ctx, pool, RoomEvent{
+	recorder.Record(context.Background(), events.RoomEvent{
 		Type:        eventType,
 		AggregateID: aggID,
-		Subject:     roomSubject(aggID, strings.TrimPrefix(eventType, "room.")),
+		Subject:     events.Subject(aggID, strings.TrimPrefix(eventType, "room.")),
 		Payload:     payload,
-	}); err != nil {
-		factErr("记账成员管理事件失败", roomID, err)
-	}
+	})
+}
+
+// removeProjectedRole 移除某用户某个角色的 SpiceDB 元组（幂等，带超时保护主链路）
+func removeProjectedRole(r *aggregate.Room, userID, role string) {
+	ctx, cancel := context.WithTimeout(context.Background(), authzTimeout)
+	defer cancel()
+	_ = roleProjector.Remove(ctx, r.AggID, userID, role)
 }

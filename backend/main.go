@@ -17,7 +17,7 @@ import (
 	"echat-backend/llm_cli"
 	"echat-backend/logging"
 	"echat-backend/outbox"
-	"echat-backend/room"
+	"echat-backend/room/signaling"
 	"echat-backend/sfu"
 	"echat-backend/tts_cli"
 	"echat-backend/wt"
@@ -67,17 +67,17 @@ func main() {
 		}
 	}
 
-	// 注入持久层：房间事实写库与事件记账共用 App 的 pgx 连接池
-	room.SetStore(root.Store().Pool())
+	// 注入房间域事实落库与事件记账：join/leave/交接/AI/成员管理写库共用 App 的连接池
+	signaling.SetStore(root.Store().Pool())
 
 	// 一致性骨干：事务性 Outbox relay 把 pending 事件投递到 NATS JetStream
 	relayer := outbox.NewRelayer(root.Store().Pool(), outboxConfig(cfg))
 	go relayer.Run(context.Background())
 
 	// 后台协程：空房间清理 / 吊销踢连接 / AI 状态广播 / 在线待机收敛
-	room.StartCleanupLoop()
-	room.StartRevokedKick()
-	room.StartAIStateBroadcaster()
+	signaling.StartCleanupLoop()
+	signaling.StartRevokedKick()
+	signaling.StartAIStateBroadcaster()
 	startAIStandbyCleanup(cfg)
 
 	// WebTransport/QUIC 信令端点：握手复用 WebSocket 的 access token 鉴权
