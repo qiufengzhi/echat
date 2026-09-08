@@ -17,6 +17,7 @@ import (
 	"echat-backend/llm_cli"
 	"echat-backend/logging"
 	"echat-backend/outbox"
+	"echat-backend/projection"
 	"echat-backend/room/signaling"
 	"echat-backend/sfu"
 	"echat-backend/tts_cli"
@@ -79,6 +80,9 @@ func main() {
 	signaling.StartRevokedKick()
 	signaling.StartAIStateBroadcaster()
 	startAIStandbyCleanup(cfg)
+
+	// 房间读模型投影：durable consumer 消费 room.* 事件，重建 active_rooms / room:members / user_room_history
+	go projection.StartRoomReadModel(context.Background(), root.Redis(), root.Store().Pool(), cfg.NATS.URL, cfg.NATS.Stream)
 
 	// WebTransport/QUIC 信令端点：握手复用 WebSocket 的 access token 鉴权
 	if cfg.WT.Enabled {

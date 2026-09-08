@@ -107,6 +107,11 @@ func (a *App) Store() *store.Store {
 	return a.store
 }
 
+// Redis 暴露共享 Redis 客户端，供读模型投影（Redis 侧）与后续热状态子系统取用
+func (a *App) Redis() *redis.Client {
+	return a.rdb
+}
+
 // mountRoomRoutes 注册房间域过渡期 HTTP 接口（P6-2 将收编为 room/api 读模型查询）
 // 房间存在性校验：加入频道前先确认频道号当前有在线房间，避免误建新房
 func (a *App) mountRoomRoutes() {
