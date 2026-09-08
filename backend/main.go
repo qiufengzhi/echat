@@ -81,8 +81,8 @@ func main() {
 	signaling.StartAIStateBroadcaster()
 	startAIStandbyCleanup(cfg)
 
-	// 房间读模型投影：durable consumer 消费 room.* 事件，重建 active_rooms / room:members / user_room_history
-	go projection.StartRoomReadModel(context.Background(), root.Redis(), root.Store().Pool(), cfg.NATS.URL, cfg.NATS.Stream)
+	// 房间事件投影：durable consumer 消费 room.* 事件，重建读模型并对账 SpiceDB 授权
+	go projection.StartRoomReadModel(context.Background(), root.Redis(), root.Store().Pool(), cfg.NATS.URL, cfg.NATS.Stream, global.AuthZ)
 
 	// WebTransport/QUIC 信令端点：握手复用 WebSocket 的 access token 鉴权
 	if cfg.WT.Enabled {
