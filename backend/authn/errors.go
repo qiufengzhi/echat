@@ -1,24 +1,17 @@
 // Package authn 实现用户系统认证域：注册、邮箱验证/绑定、登录会话、找回密码
 //
 // 本包只做「认证」；「授权（房间角色等）」在 authz 域
+// 领域错误统一复用 transport.Error（Code/Message/Status 三要素），便于 http.go 直接经 transport.Adapt 序列化
 package authn
 
-import "net/http"
+import (
+	"net/http"
 
-// Error 认证域错误：Code 供前端分支，Message 面向用户一律泛化（防枚举）
-type Error struct {
-	// Code 错误码枚举：VALIDATION_ERROR / REGISTER_CONFLICT / TOKEN_INVALID 等
-	Code string
-	// Message 面向用户的泛化文案（防枚举），不泄露「邮箱/用户名是否存在」等细节
-	Message string
-	// Status 对应的 HTTP 状态码
-	Status int
-}
+	"echat-backend/transport"
+)
 
-// Error 实现 error 接口，返回用户可见文案
-func (e *Error) Error() string {
-	return e.Message
-}
+// Error 认证域错误别名，Code 供前端分支，Message 面向用户一律泛化（防枚举）
+type Error = transport.Error
 
 // 预定义错误：message 均为泛化文案，避免成为账户探测的侧信道
 var (

@@ -10,6 +10,7 @@ import (
 	"echat-backend/ent/session"
 	"echat-backend/ent/user"
 	"echat-backend/global"
+	"echat-backend/transport"
 
 	"github.com/google/uuid"
 )
@@ -66,16 +67,31 @@ func (s *Service) ValidateAccess(ctx context.Context, accessToken string) (*Acce
 	return claims, nil
 }
 
-// AccessRequired 访问令牌中间件：校验通过后把 claims 注入处理器，供受保护端点使用
-// f 以 (w, r, claims) 签名接收，需要用户身份/会话信息的端点都走这里
-func (h *Handler) AccessRequired(f func(http.ResponseWriter, *http.Request, *AccessClaims)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+// claimsKey context 中存放校验后 claims 的键类型，避免与其他键冲突
+type claimsKey struct{}
+
+// WithClaims 把校验后的 claims 注入 context
+// ctx 原链路上下文，c 校验通过的身份声明
+func WithClaims(ctx context.Context, c *AccessClaims) context.Context {
+	return context.WithValue(ctx, claimsKey{}, c)
+}
+
+// ClaimsFrom 从 context 取 claims，未注入返回零值与 false
+// 受保护端点用它取身份，签名与普通端点保持一致
+func ClaimsFrom(ctx context.Context) (*AccessClaims, bool) {
+	c, ok := ctx.Value(claimsKey{}).(*AccessClaims)
+	return c, ok
+}
+
+// AccessRequired 访问令牌中间件：校验通过后把 claims 注入 context
+// 受保护端点用 ClaimsFrom 取身份，签名与普通端点一致
+func (h *Handler) AccessRequired(next transport.HandlerFunc) transport.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) error {
 		claims, err := h.svc.ValidateAccess(r.Context(), bearerToken(r))
 		if err != nil {
-			writeError(w, toError(err))
-			return
+			return toError(err)
 		}
-		f(w, r, claims)
+		return next(w, r.WithContext(WithClaims(r.Context(), claims)))
 	}
 }
 
