@@ -19,6 +19,9 @@ export default function MeTab() {
     <div className="me-body">
       <div className="me-cover">
         <div className="me-ava">{initial}</div>
+        <div className="me-btn">
+          <button type="button">编辑资料</button>
+        </div>
       </div>
 
       <div className="me-info">
@@ -26,6 +29,22 @@ export default function MeTab() {
           <b>{name}</b>
         </div>
         <div className="id">{user ? `@${user.username}` : ''}</div>
+      </div>
+
+      {/* 粉丝/好友/徽章暂无接口，数值展示 0，接入后替换 */}
+      <div className="me-stats">
+        <div className="me-stat">
+          <b>0</b>
+          <span>粉丝</span>
+        </div>
+        <div className="me-stat">
+          <b>0</b>
+          <span>好友</span>
+        </div>
+        <div className="me-stat">
+          <b>0</b>
+          <span>徽章</span>
+        </div>
       </div>
 
       <div className="me-menu">

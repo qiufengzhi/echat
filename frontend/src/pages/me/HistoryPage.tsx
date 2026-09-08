@@ -24,7 +24,19 @@ export default function HistoryPage() {
     <div className="me-sub">
       <header className="sub-top">
         <button className="back" type="button" aria-label="返回" onClick={handleBack}>
-          ←
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
         </button>
         <h1 className="title">历史记录</h1>
       </header>
@@ -33,22 +45,20 @@ export default function HistoryPage() {
         <div className="empty-state">
           <span className="es-ic">🕘</span>
           <b>还没有进过频道</b>
-          <p>在主界面创建或加入频道后，记录会出现在这里</p>
         </div>
       ) : (
-        <ul className="history-list">
-          {entries.map(entry => (
-            <li key={entry.roomId}>
-              <button type="button" onClick={() => navigate(`/channel/${entry.roomId}`)}>
-                <div className="hl-main">
-                  <b>{entry.roomId}</b>
-                  <span>{formatTime(entry.joinedAt)}</span>
-                </div>
-                <span className="chev">›</span>
-              </button>
-            </li>
-          ))}
-        </ul>
+        entries.map(entry => (
+          <button
+            type="button"
+            className="row-item"
+            key={entry.roomId}
+            onClick={() => navigate(`/channel/${entry.roomId}`)}
+          >
+            <span className="ri">🎤</span>
+            <b>{entry.roomId}</b>
+            <span className="val">{formatTime(entry.joinedAt)}</span>
+          </button>
+        ))
       )}
     </div>
   )

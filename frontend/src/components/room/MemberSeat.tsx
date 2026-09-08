@@ -17,7 +17,19 @@ export function avatarGradient(id: string) {
   return GRADIENT_CLASSES[Math.abs(hash) % GRADIENT_CLASSES.length]
 }
 
-// MemberSeat 渲染单个席位：真实成员展示头像/昵称/状态，空席位作为邀请入口
+// SeatRole 席位可带徽章的角色，排除 AI 与空席位
+type SeatRole = 'host' | 'cohost' | 'speaker' | 'listener'
+
+// ROLE_BADGE 席位角色徽标全词文案，配色见 .badge-role 各变体
+const ROLE_BADGE: Record<SeatRole, string> = {
+  host: '房主', // 房主，创建房间的人
+  cohost: '副房主', // 副房主，继承管理权限
+  speaker: '嘉宾', // 上麦嘉宾
+  listener: '听众', // 听众，可举手
+}
+
+// MemberSeat 渲染单个席位：真实成员展示头像/角色徽章/昵称/状态副文案，空席位作为邀请入口
+// 状态文案优先级：已静音 > 举手了 > 正在说话 > 已连麦 > 在线
 export default function MemberSeat({ member, onInvite }: MemberSeatProps) {
   if (member.role === 'empty') {
     return (
@@ -42,32 +54,26 @@ export default function MemberSeat({ member, onInvite }: MemberSeatProps) {
   }
 
   const isSpeaking = member.isSpeaking && !member.isMuted
-  // 状态优先级：被静音 > 举手中 > 说话中 > 在线，静音/举手都显示文字，说话中只显示音波
   const statusText = member.isMuted
     ? '已静音'
     : member.isWaiting
-      ? '举手中'
-      : member.isSpeaking
-        ? '说话中'
-        : '在线'
+      ? '举手了'
+      : isSpeaking
+        ? '正在说话'
+        : member.role === 'speaker' || member.role === 'cohost'
+          ? '已连麦'
+          : '在线'
   const gradientClass = avatarGradient(member.id)
 
   return (
-    <div className={`seat${isSpeaking ? ' speaking' : ''}${member.isMuted ? ' muted' : ''}`}>
+    <div className={`seat${isSpeaking ? ' speaking' : ''}`}>
       <div className={`ava ${gradientClass}`}>
         {member.name.slice(0, 1)}
-        {member.role === 'host' && <span className="badge-host">👑</span>}
-        {member.role === 'cohost' && <span className="badge-role cohost">副</span>}
+        <span className={`badge-role ${member.role}`}>{ROLE_BADGE[member.role]}</span>
         {member.isWaiting && <span className="raise-ic">🙌</span>}
-        {member.isMuted && <span className="badge-mute">🔇</span>}
       </div>
-      {isSpeaking && (
-        <div className="wave">
-          <i /><i /><i />
-        </div>
-      )}
       <div className="nm">{member.isSelf ? `${member.name} · 我` : member.name}</div>
-      {!isSpeaking && <div className="st">{statusText}</div>}
+      <div className="sg">{statusText}</div>
     </div>
   )
 }

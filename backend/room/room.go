@@ -54,9 +54,9 @@ func createRoom(roomID string) *Room {
 	}
 
 	r := &Room{
-		ID:      roomID,
-		AggID:   uuid.NewString(), // 内部聚合根 id，事件骨干排列坐标；对外只暴露 roomID 短码
-		Clients: make(map[string]*Client),
+		ID:        roomID,
+		AggID:     uuid.NewString(), // 内部聚合根 id，事件骨干排列坐标；对外只暴露 roomID 短码
+		Clients:   make(map[string]*Client),
 		RoleOf:    make(map[string]string), // 互斥角色快照，join/transfer 时写，leave 时清
 		MutedOf:   make(map[string]bool),   // 静音叠加集合，静音管理信令接入后写入
 		WaitingOf: make(map[string]bool),   // 举手集合，审批/拒绝时收敛，离开时清除
@@ -77,6 +77,15 @@ func getOrCreateRoom(roomID string) *Room {
 	}
 
 	return createRoom(roomID)
+}
+
+// Exists 判断指定频道号当前是否有在线房间（信令层有 room 实例即为可加入）
+// 房间是内存动态态，全部成员离开即删除，故「存在」与「当前在线」等价
+func Exists(roomID string) bool {
+	roomLock.RLock()
+	defer roomLock.RUnlock()
+	_, ok := allSignalRooms[roomID]
+	return ok
 }
 
 // HandleConnection 为新信令连接创建客户端对象并绑定鉴权身份，然后启动读写协程

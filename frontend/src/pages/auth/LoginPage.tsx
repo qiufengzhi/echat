@@ -32,11 +32,6 @@ export default function LoginPage() {
 
   return (
     <main className="auth-body">
-      <div className="wordmark auth-logo">
-        <span className="d" />
-        苍月草
-      </div>
-
       <div className="h1">欢迎回来</div>
 
       <form className="auth-form" onSubmit={handleSubmit} noValidate>
@@ -47,7 +42,7 @@ export default function LoginPage() {
         )}
 
         <label className="field">
-          <span>账号</span>
+          <span>邮箱</span>
           <input
             type="text"
             value={identifier}
@@ -76,7 +71,7 @@ export default function LoginPage() {
         </label>
 
         <button className="primary-button" type="submit" disabled={loggingIn}>
-          {loggingIn ? '登录中…' : '登录'}
+          {loggingIn ? '登录中…' : '登 录'}
         </button>
       </form>
 

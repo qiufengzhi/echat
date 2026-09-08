@@ -17,7 +17,8 @@ import (
 	"echat-backend/store"
 	"echat-backend/tts_cli"
 	"echat-backend/wt"
-	"github.com/redis/go-redis/v9"
+	"encoding/json"
+	"github.co
 	"net/http"
 	"time"
 )
@@ -88,6 +89,13 @@ func main() {
 	http.HandleFunc("POST /api/v1/auth/password/reset-request", authHandler.PasswordResetRequest)
 	http.HandleFunc("POST /api/v1/auth/password/reset", authHandler.PasswordReset)
 	http.HandleFunc("POST /api/v1/auth/password/change", authHandler.AccessRequired(authHandler.PasswordChange))
+
+	// 房间存在性校验：加入频道前先确认频道号当前有在线房间，无则前端提示不存在，避免误建新房
+	// exists 布尔即信令层房间实例是否在线（房间为内存动态态，全员离开即消失）
+	http.HandleFunc("GET /api/v1/rooms/{code}", authHandler.AccessRequired(func(w http.ResponseWriter, r *http.Request, _ *authn.AccessClaims) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"exists": room.Exists(r.PathValue("code"))})
+	}))
 
 	http.HandleFunc("/", handlers.IndexHandler)
 	http.HandleFunc("/ws", handlers.WebSocketHandler(authSvc)) // 注册带鉴权的 WebSocket 处理函数

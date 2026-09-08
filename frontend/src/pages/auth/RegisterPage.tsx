@@ -92,11 +92,10 @@ export default function RegisterPage() {
                 type="email"
                 value={email}
                 onChange={e => { setEmail(e.target.value); setError(null) }}
-                placeholder="you@email.com（可选）"
+                placeholder="you@email.com"
                 autoComplete="email"
                 disabled={submitting}
               />
-              <span className="field-hint">不填也能注册，稍后可再绑定。</span>
             </label>
 
             <label className="field">

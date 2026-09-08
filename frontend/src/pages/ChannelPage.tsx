@@ -5,6 +5,7 @@ import HostTransferModal from '../components/modals/HostTransferModal'
 import ControlDock from '../components/room/ControlDock'
 import MemberSeatGrid from '../components/room/MemberSeatGrid'
 import MemberSheet from '../components/room/MemberSheet'
+import RaiseSheet from '../components/room/RaiseSheet'
 import RemoteAudio from '../components/room/RemoteAudio'
 import type { User } from '../hooks/useVoiceRoom'
 import { useVoiceRoom } from '../hooks/useVoiceRoom'
@@ -126,7 +127,7 @@ function buildMembers(input: BuildMembersInput): VoiceRoomMember[] {
 function getRoomStatus(isConnected: boolean, isReconnecting: boolean, error: string | null): RoomStatusCopy {
   if (isReconnecting) return { connectionText: '重连中', qualityText: '正在恢复', tone: 'reconnecting' }
   if (error) return { connectionText: '连接异常', qualityText: '请检查网络', tone: 'reconnecting' }
-  if (isConnected) return { connectionText: '已连上', qualityText: '声音流畅', tone: 'ready' }
+  if (isConnected) return { connectionText: '连接成功', qualityText: '声音流畅', tone: 'ready' }
   return { connectionText: '准备中', qualityText: '等朋友进来', tone: 'waiting' }
 }
 
@@ -139,7 +140,7 @@ export default function ChannelPage() {
   const user = getAuthUser()
   const username = user?.display_name || user?.username || ''
 
-  const [isMemberSheetOpen, setIsMemberSheetOpen] = useState(false) // 成员面板开关
+  const [activeSheet, setActiveSheet] = useState<'raise' | 'members' | null>(null) // 当前展开的底部面板
   const [isHostTransferOpen, setIsHostTransferOpen] = useState(false) // 房主交接弹窗开关
   const [joinError, setJoinError] = useState<string | null>(null) // 进房失败提示
 
@@ -242,15 +243,27 @@ export default function ChannelPage() {
 
       <header className="sub-top">
         <button className="back" type="button" aria-label="返回主界面" onClick={handleLeave}>
-          ←
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
         </button>
-        <h1 className="title">频道</h1>
+        <h1 className="title">{normalizedRoomId}</h1>
       </header>
 
       <div className="channel-head">
         <div className="room-chip">
-          <span className="no">{normalizedRoomId}</span>
-          <span className="cnt">{onlineCount} 人在线</span>
+          <span className="no">频道</span>
+          <span className="cnt">● {onlineCount} 人在线</span>
         </div>
         <span className={`status-pill ${status.tone}`}>
           <i />
@@ -281,22 +294,33 @@ export default function ChannelPage() {
         canManage={voiceRoom.canManage}
         selfRole={voiceRoom.selfRole}
         isWaiting={isWaiting}
-        isMemberOpen={isMemberSheetOpen}
+        activeSheet={activeSheet}
         onToggleMute={voiceRoom.toggleMute}
         onToggleSpeaker={voiceRoom.toggleSpeaker}
         onToggleAI={voiceRoom.toggleAI}
         onRaiseHand={voiceRoom.raiseHand}
-        onToggleMembers={() => setIsMemberSheetOpen(open => !open)}
+        onToggleSheet={sheet => setActiveSheet(prev => (prev === sheet ? null : sheet))}
+      />
+
+      <RaiseSheet
+        isOpen={activeSheet === 'raise'}
+        users={voiceRoom.users}
+        waitingUserIds={voiceRoom.waitingUserIds}
+        selfId={selfId}
+        canManage={voiceRoom.canManage}
+        onClose={() => setActiveSheet(null)}
+        onApprove={voiceRoom.approveMic}
+        onReject={voiceRoom.rejectMic}
       />
 
       <MemberSheet
-        isOpen={isMemberSheetOpen}
+        isOpen={activeSheet === 'members'}
         users={voiceRoom.users}
         waitingUserIds={voiceRoom.waitingUserIds}
         mutedUserIds={voiceRoom.mutedUserIds}
         selfId={selfId}
         canManage={voiceRoom.canManage}
-        onClose={() => setIsMemberSheetOpen(false)}
+        onClose={() => setActiveSheet(null)}
         onApprove={voiceRoom.approveMic}
         onReject={voiceRoom.rejectMic}
         onKick={voiceRoom.kickMic}
