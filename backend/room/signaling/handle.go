@@ -110,10 +110,10 @@ func handleAiToggle(client *gateway.Client, msg *Message) {
 	}
 
 	if req.Enable {
-		global.AIStates.SetOnline(roomID) // 开启：直接进入在线状态
+		aiState.Set(roomID, "online") // 开启：直接进入在线状态
 		recordAiToggle(roomID, "online")
 	} else {
-		global.AIStates.SetOffline(roomID) // 关闭：回到离线状态
+		aiState.Set(roomID, "offline") // 关闭：回到离线状态
 		recordAiToggle(roomID, "offline")
 	}
 }
@@ -364,7 +364,7 @@ func disconnect(client *gateway.Client, preferredNextHostID string, reason strin
 					})
 
 					if outcome.WasHost && outcome.NextHostID != "" && outcome.NextHostID != client.UserID {
-						global.AIStates.SetOffline(roomID) // 房主交接时重置 AI 为离线，新房主需重新开启
+						aiState.Set(roomID, "offline") // 房主交接时重置 AI 为离线，新房主需重新开启
 						broadcastToRoom(roomID, client.ConnID, MsgTypeHostChanged, map[string]string{
 							"host_id": outcome.NextHostID,
 						})
@@ -388,18 +388,16 @@ func disconnect(client *gateway.Client, preferredNextHostID string, reason strin
 
 				// 房间清空：从注册表删除并清理 AI 状态
 				if outcome.ShouldDelete {
-					roomsLock.Lock()
-					if cur, ok := allSignalRooms[roomID]; ok {
+					if cur, ok := rooms.Get(roomID); ok {
 						cur.Lock.RLock()
 						empty := len(cur.Clients) == 0
 						cur.Lock.RUnlock()
 						if empty {
-							delete(allSignalRooms, roomID)
-							global.AIStates.Remove(roomID)
+							rooms.Delete(roomID)
+							aiState.Remove(roomID)
 							logger.Infow("房间已删除", "roomID", roomID)
 						}
 					}
-					roomsLock.Unlock()
 				}
 			}
 		}

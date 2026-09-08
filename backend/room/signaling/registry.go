@@ -1,18 +1,19 @@
 package signaling
 
 import (
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"echat-backend/config"
+	"echat-backend/global"
 	"echat-backend/logging"
 	"echat-backend/room/aggregate"
 	"echat-backend/room/gateway"
 	"echat-backend/room/persist"
 	"echat-backend/room/projection"
+	"echat-backend/room/registry"
 	"echat-backend/sfu"
 )
 
@@ -20,10 +21,9 @@ import (
 var logger = logging.New("room")
 
 var (
-	// allSignalRooms 信令层在线房间注册表：只承载 active 房间，全员离开即删除
-	allSignalRooms = make(map[string]*aggregate.Room)
-	// roomsLock 保护 allSignalRooms 的并发读写
-	roomsLock sync.RWMutex
+	// rooms 在线房间注册表：只承载 active 房间，全员离开即删除
+	// 经 RoomRegistry 端口访问，调用方不感知内存实现（P7 可换 Redis 实现）
+	rooms registry.RoomRegistry = registry.NewMemoryRegistry()
 	// sfuServer 全局 SFU 引擎实例，管理所有房间的 WebRTC PeerConnection 和音频转发
 	sfuServer = sfu.NewSFUServer()
 )
@@ -35,7 +35,29 @@ var (
 	recorder aggregate.EventRecorder
 	// roleProjector SpiceDB 授权投影器，内部判空降级
 	roleProjector = projection.AuthzProjector{}
+	// aiState 房间 AI 状态存储：默认桥接 global.AIStates（SFU 决策引擎共享同一真相源）
+	aiState registry.AIStateStore = globalAIAdapter{}
 )
+
+// globalAIAdapter 把 global.AIStates 适配成 AIStateStore 端口，保持与 SFU/LLM 共享的真相源与广播语义
+type globalAIAdapter struct{}
+
+// Get 实现 AIStateStore：委托 global.AIStates
+func (globalAIAdapter) Get(roomID string) string { return global.AIStates.Get(roomID).String() }
+
+// Set 实现 AIStateStore：按状态串委托全局状态机（online/offline 会经 emit 广播 ai_status）
+func (globalAIAdapter) Set(roomID string, state string) {
+	switch state {
+	case "online":
+		global.AIStates.SetOnline(roomID)
+	case "offline":
+		global.AIStates.SetOffline(roomID)
+	default: // standby 由唤醒/静默超时引擎驱动，服务端切换不直接写
+	}
+}
+
+// Remove 实现 AIStateStore：委托 global.AIStates
+func (globalAIAdapter) Remove(roomID string) { global.AIStates.Remove(roomID) }
 
 // SetStore 注入 pgx 连接池，事实落库与事件记账共用同一池
 // st 由 App 启动时传入 store.Store.Pool() 的产物，与事务性 outbox relay 共用
@@ -48,14 +70,12 @@ func SetStore(st *pgxpool.Pool) {
 // createRoom 创建房间聚合；如果房间已存在，则直接返回已有房间
 // roomID 前端传入或生成的房间号，调用前应已做空值校验
 func createRoom(roomID string) *aggregate.Room {
-	roomsLock.Lock()
-	defer roomsLock.Unlock()
-	if existing, ok := allSignalRooms[roomID]; ok {
+	if existing, ok := rooms.Get(roomID); ok {
 		return existing
 	}
 	r := aggregate.NewRoom(roomID)
 	r.AggID = uuid.NewString() // 内部聚合根 id，事件骨干排列坐标；对外只暴露 roomID 短码
-	allSignalRooms[roomID] = r
+	rooms.Put(roomID, r)
 	logger.Infow("房间已创建", "roomID", roomID)
 	return r
 }
@@ -63,10 +83,7 @@ func createRoom(roomID string) *aggregate.Room {
 // getOrCreateRoom 先查找房间，不存在时再创建，避免调用方重复写判断逻辑
 // 返回值始终是可用房间实例
 func getOrCreateRoom(roomID string) *aggregate.Room {
-	roomsLock.RLock()
-	r, exists := allSignalRooms[roomID]
-	roomsLock.RUnlock()
-	if exists {
+	if r, exists := rooms.Get(roomID); exists {
 		return r
 	}
 	return createRoom(roomID)
@@ -74,9 +91,7 @@ func getOrCreateRoom(roomID string) *aggregate.Room {
 
 // getRoomByID 按短码返回在线房间；不存在返回 nil
 func getRoomByID(roomID string) *aggregate.Room {
-	roomsLock.RLock()
-	r, ok := allSignalRooms[roomID]
-	roomsLock.RUnlock()
+	r, ok := rooms.Get(roomID)
 	if !ok {
 		return nil
 	}
@@ -86,10 +101,7 @@ func getRoomByID(roomID string) *aggregate.Room {
 // Exists 判断指定频道号当前是否有在线房间（信令层有 room 实例即为可加入）
 // 房间是内存动态态，全部成员离开即删除，故「存在」与「当前在线」等价
 func Exists(roomID string) bool {
-	roomsLock.RLock()
-	defer roomsLock.RUnlock()
-	_, ok := allSignalRooms[roomID]
-	return ok
+	return rooms.Exists(roomID)
 }
 
 // StartCleanupLoop 启动空房间清理协程与在线热状态扫刷协程
@@ -107,17 +119,15 @@ func cleanupIdleRooms() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		roomsLock.Lock()
-		for id, r := range allSignalRooms {
+		for id, r := range rooms.All() {
 			r.Lock.RLock()
 			empty := len(r.Clients) == 0
 			r.Lock.RUnlock()
 			if empty {
-				delete(allSignalRooms, id)
+				rooms.Delete(id)
 				logger.Infow("清理空闲房间", "roomID", id)
 			}
 		}
-		roomsLock.Unlock()
 	}
 }
 
