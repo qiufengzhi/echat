@@ -1,7 +1,9 @@
 # =============================================================================
 # 构建阶段：gcc 用于编译 grpcio 的原生扩展
+# REG 用于本地 DaoCloud 镜像加速（deploy/docker-compose.local.yml 传入），默认官方源
 # =============================================================================
-FROM python:3.12-slim AS builder
+ARG REG=docker.io/library
+FROM ${REG}/python:3.12-slim AS builder
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc \
@@ -18,7 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # =============================================================================
 # 运行阶段：不含 gcc，镜像更小更安全
 # =============================================================================
-FROM python:3.12-slim AS runtime
+FROM ${REG}/python:3.12-slim AS runtime
 
 # 从构建阶段搬运完整的虚拟环境
 COPY --from=builder /opt/venv /opt/venv

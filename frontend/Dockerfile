@@ -1,5 +1,7 @@
 # 前端构建
-FROM node:22-alpine AS builder
+# REG 用于本地 DaoCloud 镜像加速（deploy/docker-compose.local.yml 传入），默认官方源
+ARG REG=docker.io/library
+FROM ${REG}/node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -16,7 +18,7 @@ COPY . .
 RUN npm run build
 
 # 运行阶段
-FROM nginx:1.27-alpine
+FROM ${REG}/nginx:1.27-alpine
 
 # 复制构建产物
 COPY --from=builder /app/dist /usr/share/nginx/html

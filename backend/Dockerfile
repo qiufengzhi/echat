@@ -1,5 +1,7 @@
-# 构建阶段
-FROM golang:1.25-alpine AS builder
+# 构建阶段（go.mod 声明 go 1.26.0，需同步升级基础镜像）
+# REG 用于本地 DaoCloud 镜像加速（deploy/docker-compose.local.yml 传入），默认官方源
+ARG REG=docker.io/library
+FROM ${REG}/golang:1.26-alpine AS builder
 
 WORKDIR /app
 
@@ -18,7 +20,7 @@ COPY . .
 RUN CGO_ENABLED=1 GOOS=linux go build -tags opus_native -o server .
 
 # 运行阶段
-FROM alpine:3.21
+FROM ${REG}/alpine:3.21
 
 WORKDIR /app
 

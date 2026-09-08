@@ -51,7 +51,7 @@ jobs:
       - name: Set up Go # 准备后端测试所需的 Go 环境
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25" # 与后端 Dockerfile 和 go.mod 使用的 Go 版本保持一致
+          go-version: "1.26" # 与后端 Dockerfile 和 go.mod 使用的 Go 版本保持一致
 
       - name: Test backend # 运行后端测试，至少保证编译和包依赖正常
         working-directory: backend
