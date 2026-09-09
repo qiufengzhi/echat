@@ -1,5 +1,7 @@
 import { useNavigate } from 'react-router-dom'
 
+import BackHeader from '../../components/layout/BackHeader'
+
 // SETTING_ROWS 设置子页的占位列表项，后续在独立阶段逐个接入真实功能
 const SETTING_ROWS = [
   { icon: '🌙', label: '深色模式', val: '›' },
@@ -18,24 +20,7 @@ export default function SettingsPage() {
 
   return (
     <div className="me-sub">
-      <header className="sub-top">
-        <button className="back" type="button" aria-label="返回" onClick={handleBack}>
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M15 18l-6-6 6-6" />
-          </svg>
-        </button>
-        <h1 className="title">设置</h1>
-      </header>
+      <BackHeader title="设置" onBack={handleBack} />
 
       {SETTING_ROWS.map(row => (
         <div className="row-item" key={row.label}>

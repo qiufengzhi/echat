@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
+import BackHeader from '../../components/layout/BackHeader'
 import { login, register } from '../../services/auth'
 
 // RegisterPage 注册页：昵称(username)/邮箱(可选)/密码；本地账号注册即自动登录进主界面，
@@ -46,82 +47,81 @@ export default function RegisterPage() {
     }
   }
 
+  // goBack 返回上一页，直链打开（无可回退历史）时退回登录页
+  const goBack = () => {
+    if (window.history.length > 1) navigate(-1)
+    else navigate('/login')
+  }
+
   return (
-    <main className="auth-body">
-      <div className="wordmark auth-logo">
-        <span className="d" />
-        苍月草
-      </div>
+    <div className="auth-page">
+      <BackHeader onBack={goBack} />
+      <main className="auth-body">
+        {verifyTip ? (
+          <>
+            <div className="h1">就差最后一步</div>
+            <p className="slogan">验证链接已发到你的邮箱，点一下即可开始使用。</p>
+            <Link className="primary-button auth-mt" to="/login">
+              返回登录
+            </Link>
+          </>
+        ) : (
+          <>
+            <form className="auth-form" onSubmit={handleSubmit} noValidate>
+              {error && (
+                <div className="form-message" role="alert">
+                  ⚠️ {error}
+                </div>
+              )}
 
-      {verifyTip ? (
-        <>
-          <div className="h1">就差最后一步</div>
-          <p className="slogan">验证链接已发到你的邮箱，点一下即可开始使用。</p>
-          <Link className="primary-button auth-mt" to="/login">
-            返回登录
-          </Link>
-        </>
-      ) : (
-        <>
-          <div className="h1">给朋友留一个有声音的小频道</div>
-          <p className="slogan">注册一个账号，随时回来。</p>
+              <label className="field">
+                <span>昵称</span>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={e => { setUsername(e.target.value); setError(null) }}
+                  placeholder="昵称"
+                  autoComplete="username"
+                  disabled={submitting}
+                />
+              </label>
 
-          <form className="auth-form" onSubmit={handleSubmit} noValidate>
-            {error && (
-              <div className="form-message" role="alert">
-                ⚠️ {error}
-              </div>
-            )}
+              <label className="field">
+                <span>邮箱（可选）</span>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={e => { setEmail(e.target.value); setError(null) }}
+                  placeholder="you@email.com"
+                  autoComplete="email"
+                  disabled={submitting}
+                />
+              </label>
 
-            <label className="field">
-              <span>昵称</span>
-              <input
-                type="text"
-                value={username}
-                onChange={e => { setUsername(e.target.value); setError(null) }}
-                placeholder="朋友们怎么称呼你?"
-                autoComplete="username"
-                disabled={submitting}
-              />
-              <span className="field-hint">你的显示名，别人在频道里看到的名字。</span>
-            </label>
+              <label className="field">
+                <span>密码</span>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={e => { setPassword(e.target.value); setError(null) }}
+                  placeholder="至少 8 位"
+                  autoComplete="new-password"
+                  disabled={submitting}
+                />
+              </label>
 
-            <label className="field">
-              <span>邮箱</span>
-              <input
-                type="email"
-                value={email}
-                onChange={e => { setEmail(e.target.value); setError(null) }}
-                placeholder="you@email.com"
-                autoComplete="email"
-                disabled={submitting}
-              />
-            </label>
+              <button className="primary-button" type="submit" disabled={submitting}>
+                {submitting ? '创建中…' : '创建账号'}
+              </button>
+            </form>
 
-            <label className="field">
-              <span>密码</span>
-              <input
-                type="password"
-                value={password}
-                onChange={e => { setPassword(e.target.value); setError(null) }}
-                placeholder="至少 8 位"
-                autoComplete="new-password"
-                disabled={submitting}
-              />
-            </label>
-
-            <button className="primary-button" type="submit" disabled={submitting}>
-              {submitting ? '创建中…' : '创建账号'}
-            </button>
-          </form>
-
-          <p className="switch-line">
-            已有账号?
-            <Link to="/login">直接登录</Link>
-          </p>
-          <p className="auth-tip">🔒 注册即自动登录，稍后可再绑定更多登录方式。</p>
-        </>
-      )}
-    </main>
+            <p className="switch-line">
+              已有账号?
+              <Link to="/login">直接登录</Link>
+            </p>
+          </>
+        )}
+      </main>
+    </div>
   )
 }

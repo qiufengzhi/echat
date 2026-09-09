@@ -1,8 +1,11 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
+
+import BackHeader from '../../components/layout/BackHeader'
 
 // ResetPasswordPage 重置密码入口页：只收邮箱，后端防枚举恒返回成功，统一提示已发送
 export default function ResetPasswordPage() {
+  const navigate = useNavigate()
   const [email, setEmail] = useState('') // 用户输入的邮箱
   const [submitting, setSubmitting] = useState(false) // 请求中置灰按钮
   const [sent, setSent] = useState(false) // 是否已提交并展示"已发送"提示
@@ -27,49 +30,52 @@ export default function ResetPasswordPage() {
     }
   }
 
+  // goBack 返回上一页，直链打开（无可回退历史）时退回登录页
+  const goBack = () => {
+    if (window.history.length > 1) navigate(-1)
+    else navigate('/login')
+  }
+
   return (
-    <main className="auth-body">
-      <div className="wordmark auth-logo">
-        <span className="d" />
-        苍月草
-      </div>
+    <div className="auth-page">
+      <BackHeader onBack={goBack} />
+      <main className="auth-body">
+        {sent ? (
+          <>
+            <div className="h1">重置链接已发送</div>
+            <p className="slogan">如果该邮箱已注册，你会收到一封重置密码的邮件。</p>
+            <Link className="primary-button auth-mt" to="/login">
+              返回登录
+            </Link>
+          </>
+        ) : (
+          <>
+            <div className="h1">找回密码</div>
 
-      {sent ? (
-        <>
-          <div className="h1">重置链接已发送</div>
-          <p className="slogan">如果该邮箱已注册，你会收到一封重置密码的邮件。</p>
-          <Link className="primary-button auth-mt" to="/login">
-            返回登录
-          </Link>
-        </>
-      ) : (
-        <>
-          <div className="h1">找回密码</div>
-          <p className="slogan">输入注册邮箱，我们会发一封重置链接给你。</p>
+            <form className="auth-form" onSubmit={handleSubmit} noValidate>
+              <label className="field">
+                <span>邮箱</span>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  placeholder="you@email.com"
+                  autoComplete="email"
+                  disabled={submitting}
+                />
+              </label>
+              <button className="primary-button" type="submit" disabled={submitting}>
+                {submitting ? '发送中…' : '发送重置链接'}
+              </button>
+            </form>
 
-          <form className="auth-form" onSubmit={handleSubmit} noValidate>
-            <label className="field">
-              <span>邮箱</span>
-              <input
-                type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                placeholder="you@email.com"
-                autoComplete="email"
-                disabled={submitting}
-              />
-            </label>
-            <button className="primary-button" type="submit" disabled={submitting}>
-              {submitting ? '发送中…' : '发送重置链接'}
-            </button>
-          </form>
-
-          <p className="switch-line">
-            想起密码了?
-            <Link to="/login">返回登录</Link>
-          </p>
-        </>
-      )}
-    </main>
+            <p className="switch-line">
+              想起密码了?
+              <Link to="/login">返回登录</Link>
+            </p>
+          </>
+        )}
+      </main>
+    </div>
   )
 }

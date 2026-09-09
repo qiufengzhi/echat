@@ -17,7 +17,7 @@ const ROOM_CARDS = [
   { thumb: '🌙', bg: 'linear-gradient(150deg, #D9C8F8, #A98FF0)', title: '深夜电台·助眠', online: '6 人在线', tag: '#深夜电台' },
 ]
 
-// ChannelsTab 是主界面「频道」页：创建/加入频道 + 热门标签 + 大家都在开列表
+// ChannelsTab 是主界面「频道」页：创建/加入频道 + 热门标签 + 大家都在看列表
 export default function ChannelsTab() {
   const navigate = useNavigate()
   const [joinCode, setJoinCode] = useState('') // 「输入频道号加入」输入的值
@@ -91,7 +91,7 @@ export default function ChannelsTab() {
         ))}
       </div>
 
-      <div className="sec-title">大家都在开</div>
+      <div className="sec-title">大家都在看</div>
       <div className="room-list">
         {ROOM_CARDS.map(card => (
           <div className="room-card" key={card.title}>
