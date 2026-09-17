@@ -12,12 +12,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
 	"echat-backend/config"
 	"echat-backend/ent"
+	"echat-backend/migrations"
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
@@ -73,9 +73,6 @@ func (s *Store) Ent() *ent.Client {
 	return s.ent
 }
 
-// migrationDir 版本化迁移文件目录（相对运行目录，与 config.yaml 同级）
-const migrationDir = "migrations"
-
 // revisionsTable Atlas 迁移日记表（新版本放于同名 schema，旧版为 public.atlas_schema_migrations）
 const revisionsTable = "atlas_schema_revisions.atlas_schema_revisions"
 
@@ -102,12 +99,13 @@ func (s *Store) Migrate(ctx context.Context) error {
 	return nil
 }
 
-// latestMigrationVersion 返回迁移目录中最新迁移文件的版本号
+// latestMigrationVersion 返回内嵌迁移目录中最新迁移文件的版本号
+// 迁移文件由 backend/migrations 编译期内嵌进二进制，运行时不再依赖磁盘上的迁移目录
 // Atlas 迁移文件命名规范 {version}_{description}.sql，version 为第一个下划线前段（如 20260903）
 func latestMigrationVersion() (string, error) {
-	entries, err := os.ReadDir(migrationDir)
+	entries, err := migrations.FS.ReadDir(".")
 	if err != nil {
-		return "", fmt.Errorf("读取迁移目录 %s: %w", migrationDir, err)
+		return "", fmt.Errorf("读取内嵌迁移目录: %w", err)
 	}
 	var latest string
 	for _, e := range entries {
@@ -124,7 +122,7 @@ func latestMigrationVersion() (string, error) {
 		}
 	}
 	if latest == "" {
-		return "", fmt.Errorf("迁移目录 %s 下没有版本化 SQL 文件", migrationDir)
+		return "", fmt.Errorf("内嵌迁移目录中没有版本化 SQL 文件")
 	}
 	return latest, nil
 }

@@ -64,6 +64,25 @@ services:
         condition: service_healthy # postgres-init 建库脚本在首次初始化时已执行，spicedb 启动即有元组库
     # 不映射宿主端口：后端经 compose 内部网络以 spicedb:50051 访问
 
+  migrate: # 一次性（run --rm）Atlas 版本化迁移服务：对线上库 apply backend/migrations，日记表与 store.Migrate 校验对齐
+    container_name: echat-migrate
+    image: docker.m.daocloud.io/arigaio/atlas:latest # 与 dev 一致走 DaoCloud 镜像加速
+    restart: "no"
+    command:
+      - migrate
+      - apply
+      - --dir
+      - file:///migrations
+      - --revisions-schema
+      - atlas_schema_revisions
+      - --url
+      - postgres://${POSTGRES_USER:-echat}:${POSTGRES_PASSWORD:-echat}@postgres:5432/${POSTGRES_DB:-echat}?sslmode=disable
+    volumes:
+      - ./backend/migrations:/migrations:ro # 只读挂载版本化迁移目录
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   gateway: # 最外层 HTTPS 入口，负责 TLS 终止并把请求转发给前端容器
     container_name: echat-gateway # 固定容器名，方便 docker ps 和 docker logs 直接定位
     image: nginx:1.27-alpine # 直接使用官方 Nginx 镜像，避免额外维护自定义网关镜像
@@ -91,6 +110,8 @@ services:
         condition: service_healthy
       spicedb:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully # 迁移成功落库后才能启动，避免首次启动查不到日记表
     volumes:
       - ./backend/config.yaml:/app/config.yaml:ro # 后端唯一配置源：连接地址 + 全部凭据(ASR/TTS/DB/Redis/SpiceDB/JWT)都在此文件,不入 git,直接维护在服务器(以 config.yaml.prod.example 为模板)
       - /etc/letsencrypt/live/echat.qxbnx.cn:/etc/letsencrypt/live/echat.qxbnx.cn:ro # WebTransport/QUIC 握手证书，与 gateway 共用 Let's Encrypt 续期
