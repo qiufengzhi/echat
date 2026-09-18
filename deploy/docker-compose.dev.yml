@@ -71,6 +71,18 @@ services:
         condition: service_healthy
 
   # SpiceDB(Zanzibar) 对象级授权服务：关系元组存储复用 Postgres（echat_spicedb 库），不加新存储
+  spicedb-migrate: # 一次性迁移：serve 不自动建表，先 migrate head 建好关系元组表
+    container_name: echat-dev-spicedb-migrate
+    image: ghcr.io/authzed/spicedb:latest
+    restart: "no"
+    command: ["migrate", "head"]
+    environment:
+      SPICEDB_DATASTORE_ENGINE: postgres
+      SPICEDB_DATASTORE_CONN_URI: postgres://echat:echat@postgres:5432/echat_spicedb?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   spicedb:
     container_name: echat-dev-spicedb
     image: ghcr.io/authzed/spicedb:latest
@@ -80,13 +92,15 @@ services:
       - "50051:50051"                 # gRPC 鉴权接口（control-plane 权限裁决）
     environment:
       SPICEDB_GRPC_PRESHARED_KEY: dev-secret-local  # 与 config.yaml 默认一致
-      SPICEDB_DATASTORE_ENGINE: postgres            # 复用同一 Postgres，spicedb 自建库表
+      SPICEDB_DATASTORE_ENGINE: postgres            # 复用同一 Postgres，元组表由 spicedb-migrate 迁移
       SPICEDB_DATASTORE_CONN_URI: postgres://echat:echat@postgres:5432/echat_spicedb?sslmode=disable
       SPICEDB_DATASTORE_REVISION_QUANTIZATION: 1s   # 降低可读版本推进粒度，控制面强一致读等待上限
       SPICEDB_LOG_LEVEL: info
     depends_on:
       postgres:
         condition: service_healthy
+      spicedb-migrate:
+        condition: service_completed_successfully # 元组表迁移落库后才 serve，否则 WriteSchema 报 datastore 内部错误
 
 volumes:
   echat_dev_pgdata:

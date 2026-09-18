@@ -49,7 +49,19 @@ services:
       retries: 10
     # 不映射宿主端口：后端经 compose 内部网络以 redis:6379 访问
 
-  spicedb: # 对象级授权（Zanzibar）：关系元组存储复用 Postgres（echat_spicedb 库，postgres-init 自动建库）
+  spicedb-migrate: # 一次性（run --rm）SpiceDB datastore 迁移：serve 不自动建表，须先 migrate head 才可写 schema
+    container_name: echat-spicedb-migrate
+    image: ghcr.io/authzed/spicedb:latest
+    restart: "no"
+    command: ["migrate", "head"] # 幂等，重复执行无副作用，升级镜像时随 up 自动补齐
+    environment:
+      SPICEDB_DATASTORE_ENGINE: postgres
+      SPICEDB_DATASTORE_CONN_URI: postgres://${POSTGRES_USER:-echat}:${POSTGRES_PASSWORD:-echat}@postgres:5432/echat_spicedb?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy # echat_spicedb 库由 postgres-init 首次建卷时创建，先保证库存在再迁移
+
+  spicedb: # 对象级授权（Zanzibar）：关系元组存储复用 Postgres（postgres-init 建库 + spicedb-migrate 建表）
     container_name: echat-spicedb
     image: ghcr.io/authzed/spicedb:latest
     restart: unless-stopped
@@ -61,7 +73,9 @@ services:
       SPICEDB_DATASTORE_REVISION_QUANTIZATION: 1s # 降低可读版本推进粒度，控制面强一致读等待上限
     depends_on:
       postgres:
-        condition: service_healthy # postgres-init 建库脚本在首次初始化时已执行，spicedb 启动即有元组库
+        condition: service_healthy
+      spicedb-migrate:
+        condition: service_completed_successfully # 元组表迁移落库后才 serve，否则 WriteSchema 报 datastore 内部错误
     # 不映射宿主端口：后端经 compose 内部网络以 spicedb:50051 访问
 
   migrate: # 一次性（run --rm）Atlas 版本化迁移服务：对线上库 apply backend/migrations，日记表与 store.Migrate 校验对齐
@@ -114,13 +128,20 @@ services:
         condition: service_completed_successfully # 迁移成功落库后才能启动，避免首次启动查不到日记表
     volumes:
       - ./backend/config.yaml:/app/config.yaml:ro # 后端唯一配置源：连接地址 + 全部凭据(ASR/TTS/DB/Redis/SpiceDB/JWT)都在此文件,不入 git,直接维护在服务器(以 config.yaml.prod.example 为模板)
-      - /etc/letsencrypt/live/echat.qxbnx.cn:/etc/letsencrypt/live/echat.qxbnx.cn:ro # WebTransport/QUIC 握手证书，与 gateway 共用 Let's Encrypt 续期
+      # WebTransport/QUIC 握手证书，与 gateway 共用 Let's Encrypt 续期
+      # live/*.pem 是指向 ../../archive/<domain>/*.pem 的相对符号链接，只挂 live 目录会在容器内断链，
+      # 因此 archive 同域目录必须一并挂载，链接才能在容器内解析到真实文件
+      - /etc/letsencrypt/live/echat.qxbnx.cn:/etc/letsencrypt/live/echat.qxbnx.cn:ro
+      - /etc/letsencrypt/archive/echat.qxbnx.cn:/etc/letsencrypt/archive/echat.qxbnx.cn:ro
     expose:
       - "8080" # HTTP/WebSocket 信令端口，仅在 Compose 内部网络暴露，外部经 gateway HTTPS 进入
       - "4433/udp" # WebTransport/QUIC 信令端口，仅在 Compose 内部网络暴露，外部经宿主映射进入
     ports:
       - "50000-50100:50000-50100/udp" # 映射 WebRTC 媒体流 UDP 端口范围到宿主机，浏览器直连必需
-      - "4433:4433/udp" # 映射 WebTransport/QUIC 信令 UDP 端口到宿主机，浏览器直连必需
+      # 映射 WebTransport/QUIC 信令 UDP 端口到宿主机，浏览器直连必需
+      # 容器内 QUIC 必须绑 0.0.0.0（webtransport.addr 填 ":4433"）；宿主公网 IP 在 bridge
+      # 网络里不存在，填公网 IP 会 bind: cannot assign requested address 导致端点退出
+      - "4433:4433/udp"
 
   frontend: # 前端静态站点和 Nginx 反向代理入口
     container_name: echat-frontend # 固定容器名

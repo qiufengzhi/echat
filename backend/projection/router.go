@@ -112,7 +112,12 @@ func (r *Router) subscribe(ctx context.Context) (*nats.Subscription, error) {
 			logger.Infow("投影 durable consumer 就绪", "durable", r.cfg.Durable, "subject", "room.>")
 			return sub, nil
 		}
-		logger.Warnw("建立 durable consumer 失败，等待重试", "attempt", attempt, "error", err)
+		if errors.Is(err, nats.ErrStreamNotFound) {
+			// 流由 outbox relay 负责创建：其未就绪时（重启恢复/首启竞态）等待建成后重试
+			logger.Warnw("stream 未就绪（等待 outbox relay 创建），durable consumer 暂缓建立", "attempt", attempt, "error", err)
+		} else {
+			logger.Warnw("建立 durable consumer 失败，等待重试", "attempt", attempt, "error", err)
+		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()

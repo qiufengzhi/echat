@@ -49,11 +49,11 @@ type Config struct {
 
 // envelope 写入 JetStream 的事件信封，与蓝图 §3.2.4 对齐
 type envelope struct {
-	ID          uuid.UUID       `json:"id"`                    // 唯一事件 id（= outbox 主键），消费者去重键
-	Type        string          `json:"type"`                  // 事件类型，如 user.registered
-	AggregateID string          `json:"aggregate_id"`          // 所属聚合 id（此处为 user_id 字符串）
-	OccurredAt  string          `json:"occurred_at"`           // 业务事务时间，RFC3339，非发布/消费时间
-	Payload     json.RawMessage `json:"payload,omitempty"`     // 事件载荷，原样透传 outbox.payload
+	ID          uuid.UUID       `json:"id"`                // 唯一事件 id（= outbox 主键），消费者去重键
+	Type        string          `json:"type"`              // 事件类型，如 user.registered
+	AggregateID string          `json:"aggregate_id"`      // 所属聚合 id（此处为 user_id 字符串）
+	OccurredAt  string          `json:"occurred_at"`       // 业务事务时间，RFC3339，非发布/消费时间
+	Payload     json.RawMessage `json:"payload,omitempty"` // 事件载荷，原样透传 outbox.payload
 }
 
 // claimed 从 outbox 取出的待投递事件
@@ -70,11 +70,11 @@ type claimed struct {
 //
 // NATS 不可用时事件留在 pending 堆积，连接恢复后自动补发——业务主链路不受影响
 type Relayer struct {
-	pool *pgxpool.Pool      // 数据库连接池，用于 SKIP LOCKED 取件与状态回写
-	nc   *nats.Conn         // NATS 连接，客户端侧自带重连
+	pool *pgxpool.Pool         // 数据库连接池，用于 SKIP LOCKED 取件与状态回写
+	nc   *nats.Conn            // NATS 连接，客户端侧自带重连
 	js   nats.JetStreamContext // JetStream 上下文，执行发布
-	cfg  Config             // 运行参数
-	log  *logging.Logger    // 模块日志
+	cfg  Config                // 运行参数
+	log  *logging.Logger       // 模块日志
 }
 
 // NewRelayer 构造 relay 实例
@@ -101,7 +101,7 @@ func (r *Relayer) connectNATS(ctx context.Context) error {
 	for attempt := 1; ; attempt++ {
 		nc, err := nats.Connect(r.cfg.NatsURL,
 			nats.Name("echat-outbox-relay"),
-			nats.MaxReconnects(-1),   // 无限重连，断线重试交给客户端
+			nats.MaxReconnects(-1), // 无限重连，断线重试交给客户端
 			nats.ReconnectWait(time.Second),
 			nats.Timeout(5*time.Second),
 		)
@@ -129,25 +129,39 @@ func (r *Relayer) connectNATS(ctx context.Context) error {
 	}
 }
 
-// ensureStream 确保目标 JetStream 流存在；已存在则跳过，创建失败不致命
+// ensureStream 确保目标 JetStream 流存在；已存在则跳过，未建成则指数退避重试直至 ctx 取消
 // 事件保留策略与去重窗口在此固化：event_id 去重允许 ~2 分钟内的重复发布被过滤
+// 重试保证流必定建成：JetStream 从持久化卷恢复文件存储期 AddStream 可能瞬时失败，
+// 而投影侧 durable consumer 绑定时流不存在会一直等，流创建失败绝不能静默放弃
 func (r *Relayer) ensureStream(ctx context.Context) {
-	_, err := r.js.AddStream(&nats.StreamConfig{
-		Name:       r.cfg.Stream,
-		Subjects:   r.cfg.StreamSubjects,
-		Storage:    nats.FileStorage,     // 磁盘持久化，满足事件日志的持久与回放
-		Retention:  nats.LimitsPolicy,
-		MaxAge:     r.cfg.StreamMaxAge,
-		Duplicates: 2 * time.Minute,
-	})
-	if err == nil {
-		r.log.Infow("JetStream 流已创建", "stream", r.cfg.Stream, "subjects", r.cfg.StreamSubjects)
-		return
+	backoff := time.Second
+	for attempt := 1; ; attempt++ {
+		_, err := r.js.AddStream(&nats.StreamConfig{
+			Name:       r.cfg.Stream,
+			Subjects:   r.cfg.StreamSubjects,
+			Storage:    nats.FileStorage, // 磁盘持久化，满足事件日志的持久与回放
+			Retention:  nats.LimitsPolicy,
+			MaxAge:     r.cfg.StreamMaxAge,
+			Duplicates: 2 * time.Minute,
+		})
+		if err == nil {
+			r.log.Infow("JetStream 流已创建", "stream", r.cfg.Stream, "subjects", r.cfg.StreamSubjects, "attempt", attempt)
+			return
+		}
+		if errors.Is(err, nats.ErrStreamNameAlreadyInUse) {
+			return
+		}
+		r.log.Warnw("JetStream 流创建失败，等待重试", "stream", r.cfg.Stream, "attempt", attempt, "error", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+		if backoff > 15*time.Second {
+			backoff = 15 * time.Second
+		}
 	}
-	if errors.Is(err, nats.ErrStreamNameAlreadyInUse) {
-		return
-	}
-	r.log.Warnw("创建 JetStream 流失败，事件可能无法投递", "stream", r.cfg.Stream, "error", err)
 }
 
 // pollLoop 按 PollInterval 轮询并投递 pending 事件

@@ -170,8 +170,9 @@ certbot certonly --standalone -d echat.qxbnx.cn
 ```
 
 Let's Encrypt 会自动续期，无需额外操作。证书被两处共用：
-- Nginx 网关挂载 `fullchain.pem` / `privkey.pem`（HTTPS 终止）
-- backend 容器挂载整个 `live/echat.qxbnx.cn` 目录（WebTransport/QUIC 握手，前端默认走 `https://echat.qxbnx.cn:4433` 信令）
+- Nginx 网关挂载 `fullchain.pem` / `privkey.pem`（HTTPS 终止，Docker 会在宿主侧解析符号链接后挂真实文件）
+- backend 容器挂载 `live/<domain>` 与 `archive/<domain>` 两个目录（WebTransport/QUIC 握手，前端默认走 `https://echat.qxbnx.cn:4433` 信令）
+  > `live/*.pem` 是指向 `../../archive/<domain>/*.pem` 的相对符号链接，只挂 `live` 会让链接在容器内断链（报 `no such file or directory`），故 archive 必须一起挂
 
 certbot 续期替换私钥后，nginx 经 reload 自动生效；backend 进程在启动时加载证书私钥，因此续期后需重启容器使新私钥生效：
 

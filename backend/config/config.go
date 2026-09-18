@@ -6,6 +6,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -15,21 +16,21 @@ import (
 
 // Config 后端完整配置，各模块通过此 struct 获取各自的配置子项
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`   // HTTP/HTTPS 服务配置
-	SFU      SFUConfig      `yaml:"sfu"`      // WebRTC SFU 媒体引擎配置
-	ASR      ASRConfig      `yaml:"asr"`      // 语音识别配置
-	VAD      VADConfig      `yaml:"vad"`      // 语音活动检测配置
-	LLM      LLMConfig      `yaml:"llm"`      // LLM 服务配置
-	TTS      TTSConfig      `yaml:"tts"`      // 语音合成配置
-	AI       AIConfig       `yaml:"ai"`       // AI 语音助手配置
-	Room     RoomConfig     `yaml:"room"`     // 房间与 WebSocket 配置
-	Database DatabaseConfig `yaml:"database"` // PostgreSQL 持久层配置
-	Auth     AuthConfig     `yaml:"auth"`     // 用户系统认证与密码哈希配置
-	Log      LogConfig      `yaml:"log"`      // 日志配置
-	NATS     NATSConfig     `yaml:"nats"`     // NATS JetStream 一致性骨干配置
-	Redis    RedisConfig    `yaml:"redis"`    // 登录限流与在线热状态共享的 Redis 配置
-	SpiceDB  SpiceDBConfig  `yaml:"spicedb"`  // SpiceDB(Zanzibar) 对象级授权服务配置
-	Outbox   OutboxConfig   `yaml:"outbox"`   // 事务性 Outbox relay 参数
+	Server   ServerConfig   `yaml:"server"`       // HTTP/HTTPS 服务配置
+	SFU      SFUConfig      `yaml:"sfu"`          // WebRTC SFU 媒体引擎配置
+	ASR      ASRConfig      `yaml:"asr"`          // 语音识别配置
+	VAD      VADConfig      `yaml:"vad"`          // 语音活动检测配置
+	LLM      LLMConfig      `yaml:"llm"`          // LLM 服务配置
+	TTS      TTSConfig      `yaml:"tts"`          // 语音合成配置
+	AI       AIConfig       `yaml:"ai"`           // AI 语音助手配置
+	Room     RoomConfig     `yaml:"room"`         // 房间与 WebSocket 配置
+	Database DatabaseConfig `yaml:"database"`     // PostgreSQL 持久层配置
+	Auth     AuthConfig     `yaml:"auth"`         // 用户系统认证与密码哈希配置
+	Log      LogConfig      `yaml:"log"`          // 日志配置
+	NATS     NATSConfig     `yaml:"nats"`         // NATS JetStream 一致性骨干配置
+	Redis    RedisConfig    `yaml:"redis"`        // 登录限流与在线热状态共享的 Redis 配置
+	SpiceDB  SpiceDBConfig  `yaml:"spicedb"`      // SpiceDB(Zanzibar) 对象级授权服务配置
+	Outbox   OutboxConfig   `yaml:"outbox"`       // 事务性 Outbox relay 参数
 	WT       WTConfig       `yaml:"webtransport"` // WebTransport/QUIC 信令端点配置
 }
 
@@ -617,4 +618,23 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("WT_KEY_FILE"); v != "" {
 		cfg.WT.KeyFile = v
 	}
+	// quic-go 要求 host:port 形式，裸端口写法（"4433"）补齐后再交给监听
+	cfg.WT.Addr = normalizeListenAddr(cfg.WT.Addr)
+}
+
+// normalizeListenAddr 把监听地址规整成 host:port 形式，兼容两种易写错的写法
+// 裸端口 "4433" → ":4433"（quic-go 直接收到会报 address 4433: missing port in address）
+// 已是 host:port 的原样返回；IPv6 / 主机名等无法判定的写法保持原样，由 bind 报错给出真实原因
+func normalizeListenAddr(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return addr
+	}
+	if _, _, err := net.SplitHostPort(addr); err == nil {
+		return addr
+	}
+	if _, err := strconv.Atoi(addr); err == nil {
+		return ":" + addr
+	}
+	return addr
 }

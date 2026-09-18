@@ -146,10 +146,10 @@ func startWebTransport(cfg *config.Config, root *app.App) {
 	}
 	go func() {
 		if err := wtSrv.ListenAndServe(); err != nil {
-			logging.L().Warnw("WebTransport 服务退出", "error", err)
+			logging.L().Warnw("WebTransport 服务退出，前端将降级 WebSocket", "addr", cfg.WT.Addr, "error", err)
 		}
 	}()
-	logging.L().Infow("WebTransport 服务就绪", "addr", cfg.WT.Addr)
+	logging.L().Infow("WebTransport 服务启动中", "addr", cfg.WT.Addr)
 }
 
 // serve 按配置以 HTTPS 或 HTTP 启动监听，绑定到 App 的根 handler

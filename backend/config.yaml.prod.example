@@ -112,6 +112,10 @@ auth:
 
 webtransport:
   enabled: true                # 启用 WebTransport/QUIC 信令端点,不支持时自动降级 WebSocket
-  addr: ":4433"                # QUIC UDP 监听地址,绑全部接口供 compose 端口映射
+  # QUIC UDP 监听地址:必须只绑端口（等价于 0.0.0.0）,由 compose 的 4433:4433/udp 映射到宿主
+  # ⚠️ 不要填服务器公网 IP（如 47.x.x.x:4433）:容器在 bridge 网络里没有该地址,
+  #    bind 会报 "cannot assign requested address" 并导致 WebTransport 端点整个退出
+  #    公网 IP 只用于 sfu.nat_1_to_1_ip（ICE 候选回填）,两者语义不同
+  addr: ":4433"
   cert_file: "/etc/letsencrypt/live/echat.qxbnx.cn/fullchain.pem"  # 握手 TLS 证书,容器内路径
   key_file: "/etc/letsencrypt/live/echat.qxbnx.cn/privkey.pem"     # 握手 TLS 私钥,容器内路径
