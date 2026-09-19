@@ -18,15 +18,15 @@ import (
 // activeRoomRow 活跃频道列表返回的房间行
 type activeRoomRow struct {
 	// RoomCode 房间短码
-	RoomCode string `json:"room_code"`
+	RoomCode string `json:"roomCode"`
 	// Status 房间状态（活跃房间恒为 active）
 	Status string `json:"status"`
 	// HostID 房主用户 id
-	HostID string `json:"host_id"`
+	HostID string `json:"hostId"`
 	// HostUsername 房主昵称
-	HostUsername string `json:"host_username"`
+	HostUsername string `json:"hostUsername"`
 	// ActiveMembers 当前在线成员数（Redis 读模型）
-	ActiveMembers int64 `json:"active_members"`
+	ActiveMembers int64 `json:"activeMembers"`
 }
 
 // listRooms GET /api/v1/rooms 活跃频道列表：active_rooms 集合 + rooms 元数据 + Redis 成员数
@@ -85,7 +85,7 @@ func (h *Handler) listRooms(w http.ResponseWriter, r *http.Request) error {
 // memberItem 房间详情成员项
 type memberItem struct {
 	// UserID 成员用户 id
-	UserID string `json:"user_id"`
+	UserID string `json:"userId"`
 	// Username 成员昵称
 	Username string `json:"username"`
 }
@@ -95,11 +95,11 @@ type roomDetailRow struct {
 	// Exists 房间当前是否在线可加入（兼容旧 exists 检查端点语义）
 	Exists bool `json:"exists"`
 	// RoomCode 房间短码
-	RoomCode string `json:"room_code"`
+	RoomCode string `json:"roomCode"`
 	// Status 房间状态：active / closed / archived 等
 	Status string `json:"status"`
 	// HostID 房主用户 id
-	HostID string `json:"host_id"`
+	HostID string `json:"hostId"`
 	// Members 当前成员快照（Redis 读模型）
 	Members []memberItem `json:"members"`
 }
@@ -150,15 +150,15 @@ func (h *Handler) getRoom(w http.ResponseWriter, r *http.Request) error {
 // historyItem 我的历史单条记录
 type historyItem struct {
 	// RoomCode 房间短码
-	RoomCode string `json:"room_code"`
+	RoomCode string `json:"roomCode"`
 	// RoomID 房间聚合根 id
-	RoomID uuid.UUID `json:"room_id"`
+	RoomID uuid.UUID `json:"roomId"`
 	// Role 在场期间最后角色
 	Role string `json:"role"`
 	// JoinedAt 加入时间
-	JoinedAt time.Time `json:"joined_at"`
+	JoinedAt time.Time `json:"joinedAt"`
 	// LeftAt 离开时间（在场为 null）
-	LeftAt *time.Time `json:"left_at"`
+	LeftAt *time.Time `json:"leftAt"`
 }
 
 // myRooms GET /api/v1/me/rooms 我的房间历史：user_room_history 按用户倒序返回

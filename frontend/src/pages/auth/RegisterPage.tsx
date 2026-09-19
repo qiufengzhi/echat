@@ -34,7 +34,7 @@ export default function RegisterPage() {
         password,
         ...(email.trim() ? { email: email.trim() } : {}),
       })
-      if (result.need_verify) {
+      if (result.needVerify) {
         setVerifyTip(true)
         return
       }

@@ -17,24 +17,12 @@ const DEFAULT_ROOM_JOIN_DEFAULTS: RoomJoinDefaults = {
   speakerOnByDefault: false,
 }
 
-// server 偏好字段为后端 snake_case，与本地 camelCase 字段在此互转
-interface ServerJoinDefaults {
-  mic_on_by_default: boolean
-  speaker_on_by_default: boolean
-}
-
-function toServer(defaults: RoomJoinDefaults): ServerJoinDefaults {
+// normalizeDefaults 逐项校验服务端/本地字段类型，非法值回退假值
+function normalizeDefaults(data: Partial<RoomJoinDefaults> | null | undefined): RoomJoinDefaults {
   return {
-    mic_on_by_default: defaults.micOnByDefault,
-    speaker_on_by_default: defaults.speakerOnByDefault,
-  }
-}
-
-function fromServer(data: ServerJoinDefaults | null | undefined): RoomJoinDefaults {
-  return {
-    micOnByDefault: typeof data?.mic_on_by_default === 'boolean' ? data.mic_on_by_default : false,
+    micOnByDefault: typeof data?.micOnByDefault === 'boolean' ? data.micOnByDefault : false,
     speakerOnByDefault:
-      typeof data?.speaker_on_by_default === 'boolean' ? data.speaker_on_by_default : false,
+      typeof data?.speakerOnByDefault === 'boolean' ? data.speakerOnByDefault : false,
   }
 }
 
@@ -42,12 +30,7 @@ function fromServer(data: ServerJoinDefaults | null | undefined): RoomJoinDefaul
 function readRoomJoinDefaults(): RoomJoinDefaults {
   const raw = localStorage.getItem(ROOM_DEFAULTS_KEY)
   if (!raw) return DEFAULT_ROOM_JOIN_DEFAULTS
-  const parsed = JSON.parse(raw) as Partial<RoomJoinDefaults>
-  return {
-    micOnByDefault: typeof parsed.micOnByDefault === 'boolean' ? parsed.micOnByDefault : false,
-    speakerOnByDefault:
-      typeof parsed.speakerOnByDefault === 'boolean' ? parsed.speakerOnByDefault : false,
-  }
+  return normalizeDefaults(JSON.parse(raw) as Partial<RoomJoinDefaults>)
 }
 
 // getRoomJoinDefaults 进房时同步读取本地镜像，供 useVoiceRoom 初始化麦克风/扬声器
@@ -84,8 +67,8 @@ export async function syncRoomJoinDefaultsFromServer(): Promise<boolean> {
   try {
     const res = await authedFetch('/api/v1/me/preferences')
     if (!res.ok) return false
-    const data = (await res.json()) as ServerJoinDefaults | null
-    saveRoomJoinDefaults(fromServer(data))
+    const data = (await res.json()) as Partial<RoomJoinDefaults> | null
+    saveRoomJoinDefaults(normalizeDefaults(data))
     return true
   } catch {
     return false
@@ -98,7 +81,7 @@ export async function persistRoomJoinDefaults(defaults: RoomJoinDefaults): Promi
     const res = await authedFetch('/api/v1/me/preferences', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(toServer(defaults)),
+      body: JSON.stringify(defaults),
     })
     if (!res.ok) return false
     saveRoomJoinDefaults(defaults)

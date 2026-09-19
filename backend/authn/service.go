@@ -72,7 +72,7 @@ type RegisterResult struct {
 	// Status 注册后状态：active（本地账号）或 pending（邮箱待验证）
 	Status string `json:"status"`
 	// NeedVerify 是否需要邮箱验证（本地账号为 false）
-	NeedVerify bool `json:"need_verify"`
+	NeedVerify bool `json:"needVerify"`
 }
 
 // Register 注册用例：本地账号或邮箱账号，两种方式共用同一张 users 表

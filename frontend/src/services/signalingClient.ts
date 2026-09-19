@@ -126,7 +126,7 @@ export class SignalingClient {
   sendJoin(): void {
     this.send({
       type: 'join',
-      room_id: this.roomId,
+      roomId: this.roomId,
       payload: this.username,
     })
   }
@@ -136,7 +136,7 @@ export class SignalingClient {
   sendPing(): void {
     this.send({
       type: 'ping',
-      room_id: this.roomId,
+      roomId: this.roomId,
     })
     this.startHeartbeatTimeout()
   }
@@ -148,7 +148,7 @@ export class SignalingClient {
   sendSFUOffer(offer: RTCSessionDescriptionInit): void {
     this.send({
       type: 'sfu_offer',
-      room_id: this.roomId,
+      roomId: this.roomId,
       payload: offer,
     })
   }
@@ -157,7 +157,7 @@ export class SignalingClient {
   sendSFUIce(candidate: RTCIceCandidate): void {
     this.send({
       type: 'sfu_ice',
-      room_id: this.roomId,
+      roomId: this.roomId,
       payload: {
         candidate: candidate.candidate,
         sdpMLineIndex: candidate.sdpMLineIndex,
@@ -171,7 +171,7 @@ export class SignalingClient {
   sendRenegotiationAnswer(answer: RTCSessionDescriptionInit): void {
     this.send({
       type: 'sfu_renegotiation_answer',
-      room_id: this.roomId,
+      roomId: this.roomId,
       payload: answer,
     })
   }
@@ -180,7 +180,7 @@ export class SignalingClient {
   sendAIToggle(enable: boolean): void {
     this.send<AITogglePayload>({
       type: 'ai_toggle',
-      room_id: this.roomId,
+      roomId: this.roomId,
       payload: { enable },
     })
   }
@@ -192,7 +192,7 @@ export class SignalingClient {
   sendRaiseHand(): void {
     this.send({
       type: 'raise_hand',
-      room_id: this.roomId,
+      roomId: this.roomId,
     })
   }
 
@@ -200,8 +200,8 @@ export class SignalingClient {
   sendApproveMic(targetUserId: string): void {
     this.send<ManageMicPayload>({
       type: 'approve_mic',
-      room_id: this.roomId,
-      payload: { target_user_id: targetUserId },
+      roomId: this.roomId,
+      payload: { targetUserId },
     })
   }
 
@@ -209,8 +209,8 @@ export class SignalingClient {
   sendRejectMic(targetUserId: string): void {
     this.send<ManageMicPayload>({
       type: 'reject_mic',
-      room_id: this.roomId,
-      payload: { target_user_id: targetUserId },
+      roomId: this.roomId,
+      payload: { targetUserId },
     })
   }
 
@@ -218,8 +218,8 @@ export class SignalingClient {
   sendKickMic(targetUserId: string): void {
     this.send<ManageMicPayload>({
       type: 'kick_mic',
-      room_id: this.roomId,
-      payload: { target_user_id: targetUserId },
+      roomId: this.roomId,
+      payload: { targetUserId },
     })
   }
 
@@ -227,8 +227,8 @@ export class SignalingClient {
   sendMuteMic(targetUserId: string, muted: boolean): void {
     this.send<ManageMicPayload>({
       type: 'mute_mic',
-      room_id: this.roomId,
-      payload: { target_user_id: targetUserId, muted },
+      roomId: this.roomId,
+      payload: { targetUserId, muted },
     })
   }
 
@@ -237,7 +237,7 @@ export class SignalingClient {
   sendLeave(payload?: LeavePayload): void {
     this.send({
       type: 'leave',
-      room_id: this.roomId,
+      roomId: this.roomId,
       payload,
     })
   }

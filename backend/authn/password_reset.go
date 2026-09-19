@@ -144,9 +144,9 @@ func (s *Service) ResetPassword(ctx context.Context, token, newPassword string) 
 // ChangePasswordRequest 修改密码请求体（已登录）
 type ChangePasswordRequest struct {
 	// CurrentPassword 当前密码，用于校验所有者
-	CurrentPassword string `json:"current_password"`
+	CurrentPassword string `json:"currentPassword"`
 	// NewPassword 新密码，需通过强度校验
-	NewPassword string `json:"new_password"`
+	NewPassword string `json:"newPassword"`
 }
 
 // ChangePassword 已登录改密：校验旧密码 → 新哈希 → version+1 → 吊销本设备之外会话

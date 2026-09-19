@@ -52,68 +52,68 @@ export type RoomRole = 'host' | 'cohost' | 'speaker' | 'listener'
 
 // ManageMicPayload 是成员管理类上行消息的通用载荷（批准/拒绝/请下麦/静音）
 export interface ManageMicPayload {
-  target_user_id: string // 被管理成员的用户 ID
+  targetUserId: string // 被管理成员的用户 ID
   muted?: boolean // 静音标记：仅静音操作时携带，true 静音 / false 解除静音，其余操作省略
 }
 
 // HandRaisedPayload 是有人举手的广播载荷
 export interface HandRaisedPayload {
-  user_id: string // 举手成员的用户 ID
+  userId: string // 举手成员的用户 ID
   username: string // 举手成员昵称，供审批入口展示
 }
 
 // RoleChangedPayload 是上麦/请下麦后的角色变更广播载荷
 export interface RoleChangedPayload {
-  user_id: string // 角色发生变化的成员用户 ID
+  userId: string // 角色发生变化的成员用户 ID
   username: string // 成员昵称，供席位展示
   role: RoomRole // 变更后的角色：spec 路径上为 speaker 或 listener
 }
 
 // MicRejectedPayload 是上麦被拒的定向通知载荷
 export interface MicRejectedPayload {
-  user_id: string // 被拒成员的用户 ID
+  userId: string // 被拒成员的用户 ID
 }
 
 // MutedPayload 是静音状态变化的广播载荷
 export interface MutedPayload {
-  user_id: string // 被静音成员的用户 ID
+  userId: string // 被静音成员的用户 ID
   username: string // 成员昵称，供席位展示
   muted: boolean // 静音状态：true 已静音 / false 已解除
 }
 
 // WaitingPayload 表示当前用户已进入房间但还在等待其他成员
 export interface WaitingPayload {
-  host_id: string // 当前房主 ID；首位进入者通常就是房主
+  hostId: string // 当前房主 ID；首位进入者通常就是房主
 }
 
 // RoomReadyPayload 表示房间已有两人以上，可以开始 WebRTC 协商
 export interface RoomReadyPayload {
   users: SignalingRoomUser[] // 当前房间成员快照
-  host_id: string             // 当前房主 ID，用于前端给席位打"房主"标记
-  can_start: boolean          // 是否允许当前客户端开始创建 offer（前端在收到 room_ready 后创建 offer）
+  hostId: string             // 当前房主 ID，用于前端给席位打"房主"标记
+  canStart: boolean          // 是否允许当前客户端开始创建 offer（前端在收到 room_ready 后创建 offer）
 }
 
 // UserJoinedPayload 表示有新用户进入当前房间
 export interface UserJoinedPayload {
-  user_id: string  // 新进入房间的用户 ID
+  userId: string  // 新进入房间的用户 ID
   username: string  // 新进入房间的用户显示名称
-  host_id: string   // 当前房主 ID，避免前端房主状态滞后
+  hostId: string   // 当前房主 ID，避免前端房主状态滞后
 }
 
 // UserLeftPayload 表示房间内某个用户已经离开
 export interface UserLeftPayload {
-  user_id: string    // 离开房间的用户 ID
-  host_id?: string   // 离开后的房主 ID；房间清空或服务端未返回时为空
+  userId: string    // 离开房间的用户 ID
+  hostId?: string   // 离开后的房主 ID；房间清空或服务端未返回时为空
 }
 
 // HostChangedPayload 表示房主已经发生变化
 export interface HostChangedPayload {
-  host_id: string // 新房主的用户 ID
+  hostId: string // 新房主的用户 ID
 }
 
 // LeavePayload 是前端主动离开时可传给服务端的载荷
 export interface LeavePayload {
-  next_host_id?: string // 房主离开时指定的下一任房主 ID；为空时服务端自动选择
+  nextHostId?: string // 房主离开时指定的下一任房主 ID；为空时服务端自动选择
 }
 
 // SignalingErrorPayload 表示信令服务器返回的错误信息
@@ -174,14 +174,14 @@ export interface AIStatusPayload {
 // SignalingMessage 是信令服务器 WebSocket 的统一消息结构，payload 随 type 变化
 export interface SignalingMessage<TPayload = unknown> {
   type: SignalingMessageType // 消息类型，决定 payload 应该如何解析
-  room_id: string             // 消息所属房间 ID
-  user_id?: string            // 发送该消息的用户 ID，部分前端上行消息可以为空
+  roomId: string             // 消息所属房间 ID
+  userId?: string            // 发送该消息的用户 ID，部分前端上行消息可以为空
   payload?: TPayload          // 消息载荷，例如 SDP、ICE candidate、成员信息或房主交接信息
 }
 
 // OutgoingSignalingMessage 是前端发给信令服务器的消息结构
 export interface OutgoingSignalingMessage<TPayload = unknown> {
   type: SignalingClientMessageType // 前端要发送的信令类型
-  room_id: string                    // 目标房间 ID
+  roomId: string                    // 目标房间 ID
   payload?: TPayload                 // 要发送给后端或转发给对端浏览器的消息载荷
 }

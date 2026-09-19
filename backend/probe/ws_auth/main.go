@@ -40,7 +40,7 @@ func main() {
 	fmt.Println("CONNECTED")
 
 	if *join {
-		if err := conn.WriteJSON(map[string]any{"type": "join", "room_id": *roomID, "payload": "wsprobe"}); err != nil {
+		if err := conn.WriteJSON(map[string]any{"type": "join", "roomId": *roomID, "payload": "wsprobe"}); err != nil {
 			fmt.Printf("JOIN_SEND_FAIL err=%v\n", err)
 			return
 		}
@@ -48,7 +48,7 @@ func main() {
 	}
 
 	if *ai {
-		if err := conn.WriteJSON(map[string]any{"type": "ai_toggle", "room_id": *roomID, "payload": map[string]any{"enable": true}}); err != nil {
+		if err := conn.WriteJSON(map[string]any{"type": "ai_toggle", "roomId": *roomID, "payload": map[string]any{"enable": true}}); err != nil {
 			fmt.Printf("AI_SEND_FAIL err=%v\n", err)
 			return
 		}

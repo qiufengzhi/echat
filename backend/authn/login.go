@@ -27,13 +27,13 @@ type LoginRequest struct {
 // SessionResult 登录/刷新成功响应体，见 spec §4.3 第 6 步
 type SessionResult struct {
 	// AccessToken 短命无状态 JWT
-	AccessToken string `json:"access_token"`
+	AccessToken string `json:"accessToken"`
 	// TokenType 固定为 Bearer
-	TokenType string `json:"token_type"`
+	TokenType string `json:"tokenType"`
 	// ExpiresIn access 剩余秒数
-	ExpiresIn int64 `json:"expires_in"`
+	ExpiresIn int64 `json:"expiresIn"`
 	// RefreshToken 不透明刷新串，明文只此一次出现，之后走哈希比对
-	RefreshToken string `json:"refresh_token"`
+	RefreshToken string `json:"refreshToken"`
 	// User 用户概要（含头像，登出页用）
 	User UserInfo `json:"user"`
 }
@@ -45,9 +45,9 @@ type UserInfo struct {
 	// Username 用户名句柄
 	Username string `json:"username"`
 	// DisplayName 展示昵称
-	DisplayName string `json:"display_name"`
+	DisplayName string `json:"displayName"`
 	// AvatarURL 头像地址，可空
-	AvatarURL *string `json:"avatar_url"`
+	AvatarURL *string `json:"avatarUrl"`
 }
 
 // Login 登录用例：解析标识 → 校验密码 → 建会话 → 双 token

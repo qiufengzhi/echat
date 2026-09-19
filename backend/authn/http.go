@@ -133,7 +133,7 @@ func (h *Handler) PasswordReset(w http.ResponseWriter, r *http.Request) error {
 		// Token 一次性重置令牌
 		Token string `json:"token"`
 		// NewPassword 新密码
-		NewPassword string `json:"new_password"`
+		NewPassword string `json:"newPassword"`
 	}
 	if err := transport.ReadJSON(r, &req); err != nil {
 		return err
@@ -188,7 +188,7 @@ func (h *Handler) refreshTokenFrom(r *http.Request) string {
 	}
 	var body struct {
 		// RefreshToken 明文刷新串
-		RefreshToken string `json:"refresh_token"`
+		RefreshToken string `json:"refreshToken"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err == nil && body.RefreshToken != "" {
 		return body.RefreshToken

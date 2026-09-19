@@ -366,7 +366,7 @@ func disconnect(client *gateway.Client, preferredNextHostID string, reason strin
 					if outcome.WasHost && outcome.NextHostID != "" && outcome.NextHostID != client.UserID {
 						aiState.Set(roomID, "offline") // 房主交接时重置 AI 为离线，新房主需重新开启
 						broadcastToRoom(roomID, client.ConnID, MsgTypeHostChanged, map[string]string{
-							"host_id": outcome.NextHostID,
+							"hostId": outcome.NextHostID,
 						})
 					}
 				}

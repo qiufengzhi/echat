@@ -79,7 +79,7 @@ export async function handleWebRTCSignaling(
 
     case 'user_left': {
       // 远端用户离开时，移出该用户的远端音频流，其他用户的流不受影响
-      const userId = (data.payload as { user_id?: string } | undefined)?.user_id
+      const userId = (data.payload as { userId?: string } | undefined)?.userId
       if (userId) {
         console.log('[sfu] 远端用户离开，移除音频流:', userId)
         options.removeRemoteStream(userId)

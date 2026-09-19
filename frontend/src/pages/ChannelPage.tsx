@@ -139,7 +139,7 @@ export default function ChannelPage() {
   const normalizedRoomId = roomId?.toUpperCase() || ''
   const navigate = useNavigate()
   const user = getAuthUser()
-  const username = user?.display_name || user?.username || ''
+  const username = user?.displayName || user?.username || ''
 
   const [activeSheet, setActiveSheet] = useState<'raise' | 'members' | null>(null) // 当前展开的底部面板
   const [isHostTransferOpen, setIsHostTransferOpen] = useState(false) // 房主交接弹窗开关

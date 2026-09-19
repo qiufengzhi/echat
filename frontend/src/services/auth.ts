@@ -11,8 +11,8 @@ const USER_KEY = 'echat_user'
 export interface AuthUser {
   id: string // 用户全局稳定身份
   username: string // 用户名句柄
-  display_name: string // 展示昵称
-  avatar_url: string | null // 头像地址，可空
+  displayName: string // 展示昵称
+  avatarUrl: string | null // 头像地址，可空
 }
 
 // getAccessToken 读取当前 access 令牌；未登录返回 null
@@ -48,7 +48,7 @@ export async function login(identifier: string, password: string): Promise<AuthU
   if (!res.ok) {
     throw new Error(data?.error?.message || '登录失败，请稍后重试')
   }
-  saveSession(data.access_token, data.user)
+  saveSession(data.accessToken, data.user)
   return data.user as AuthUser
 }
 
@@ -60,7 +60,7 @@ export async function refresh(): Promise<boolean> {
   })
   if (!res.ok) return false
   const data = await res.json()
-  saveSession(data.access_token, data.user)
+  saveSession(data.accessToken, data.user)
   return true
 }
 
@@ -114,10 +114,10 @@ export interface RegisterResult {
   username: string // 已注册的用户句柄
   email: string | null // 绑定的邮箱；未填邮箱为 null
   status: string // 账户状态：本地账号 active，邮箱路径 pending
-  need_verify: boolean // 是否需邮箱验证（填了 email 为 true，此时不能自动登录）
+  needVerify: boolean // 是否需邮箱验证（填了 email 为 true，此时不能自动登录）
 }
 
-// register 创建账号；带 email 走邮箱验证路径（返回 need_verify），否则本地账号直接可用
+// register 创建账号；带 email 走邮箱验证路径（返回 needVerify），否则本地账号直接可用
 export async function register(input: RegisterInput): Promise<RegisterResult> {
   const body: Record<string, string> = { username: input.username, password: input.password }
   if (input.email) body.email = input.email

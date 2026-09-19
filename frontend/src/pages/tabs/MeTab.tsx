@@ -7,7 +7,7 @@ import { getAuthUser, logout } from '../../services/auth'
 export default function MeTab() {
   const navigate = useNavigate()
   const user = getAuthUser()
-  const name = user?.display_name || user?.username || '我'
+  const name = user?.displayName || user?.username || '我'
   const initial = name.trim().slice(0, 1) || '我'
 
   const handleLogout = () => {

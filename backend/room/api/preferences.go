@@ -12,8 +12,8 @@ import (
 // roomJoinPreferences 进入房间默认行为，对应 users.preferences jsonb 设置包
 // 键与前端 camelCase 字段在接口层映射为 snake_case；缺键反序列化为零值 false（静音进房）
 type roomJoinPreferences struct {
-	MicOnByDefault     bool `json:"mic_on_by_default"`
-	SpeakerOnByDefault bool `json:"speaker_on_by_default"`
+	MicOnByDefault     bool `json:"micOnByDefault"`
+	SpeakerOnByDefault bool `json:"speakerOnByDefault"`
 }
 
 // getPreferences GET /api/v1/me/preferences 读取当前账号进入房间默认行为

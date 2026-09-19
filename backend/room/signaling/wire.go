@@ -18,11 +18,11 @@ const (
 	MsgTypeAiToggle = "ai_toggle" // 切换 AI 助手开关
 
 	// 成员管理信令：客户端 -> 服务端
-	MsgTypeRaiseHand  = "raise_hand"   // 听众举手请求上麦，无需 payload
-	MsgTypeApproveMic = "approve_mic"  // 房主/副主持批准举手上麦，payload 带 target_user_id
-	MsgTypeRejectMic  = "reject_mic"   // 房主/副主持拒绝举手，payload 带 target_user_id
-	MsgTypeKickMic    = "kick_mic"     // 房主/副主持请 speaker 下麦，payload 带 target_user_id
-	MsgTypeMuteMic    = "mute_mic"     // 房主/副主持静音/解除 speaker，payload 带 target_user_id + muted
+	MsgTypeRaiseHand  = "raise_hand"  // 听众举手请求上麦，无需 payload
+	MsgTypeApproveMic = "approve_mic" // 房主/副主持批准举手上麦，payload 带 target_user_id
+	MsgTypeRejectMic  = "reject_mic"  // 房主/副主持拒绝举手，payload 带 target_user_id
+	MsgTypeKickMic    = "kick_mic"    // 房主/副主持请 speaker 下麦，payload 带 target_user_id
+	MsgTypeMuteMic    = "mute_mic"    // 房主/副主持静音/解除 speaker，payload 带 target_user_id + muted
 
 	// SFU 信令：客户端 -> 服务端
 	// 客户端创建 SDP Offer 后通过 sfu_offer 发给 SFU 引擎
@@ -68,9 +68,9 @@ type Message struct {
 	// Type 消息类型，如 join / host_changed 等
 	Type string `json:"type"`
 	// RoomID 消息所属房间 ID
-	RoomID string `json:"room_id"`
+	RoomID string `json:"roomId"`
 	// UserID 服务端填充的发送者 ID，前端上行通常不需要传
-	UserID string `json:"user_id"`
+	UserID string `json:"userId"`
 	// Payload 原始 JSON 载荷，由具体消息处理函数按 Type 解析
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
@@ -88,7 +88,7 @@ type RoomUser struct {
 // WaitingPayload 在房间只有一个成员时发送，让首位用户立即看到自己是房主
 type WaitingPayload struct {
 	// HostID 当前房主 ID；第一位成员加入时通常就是自己的 ID
-	HostID string `json:"host_id"`
+	HostID string `json:"hostId"`
 }
 
 // RoomReadyPayload 在房间可开始协商时发送给新加入者，提供完整房间快照
@@ -96,33 +96,33 @@ type RoomReadyPayload struct {
 	// Users 当前房间成员列表，按加入时间稳定排序
 	Users []RoomUser `json:"users"`
 	// HostID 当前房主 ID，前端据此给席位打房主标记
-	HostID string `json:"host_id"`
+	HostID string `json:"hostId"`
 	// CanStart 是否可以开始 WebRTC Offer/Answer/ICE 协商
-	CanStart bool `json:"can_start"`
+	CanStart bool `json:"canStart"`
 }
 
 // UserJoinedPayload 广播给房间已有成员，通知新成员加入并同步当前房主
 type UserJoinedPayload struct {
 	// UserID 新加入成员的用户 ID（鉴权后身份）
-	UserID string `json:"user_id"`
+	UserID string `json:"userId"`
 	// Username 新加入成员昵称
 	Username string `json:"username"`
 	// HostID 当前房主 ID，避免前端房主状态滞后
-	HostID string `json:"host_id"`
+	HostID string `json:"hostId"`
 }
 
 // UserLeftPayload 广播给剩余成员，表示某位成员已离开
 type UserLeftPayload struct {
 	// UserID 离开成员的用户 ID（鉴权后身份）
-	UserID string `json:"user_id"`
+	UserID string `json:"userId"`
 	// HostID 离开后仍存在的房主 ID；房间清空时省略
-	HostID string `json:"host_id,omitempty"`
+	HostID string `json:"hostId,omitempty"`
 }
 
 // LeavePayload 是客户端主动离开时可携带的载荷，房主可用它指定下一任房主
 type LeavePayload struct {
 	// NextHostID 期望交接给的用户 ID；为空或无效时服务端自动选择
-	NextHostID string `json:"next_host_id,omitempty"`
+	NextHostID string `json:"nextHostId,omitempty"`
 }
 
 // ---------- SFU 信令载荷类型 ----------
@@ -203,7 +203,7 @@ type AiToggleRes struct {
 // TargetUserPayload 管理类信令的通用目标载荷
 type TargetUserPayload struct {
 	// TargetUserID 被管理成员的用户 ID
-	TargetUserID string `json:"target_user_id"`
+	TargetUserID string `json:"targetUserId"`
 	// Muted 是否为静音操作：true 静音 / false 解除静音
 	Muted bool `json:"muted,omitempty"`
 }
@@ -211,7 +211,7 @@ type TargetUserPayload struct {
 // HandRaisedPayload 举手广播载荷
 type HandRaisedPayload struct {
 	// UserID 举手成员的用户 ID
-	UserID string `json:"user_id"`
+	UserID string `json:"userId"`
 	// Username 举手成员昵称，前端审批入口可展示
 	Username string `json:"username"`
 }
@@ -219,7 +219,7 @@ type HandRaisedPayload struct {
 // RoleChangedPayload 上麦/下麦后的角色更新广播载荷
 type RoleChangedPayload struct {
 	// UserID 角色发生变化的成员用户 ID
-	UserID string `json:"user_id"`
+	UserID string `json:"userId"`
 	// Username 成员昵称，用于席位展示
 	Username string `json:"username"`
 	// Role 变更后的角色：speaker / listener
@@ -229,13 +229,13 @@ type RoleChangedPayload struct {
 // MicRejectedPayload 上麦被拒定向通知载荷
 type MicRejectedPayload struct {
 	// UserID 被拒成员的用户 ID
-	UserID string `json:"user_id"`
+	UserID string `json:"userId"`
 }
 
 // MutedPayload 静音状态变化广播载荷
 type MutedPayload struct {
 	// UserID 被静音成员的用户 ID
-	UserID string `json:"user_id"`
+	UserID string `json:"userId"`
 	// Username 成员昵称，用于席位展示
 	Username string `json:"username"`
 	// Muted 静音状态：true 已静音 / false 已解除

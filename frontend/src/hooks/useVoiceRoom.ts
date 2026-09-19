@@ -185,7 +185,7 @@ function removeFromSet(set: Set<string>, id: string): Set<string> {
 
 // upsertRoomUser 按 ID 合并成员，避免同一个成员重复出现在列表里
 function upsertRoomUser(users: User[], nextUser: User): User[] {
-  // 后端 user_id 是成员列表的稳定主键，比昵称更可靠；昵称可能重复或后续允许修改
+  // 后端 userId 是成员列表的稳定主键，比昵称更可靠；昵称可能重复或后续允许修改
   const existingIndex = users.findIndex(user => user.id === nextUser.id)
   if (existingIndex === -1) return [...users, nextUser]
 
@@ -423,22 +423,22 @@ export function useVoiceRoom(options?: { onKicked?: () => void }): UseVoiceRoomR
 
   // syncUsersFromSignaling 根据信令消息同步成员列表和房主状态，不处理 Offer/Answer/ICE 协商
   const syncUsersFromSignaling = useCallback((data: SignalingMessage) => {
-    // waiting 和 room_ready 都会携带服务端分配给当前连接的 user_id
-    if (data.user_id && (data.type === 'waiting' || data.type === 'room_ready')) {
-      currentUserIdRef.current = data.user_id
+    // waiting 和 room_ready 都会携带服务端分配给当前连接的 userId
+    if (data.userId && (data.type === 'waiting' || data.type === 'room_ready')) {
+      currentUserIdRef.current = data.userId
     }
 
-    if (data.type === 'waiting' && data.user_id) {
+    if (data.type === 'waiting' && data.userId) {
       const payload = data.payload as WaitingPayload | undefined
       // 房间只有自己时，也要先把自己放进成员列表，页面才能展示房主席位；首位进入者即房主
-      const selfRole: RoomRole = payload?.host_id === data.user_id ? 'host' : 'listener'
+      const selfRole: RoomRole = payload?.hostId === data.userId ? 'host' : 'listener'
       setState(prev => {
-        const currentUser = createRoomUser(data.user_id!, currentUsernameRef.current, selfRole, prev.isMuted)
+        const currentUser = createRoomUser(data.userId!, currentUsernameRef.current, selfRole, prev.isMuted)
         return {
           ...prev,
           users: upsertRoomUser(prev.users, currentUser),
-          hostId: payload?.host_id || prev.hostId,
-          isHost: Boolean((payload?.host_id || prev.hostId) && (payload?.host_id || prev.hostId) === data.user_id),
+          hostId: payload?.hostId || prev.hostId,
+          isHost: Boolean((payload?.hostId || prev.hostId) && (payload?.hostId || prev.hostId) === data.userId),
         }
       })
       return
@@ -454,52 +454,52 @@ export function useVoiceRoom(options?: { onKicked?: () => void }): UseVoiceRoomR
         users: payload.users.map(user =>
           createRoomUser(user.id, user.username, user.role, user.id === currentUserIdRef.current ? prev.isMuted : false),
         ),
-        hostId: payload.host_id || prev.hostId,
-        isHost: Boolean(payload.host_id && payload.host_id === currentUserIdRef.current),
+        hostId: payload.hostId || prev.hostId,
+        isHost: Boolean(payload.hostId && payload.hostId === currentUserIdRef.current),
       }))
       return
     }
 
     if (data.type === 'user_joined') {
       const payload = data.payload as UserJoinedPayload | undefined
-      if (!payload?.user_id || !payload.username) return
+      if (!payload?.userId || !payload.username) return
 
       setState(prev => ({
         ...prev,
         // 新成员加入只增量合并，保留本地已有成员的静音/说话展示状态；新成员默认为听众
-        users: upsertRoomUser(prev.users, createRoomUser(payload.user_id, payload.username, 'listener')),
-        hostId: payload.host_id || prev.hostId,
-        isHost: Boolean((payload.host_id || prev.hostId) && (payload.host_id || prev.hostId) === currentUserIdRef.current),
+        users: upsertRoomUser(prev.users, createRoomUser(payload.userId, payload.username, 'listener')),
+        hostId: payload.hostId || prev.hostId,
+        isHost: Boolean((payload.hostId || prev.hostId) && (payload.hostId || prev.hostId) === currentUserIdRef.current),
       }))
       return
     }
 
     if (data.type === 'user_left') {
       const payload = data.payload as UserLeftPayload | undefined
-      if (!payload?.user_id) return
+      if (!payload?.userId) return
 
       setState(prev => ({
         ...prev,
-        // 成员离开后立刻从 UI 列表移除，并同步清掉其在举手/静音集合里的残留；host_id 会同步房主交接后的最终状态
-        users: prev.users.filter(user => user.id !== payload.user_id),
-        waitingUserIds: removeFromSet(prev.waitingUserIds, payload.user_id),
-        mutedUserIds: removeFromSet(prev.mutedUserIds, payload.user_id),
-        hostId: payload.host_id || prev.hostId,
-        isHost: Boolean((payload.host_id || prev.hostId) && (payload.host_id || prev.hostId) === currentUserIdRef.current),
+        // 成员离开后立刻从 UI 列表移除，并同步清掉其在举手/静音集合里的残留；hostId 会同步房主交接后的最终状态
+        users: prev.users.filter(user => user.id !== payload.userId),
+        waitingUserIds: removeFromSet(prev.waitingUserIds, payload.userId),
+        mutedUserIds: removeFromSet(prev.mutedUserIds, payload.userId),
+        hostId: payload.hostId || prev.hostId,
+        isHost: Boolean((payload.hostId || prev.hostId) && (payload.hostId || prev.hostId) === currentUserIdRef.current),
       }))
       return
     }
 
     if (data.type === 'host_changed') {
       const payload = data.payload as HostChangedPayload | undefined
-      if (!payload?.host_id) return
+      if (!payload?.hostId) return
 
       // host_changed 是显式房主变更事件，即使成员列表没变化，也要刷新房主权限
-      syncHostState(payload.host_id)
-      // host_changed 广播只带 host_id 不带角色，这里兜底把新房主标为 host；同时重置 AI 状态由新房主重新决定
+      syncHostState(payload.hostId)
+      // host_changed 广播只带 hostId 不带角色，这里兜底把新房主标为 host；同时重置 AI 状态由新房主重新决定
       setState(prev => ({
         ...prev,
-        users: updateRoomUserRole(prev.users, payload.host_id, 'host'),
+        users: updateRoomUserRole(prev.users, payload.hostId, 'host'),
         aiState: 'offline',
       }))
       return
@@ -507,63 +507,63 @@ export function useVoiceRoom(options?: { onKicked?: () => void }): UseVoiceRoomR
 
     if (data.type === 'hand_raised') {
       const payload = data.payload as HandRaisedPayload | undefined
-      if (!payload?.user_id) return
+      if (!payload?.userId) return
 
       // 有人举手，加入举手等待集合；广播排除自己，自己举手的入口态由 raiseHand 动作乐观更新
       setState(prev => ({
         ...prev,
-        waitingUserIds: new Set(prev.waitingUserIds).add(payload.user_id),
+        waitingUserIds: new Set(prev.waitingUserIds).add(payload.userId),
       }))
       return
     }
 
     if (data.type === 'mic_approved') {
       const payload = data.payload as RoleChangedPayload | undefined
-      if (!payload?.user_id || !payload.role) return
+      if (!payload?.userId || !payload.role) return
 
       // 广播排除操作者（房主/副主持），其已在 approveMic 动作里乐观更新；其余人据此更新角色并清举手态
       setState(prev => ({
         ...prev,
-        users: updateRoomUserRole(prev.users, payload.user_id, payload.role),
-        waitingUserIds: removeFromSet(prev.waitingUserIds, payload.user_id),
+        users: updateRoomUserRole(prev.users, payload.userId, payload.role),
+        waitingUserIds: removeFromSet(prev.waitingUserIds, payload.userId),
       }))
       return
     }
 
     if (data.type === 'mic_rejected') {
       const payload = data.payload as MicRejectedPayload | undefined
-      if (!payload?.user_id) return
+      if (!payload?.userId) return
 
       // 被拒者收到定向通知，清掉举手态；若被拒者是自己，上麦按钮据此恢复可点击
       setState(prev => ({
         ...prev,
-        waitingUserIds: removeFromSet(prev.waitingUserIds, payload.user_id),
+        waitingUserIds: removeFromSet(prev.waitingUserIds, payload.userId),
       }))
       return
     }
 
     if (data.type === 'mic_kicked') {
       const payload = data.payload as RoleChangedPayload | undefined
-      if (!payload?.user_id || !payload.role) return
+      if (!payload?.userId || !payload.role) return
 
       // 被请下麦恢复 listener 并清举手态；muted 叠加态保留，与后端 MutedOf 语义一致
       setState(prev => ({
         ...prev,
-        users: updateRoomUserRole(prev.users, payload.user_id, payload.role),
-        waitingUserIds: removeFromSet(prev.waitingUserIds, payload.user_id),
+        users: updateRoomUserRole(prev.users, payload.userId, payload.role),
+        waitingUserIds: removeFromSet(prev.waitingUserIds, payload.userId),
       }))
       return
     }
 
     if (data.type === 'muted') {
       const payload = data.payload as MutedPayload | undefined
-      if (!payload?.user_id) return
+      if (!payload?.userId) return
 
       // 静音是叠加展示态，与本地麦克风开关正交，只增删 muted 集合即可
       setState(prev => {
         const next = new Set(prev.mutedUserIds)
-        if (payload.muted) next.add(payload.user_id)
-        else next.delete(payload.user_id)
+        if (payload.muted) next.add(payload.userId)
+        else next.delete(payload.userId)
         return { ...prev, mutedUserIds: next }
       })
       return
@@ -718,7 +718,7 @@ export function useVoiceRoom(options?: { onKicked?: () => void }): UseVoiceRoomR
   // nextHostId 只在当前用户是房主时有意义；服务端仍会校验它是否在线
   const leaveRoom = useCallback((nextHostId?: string) => {
     if (signalingClientRef.current) {
-      signalingClientRef.current.sendLeave(nextHostId ? { next_host_id: nextHostId } : undefined)
+      signalingClientRef.current.sendLeave(nextHostId ? { nextHostId } : undefined)
     }
 
     if (pcRef.current) {
