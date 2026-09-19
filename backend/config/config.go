@@ -26,6 +26,7 @@ type Config struct {
 	Room     RoomConfig     `yaml:"room"`         // 房间与 WebSocket 配置
 	Database DatabaseConfig `yaml:"database"`     // PostgreSQL 持久层配置
 	Auth     AuthConfig     `yaml:"auth"`         // 用户系统认证与密码哈希配置
+	Uploads  UploadsConfig  `yaml:"uploads"`      // 上传文件本地存储配置
 	Log      LogConfig      `yaml:"log"`          // 日志配置
 	NATS     NATSConfig     `yaml:"nats"`         // NATS JetStream 一致性骨干配置
 	Redis    RedisConfig    `yaml:"redis"`        // 登录限流与在线热状态共享的 Redis 配置
@@ -197,8 +198,15 @@ type Argon2Config struct {
 	KeyLength   uint32 `yaml:"key_length"`  // 派生密钥字节数，默认 32
 }
 
+// UploadsConfig 上传文件本地存储配置
+type UploadsConfig struct {
+	// Dir 上传文件落盘目录（相对后端工作目录或绝对路径），默认 "data/uploads"
+	// 头像等公开图片由 FileServer 经 /uploads 直出；未来接对象存储时此目录可弃
+	Dir string `yaml:"dir"`
+}
+
 // LogConfig 日志配置
-//
+
 // Level 控制输出级别，只输出 >= 该级别的日志：
 //
 //	debug - 调试信息：ICE candidate、SDP 内容、TTS 字节序诊断、中间识别结果等，仅开发时用
@@ -310,6 +318,9 @@ func DefaultConfig() *Config {
 			EnableConsole: true,
 			EnableFile:    true,
 			FileDir:       "logs",
+		},
+		Uploads: UploadsConfig{
+			Dir: "data/uploads",
 		},
 		NATS: NATSConfig{
 			URL:            "127.0.0.1:4222",
@@ -555,6 +566,11 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("LOG_FILE_DIR"); v != "" {
 		cfg.Log.FileDir = v
+	}
+
+	// --- Uploads ---
+	if v := os.Getenv("UPLOADS_DIR"); v != "" {
+		cfg.Uploads.Dir = v
 	}
 
 	// --- NATS ---

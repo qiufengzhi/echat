@@ -77,6 +77,13 @@ log:
   enable_file: true
   file_dir: logs
 
+# 上传文件本地存储配置
+# 头像等公开图片落盘到该目录,经后端 FileServer 在 /uploads 直出,由前端 nginx 原样透传
+# 容器内路径相对 /app 或绝对路径;生产已挂 echat_prod_uploads 卷持久化,容器重建不丢
+# 环境变量覆盖:UPLOADS_DIR
+uploads:
+  dir: "data/uploads"
+
 database:
   host: "postgres"             # compose 服务名,容器内网地址
   port: 5432                   # 容器内 PostgreSQL 端口
