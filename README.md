@@ -22,7 +22,7 @@ echat/
 ├── backend/        # Go 后端（双通道信令 + SFU + 授权/热状态接入）
 ├── proto/          # Protobuf 协议定义
 ├── frontend/       # React 前端
-├── deploy/         # 部署配置（Docker Compose + Nginx + postgres-init）
+├── deploy/         # 部署配置（Docker Compose + Nginx）
 ├── designs/        # 设计文档
 └── docs/           # 专项技术笔记
 ```

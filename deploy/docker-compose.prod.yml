@@ -16,7 +16,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-echat}          # 默认库名
     volumes:
       - echat_prod_pgdata:/var/lib/postgresql/data # 数据持久化，重建容器不丢数据
-      - ./postgres-init:/docker-entrypoint-initdb.d:ro # 首次初始化数据卷时自动创建附属库（SpiceDB 元组存储库）
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-echat} -d ${POSTGRES_DB:-echat}"]
       interval: 5s
@@ -49,9 +48,29 @@ services:
       retries: 10
     # 不映射宿主端口：后端经 compose 内部网络以 redis:6379 访问
 
+  # 建库一次性服务：SpiceDB 元数据库必须先存在，migrate 才能连上建表
+  # 为什么不能只靠 initdb.d：postgres 官方镜像只在 PGDATA 为空（首次建卷）时执行
+  # /docker-entrypoint-initdb.d/*.sh，卷已存在时整段跳过，于是 echat_spicedb 建不出来。
+  # 这里每次 up 都用 psql 幂等补建：库在就跳过，不在就 CREATE，新卷老卷都成立。
+  spicedb-db-init:
+    container_name: echat-spicedb-db-init
+    image: postgres:16-alpine   # 复用 postgres 镜像自带的 psql 客户端，不引入新依赖
+    restart: "no"               # 一次性任务，成功即退出
+    entrypoint: ["/bin/sh", "-c"] # 覆盖 postgres 启动入口，只执行下面的 shell 片段
+    command:
+      # ${...} 由 compose 在读取文件时插值成真实值，容器里拿到的已是明文，无需 shell 变量
+      - |
+        psql "postgresql://${POSTGRES_USER:-echat}:${POSTGRES_PASSWORD:-echat}@postgres:5432/postgres" \
+          -tAc "SELECT 1 FROM pg_database WHERE datname='echat_spicedb'" | grep -q 1 \
+          || psql "postgresql://${POSTGRES_USER:-echat}:${POSTGRES_PASSWORD:-echat}@postgres:5432/postgres" \
+             -v ON_ERROR_STOP=1 -c "CREATE DATABASE echat_spicedb OWNER ${POSTGRES_USER:-echat}"
+    depends_on:
+      postgres:
+        condition: service_healthy # 等 Postgres 真正可连再建库
+
   spicedb-migrate: # 一次性（run --rm）SpiceDB datastore 迁移：serve 不自动建表，须先 migrate head 才可写 schema
     container_name: echat-spicedb-migrate
-    image: ghcr.io/authzed/spicedb:latest
+    image: ghcr.io/authzed/spicedb:v1.18.0
     restart: "no"
     command: ["migrate", "head"] # 幂等，重复执行无副作用，升级镜像时随 up 自动补齐
     environment:
@@ -59,11 +78,13 @@ services:
       SPICEDB_DATASTORE_CONN_URI: postgres://${POSTGRES_USER:-echat}:${POSTGRES_PASSWORD:-echat}@postgres:5432/echat_spicedb?sslmode=disable
     depends_on:
       postgres:
-        condition: service_healthy # echat_spicedb 库由 postgres-init 首次建卷时创建，先保证库存在再迁移
+        condition: service_healthy # Postgres 可连即可
+      spicedb-db-init:
+        condition: service_completed_successfully # echat_spicedb 库由 spicedb-db-init 幂等补建，先保证库存在再迁移
 
-  spicedb: # 对象级授权（Zanzibar）：关系元组存储复用 Postgres（postgres-init 建库 + spicedb-migrate 建表）
+  spicedb: # 对象级授权（Zanzibar）：关系元组存储复用 Postgres（spicedb-db-init 建库 + spicedb-migrate 建表）
     container_name: echat-spicedb
-    image: ghcr.io/authzed/spicedb:latest
+    image: ghcr.io/authzed/spicedb:v1.18.0
     restart: unless-stopped
     command: ["serve"]
     environment:
@@ -110,6 +131,9 @@ services:
       - ./nginx/gateway.prod.conf:/etc/nginx/conf.d/default.conf:ro # 挂载生产网关配置
       - /etc/letsencrypt/live/echat.qxbnx.cn/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro # 证书公钥链文件
       - /etc/letsencrypt/live/echat.qxbnx.cn/privkey.pem:/etc/nginx/ssl/privkey.pem:ro # 证书私钥文件
+      # ACME 验证目录：certbot（在宿主机）把验证文件写到这里，
+      # Nginx（在容器内）只读它并返回给 Let's Encrypt 校验。容器只需读，故挂 :ro
+      - /var/www/certbot:/var/www/certbot:ro
 
   backend: # 后端信令服务，供前端通过容器网络访问
     container_name: echat-backend # 固定容器名，方便 docker logs echat-backend 查日志

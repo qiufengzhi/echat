@@ -16,8 +16,6 @@
   负责服务器端的网关、前端、后端与基础设施（PostgreSQL / NATS / Redis / SpiceDB）容器编排。
 - `deploy/nginx/gateway.prod.conf`
   负责最外层 Nginx HTTPS 入口配置。
-- `deploy/postgres-init/01-spicedb.sh`
-  PostgreSQL 首次初始化数据卷时自动创建 SpiceDB 关系元组存储库（`echat_spicedb`），随 CI 上传到服务器。
 
 ## 服务器准备
 
@@ -33,8 +31,6 @@
 /srv/echat/
   docker-compose.prod.yml
   .env                       # CI 自动写入四个镜像名变量，首次部署 touch 占位
-  postgres-init/             # CI 自动上传，postgres 首次建卷时执行建库脚本
-   01-spicedb.sh
   backend/
     config.yaml              # 后端配置，手动维护和更新
   agent/
@@ -161,7 +157,7 @@ touch /srv/echat/.env
 
 > ⚠️ **注意**：`.env` 文件由 CI 自动管理，每次部署都会覆盖 `BACKEND_IMAGE`、`FRONTEND_IMAGE`、`AGENT_IMAGE`、`IMAGE_TAG` 四个字段。基础设施容器（postgres / redis / spicedb）的密码经 `${VAR:-默认值}` 从 `.env` 读取（不写则用默认值）；后端 `backend/config.yaml` 中对应字段（`database.password` / `redis.password` / `spicedb.preshared_key`）须与之一致，否则后端连不上或授权校验被拒。ASR 密钥、JWT 签名密钥等其余敏感配置直接写进 `backend/config.yaml`（不入 git），Agent LLM 密钥在 `agent/config.yaml`。
 
-`docker-compose.prod.yml` 编排基础设施（PostgreSQL + NATS + Redis + SpiceDB）与业务服务（gateway / frontend / backend / agent）；后端连接地址与全部凭据统一在挂载的 `backend/config.yaml`（生产按 `config.yaml.prod.example` 模板准备，填 compose 服务名与 REPLACE 占位），compose 不再给 backend 注入任何环境变量；基础设施容器（postgres / redis / spicedb）自身的密码仍经 compose 的 `.env` 变量提供，后端 config.yaml 对应字段须与之一致。持久卷 `echat_prod_pgdata` / `echat_prod_natsdata` / `echat_prod_redisdata` 承载数据、事件流与热状态；所有基础设施不映射宿主端口，仅容器内部网络访问。SpiceDB 关系元组复用 PostgreSQL，`echat_spicedb` 库由首次初始化卷时的 `postgres-init` 脚本自动创建。
+`docker-compose.prod.yml` 编排基础设施（PostgreSQL + NATS + Redis + SpiceDB）与业务服务（gateway / frontend / backend / agent）；后端连接地址与全部凭据统一在挂载的 `backend/config.yaml`（生产按 `config.yaml.prod.example` 模板准备，填 compose 服务名与 REPLACE 占位），compose 不再给 backend 注入任何环境变量；基础设施容器（postgres / redis / spicedb）自身的密码仍经 compose 的 `.env` 变量提供，后端 config.yaml 对应字段须与之一致。持久卷 `echat_prod_pgdata` / `echat_prod_natsdata` / `echat_prod_redisdata` 承载数据、事件流与热状态；所有基础设施不映射宿主端口，仅容器内部网络访问。SpiceDB 关系元组复用 PostgreSQL，`echat_spicedb` 库由一次性 `spicedb-db-init` 服务幂等创建（库在跳过、不在补建），随后 `spicedb-migrate` 建表。
 
 4. Let's Encrypt 证书获取：
 
