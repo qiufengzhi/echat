@@ -157,6 +157,8 @@ services:
       # 因此 archive 同域目录必须一并挂载，链接才能在容器内解析到真实文件
       - /etc/letsencrypt/live/echat.qxbnx.cn:/etc/letsencrypt/live/echat.qxbnx.cn:ro
       - /etc/letsencrypt/archive/echat.qxbnx.cn:/etc/letsencrypt/archive/echat.qxbnx.cn:ro
+      # 上传头像持久化到命名卷，重建容器不丢
+      - echat_prod_uploads:/app/data/uploads
     expose:
       - "8080" # HTTP/WebSocket 信令端口，仅在 Compose 内部网络暴露，外部经 gateway HTTPS 进入
       - "4433/udp" # WebTransport/QUIC 信令端口，仅在 Compose 内部网络暴露，外部经宿主映射进入
@@ -189,3 +191,4 @@ volumes:
   echat_prod_pgdata: # PostgreSQL 数据卷
   echat_prod_natsdata: # NATS JetStream 事件流卷
   echat_prod_redisdata: # Redis 热状态与限流计数持久化卷
+  echat_prod_uploads: # 后端上传头像持久化卷（config.yaml uploads.dir 指向 /app/data/uploads）

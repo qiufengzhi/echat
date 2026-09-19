@@ -15,6 +15,7 @@ import (
 	"echat-backend/config"
 	"echat-backend/handlers"
 	"echat-backend/logging"
+	"echat-backend/profile"
 	"echat-backend/room/api"
 	"echat-backend/room/projection"
 	"echat-backend/store"
@@ -35,6 +36,8 @@ type App struct {
 	authSvc *authn.Service
 	// auth 认证域 HTTP 处理器
 	auth *authn.Handler
+	// profile 资料域 HTTP 处理器（资料编辑 + 头像上传）
+	profile *profile.Handler
 	// mux 承载全部业务路由的根 mux
 	mux *http.ServeMux
 }
@@ -72,12 +75,20 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	pingCancel()
 
+	authH := authn.NewHandler(authSvc)
+	prof, err := profile.NewHandler(st.Ent(), cfg.Uploads.Dir, authH)
+	if err != nil {
+		st.Close()
+		return nil, err
+	}
+
 	a := &App{
 		cfg:     cfg,
 		store:   st,
 		rdb:     rdb,
 		authSvc: authSvc,
-		auth:    authn.NewHandler(authSvc),
+		auth:    authH,
+		profile: prof,
 		mux:     http.NewServeMux(),
 	}
 	return a, nil
@@ -88,6 +99,7 @@ func New(cfg *config.Config) (*App, error) {
 func (a *App) Mount() {
 	a.auth.Register(a.mux)
 	api.NewHandler(a.store.Pool(), a.rdb, a.auth).Register(a.mux)
+	a.profile.Register(a.mux)
 	a.mountTransportEntry()
 }
 
