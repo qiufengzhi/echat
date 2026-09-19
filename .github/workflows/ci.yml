@@ -318,7 +318,7 @@ jobs:
           password: ${{ secrets.DEPLOY_PASSWORD }} # SSH 登录密码，适用于当前服务器的密码登录方式。
           port: ${{ secrets.DEPLOY_PORT || '22' }} # SSH 端口。
           script_stop: true # 任一命令失败时立即终止整个部署。
-          command_timeout: 10m # ACR 国内拉取速度快，10 分钟绰绰有余。
+          command_timeout: 20m # 串行拉取（COMPOSE_PARALLEL_LIMIT=1）+ 失败重试一次，耗时比并发更久，放宽到 20 分钟。
           script: |
             set -eu # 遇到未定义变量或命令失败时立即退出。
             cd "${{ secrets.DEPLOY_PATH }}" # 进入服务器上的部署目录。
@@ -357,12 +357,42 @@ jobs:
               fi
 
               echo "Pulling images..."
-              # 拉取镜像，失败则返回非零让外层 fallback
-              if docker compose --env-file .env -f docker-compose.prod.yml pull; then
+
+              # 为什么单独包一个函数并串行拉取：
+              # docker compose pull 默认并发拉取多个镜像。当多个镜像共享同一个基础层时，
+              # 并发"拆包"同一层会偶发竞态，表现为
+              #   failed to register layer: invalid hardlink target "/usr/share/zoneinfo/Africa/Abidjan"
+              # （层 tar 里的硬链接记录找不到目标文件）。这是 Docker 的已知偶发问题，
+              # 镜像本身没坏，单独重拉同一镜像是正常的。
+              # COMPOSE_PARALLEL_LIMIT=1 强制一个一个拉，从根上避开并发竞态。
+              pull_images() {
+                COMPOSE_PARALLEL_LIMIT=1 docker compose --env-file .env -f docker-compose.prod.yml pull
+              }
+
+              # 第一次拉取成功：直接重启服务
+              if pull_images; then
                 docker compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans
                 return 0
               fi
-              echo "ERROR: docker compose pull failed (registry=${registry})."
+
+              # 第一次失败：清理悬空层缓存后重试一次。
+              # 只 prune 悬空对象（不加 -a），避免删掉正在使用的旧镜像拖慢回滚。
+              echo "WARN: first pull failed (registry=${registry}), cleaning dangling layers and retrying once..."
+              docker system prune -f || true
+
+              if pull_images; then
+                docker compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans
+                return 0
+              fi
+
+              # 两次都失败才判定该 registry 不可用，并打印服务器 Docker 环境信息便于定位
+              # （存储驱动不是 overlay2、磁盘/inode 写满，都会让层"拆包"失败）
+              echo "ERROR: docker compose pull failed twice (registry=${registry})."
+              echo "--- docker env for diagnosis ---"
+              docker version || true
+              docker info 2>/dev/null | grep -i -A2 "Storage Driver" || true
+              df -h /var/lib/docker || true
+              echo "--------------------------------"
               return 1
             }
 
