@@ -41,6 +41,11 @@ export default defineConfig(({ mode }) => {
           target: `${backendProtocol}://${backendHost}:${backendPort}`,
           changeOrigin: true,
         },
+        '/uploads': {
+          // 头像等上传文件的静态直出：后端 FileServer 提供，原样透传
+          target: `${backendProtocol}://${backendHost}:${backendPort}`,
+          changeOrigin: true,
+        },
         '/ws': {
           // Keep the browser on the same HTTPS origin while proxying WebSocket traffic to the backend.
           target: `${backendProtocol}://${backendHost}:${backendPort}`,
