@@ -45,7 +45,7 @@ func Open(ctx context.Context, cfg config.DatabaseConfig) (*Store, error) {
 	defer cancel()
 	if err = pool.Ping(pingCtx); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("PostgreSQL 连接失败(%s:%d/%s)——请先运行 docker compose -f deploy/docker-compose.dev.yml up -d: %w",
+		return nil, fmt.Errorf("PostgreSQL 连接失败(%s:%d/%s)—: %w",
 			cfg.Host, cfg.Port, cfg.Name, err)
 	}
 

@@ -49,7 +49,7 @@ func main() {
 	// 装配根：打开 DB、校验迁移、构造认证服务、Redis 与统一路由树
 	root, err := app.New(cfg)
 	if err != nil {
-		logging.L().Fatalw("装配失败", "error", err, "hint", "先运行: docker compose -f deploy/docker-compose.dev.yml up -d")
+		logging.L().Fatalw("装配失败", "error", err)
 	}
 	defer root.Store().Close()
 	root.Mount()
