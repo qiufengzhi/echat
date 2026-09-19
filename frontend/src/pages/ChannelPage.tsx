@@ -262,7 +262,7 @@ export default function ChannelPage() {
         <div className="ai-standby-bubble" role="status" aria-label="唤醒提示">
           <span className="asb-ic">✨</span>
           <span className="asb-txt">
-            说一声「<em>小月</em>」唤醒我
+            呼唤「<em>小月</em>」唤醒我
           </span>
         </div>
       )}

@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import ChannelsTab from './tabs/ChannelsTab'
 import ChatsTab from './tabs/ChatsTab'
 import MeTab from './tabs/MeTab'
+import { getAccessToken } from '../services/auth'
+import { syncRoomJoinDefaultsFromServer } from '../services/settings'
 
 // TabKey 是主界面底部三个 Tab 的枚举，进入主界面默认落在频道
 type TabKey = 'channels' | 'chats' | 'me'
@@ -18,8 +20,20 @@ function readSavedTab(): TabKey {
 
 // MainShell 是登录后落地的移动壳主界面：单个内容面板 + 底部三 Tab 切换
 // 频道为默认 Tab，聊天页产品层面不做文本会话，我的页展示登录用户资料
+// 设置/频道是与本组件平级的路由，离开再回来会重新挂载本组件，故水合用模块级哨兵保证仅跑一次
+let hydratedOnce = false
+
 export default function MainShell() {
   const [tab, setTab] = useState<TabKey>(readSavedTab)
+
+  // 登录后首次进入主界面水合一次服务端权威的进房默认设置到本地镜像；
+  // 回流（退出设置/房间回到主页）不再重复请求，避免无谓的 GET
+  useEffect(() => {
+    if (hydratedOnce) return
+    if (!getAccessToken()) return
+    hydratedOnce = true
+    void syncRoomJoinDefaultsFromServer()
+  }, [])
 
   const switchTab = (next: TabKey) => {
     setTab(next)

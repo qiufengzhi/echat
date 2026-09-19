@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 
 import { SignalingClient } from '../services/signalingClient'
 import { handleWebRTCSignaling } from '../services/webrtcSignalingHandler'
+import { getRoomJoinDefaults } from '../services/settings'
 import type {
   AIAssistantState,
   AIStatusPayload,
@@ -115,8 +116,10 @@ function createEmptyVoiceRoomState(): VoiceRoomState {
     mutedUserIds: new Set(),
     isConnected: false,
     isReconnecting: false,
-    isMuted: false,
-    isSpeakerOn: true,
+    // 初始静音位按设置默认对齐：否则进房前那几秒（getUserMedia 未就绪）麦克风按钮会先亮后暗
+    // 真正的 track 禁用仍在 joinRoom 里做，这里只保证首帧观感一致
+    isMuted: !getRoomJoinDefaults().micOnByDefault,
+    isSpeakerOn: getRoomJoinDefaults().speakerOnByDefault,
     aiState: 'offline',
     error: null,
     availableMicrophones: [],
@@ -635,6 +638,13 @@ export function useVoiceRoom(options?: { onKicked?: () => void }): UseVoiceRoomR
       // 加入房间时刷新设备列表，供 SettingsModal 展示下拉选项
       await refreshAudioDevices()
 
+      // 按设置里的默认行为初始化：默认不开麦克风时禁用本地音轨（静音进房，点按钮即恢复）
+      const micOnByDefault = getRoomJoinDefaults().micOnByDefault
+      if (!micOnByDefault) {
+        const audioTrack = stream.getAudioTracks()[0]
+        if (audioTrack) audioTrack.enabled = false
+      }
+
       setState(prev => ({
         ...prev,
         users: [],
@@ -643,6 +653,7 @@ export function useVoiceRoom(options?: { onKicked?: () => void }): UseVoiceRoomR
         error: null,
         isReconnecting: false,
         remoteStreams: new Map(),
+        isMuted: !micOnByDefault,
       }))
 
       // SignalingClient 只负责连接信令服务器，收到的信令再交回 hook 驱动 WebRTC 协商

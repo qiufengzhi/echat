@@ -31,4 +31,6 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/rooms", transport.Adapt(h.auth.AccessRequired(h.listRooms)))
 	mux.HandleFunc("GET /api/v1/rooms/{code}", transport.Adapt(h.auth.AccessRequired(h.getRoom)))
 	mux.HandleFunc("GET /api/v1/me/rooms", transport.Adapt(h.auth.AccessRequired(h.myRooms)))
+	mux.HandleFunc("GET /api/v1/me/preferences", transport.Adapt(h.auth.AccessRequired(h.getPreferences)))
+	mux.HandleFunc("PUT /api/v1/me/preferences", transport.Adapt(h.auth.AccessRequired(h.putPreferences)))
 }

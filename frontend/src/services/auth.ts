@@ -2,6 +2,8 @@
 //
 // 设计：access 放 localStorage 供 WebSocket ?token= 握手使用，refresh 走 httpOnly cookie
 // 后端已签发，前端不接触 refresh 明文。voice 房间只读 access，失效时调用 refresh 换新后重连
+import { clearRoomJoinDefaultsCache } from './settings'
+
 const ACCESS_KEY = 'echat_access'
 const USER_KEY = 'echat_user'
 
@@ -62,6 +64,27 @@ export async function refresh(): Promise<boolean> {
   return true
 }
 
+// authedFetch 带 Bearer 的 REST 请求：遇 401 先用 refresh 换新 access 重试一次
+// access 仅 15 分钟短命，而 REST 调用分布在整个使用周期内，不能像信令重连那样只在连前刷一次；
+// 这里对过期 token 自愈，refresh 失败或二次 401 才把结果原样交还调用方
+export async function authedFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const send = (token: string | null) =>
+    fetch(input, {
+      ...init,
+      headers: {
+        ...init.headers,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+
+  const res = await send(getAccessToken())
+  if (res.status !== 401) return res
+
+  const renewed = await refresh()
+  if (!renewed) return res
+  return send(getAccessToken())
+}
+
 // saveSession 持久化 access 与用户概要，供 WS 握手与首页展示
 function saveSession(accessToken: string, user?: AuthUser): void {
   window.localStorage.setItem(ACCESS_KEY, accessToken)
@@ -74,6 +97,7 @@ function saveSession(accessToken: string, user?: AuthUser): void {
 export function logout(): void {
   window.localStorage.removeItem(ACCESS_KEY)
   window.localStorage.removeItem(USER_KEY)
+  clearRoomJoinDefaultsCache()
   void fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {})
 }
 
