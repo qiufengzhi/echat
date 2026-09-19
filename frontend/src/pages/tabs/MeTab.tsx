@@ -15,12 +15,16 @@ export default function MeTab() {
     navigate('/login', { replace: true })
   }
 
+  const avatar = user?.avatarUrl ?? null
+
   return (
     <div className="me-body">
       <div className="me-cover">
-        <div className="me-ava">{initial}</div>
+        <div className="me-ava">{avatar ? <img src={avatar} alt="" /> : initial}</div>
         <div className="me-btn">
-          <button type="button">编辑资料</button>
+          <button type="button" onClick={() => navigate('/me/profile')}>
+            编辑资料
+          </button>
         </div>
       </div>
 

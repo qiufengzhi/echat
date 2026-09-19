@@ -31,6 +31,11 @@ export function getAuthUser(): AuthUser | null {
   }
 }
 
+// updateAuthUser 资料变更（昵称/头像）后刷新本地缓存的用户概要，其他页面即时读到新值
+export function updateAuthUser(user: AuthUser): void {
+  window.localStorage.setItem(USER_KEY, JSON.stringify(user))
+}
+
 // isAuthed 是否已持有 access 令牌，HomePage 据此决定是否展示登录表单
 export function isAuthed(): boolean {
   return Boolean(getAccessToken())

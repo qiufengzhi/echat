@@ -42,6 +42,9 @@ temp/
 backend/config.yaml
 agent/config.yaml
 
+# runtime uploads (头像等, config uploads.dir)
+backend/data/
+
 # Python / agent
 __pycache__/
 *.pyc

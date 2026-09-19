@@ -5,6 +5,7 @@ import ChannelPage from './pages/ChannelPage'
 import MainShell from './pages/MainShell'
 import HistoryPage from './pages/me/HistoryPage'
 import SettingsPage from './pages/me/SettingsPage'
+import EditProfilePage from './pages/me/EditProfilePage'
 import LoginPage from './pages/auth/LoginPage'
 import RegisterPage from './pages/auth/RegisterPage'
 import ResetPasswordPage from './pages/auth/ResetPasswordPage'
@@ -31,6 +32,7 @@ function App() {
           <Route path="/channel/:roomId" element={<ChannelPage />} />
           <Route path="/me/history" element={<HistoryPage />} />
           <Route path="/me/settings" element={<SettingsPage />} />
+          <Route path="/me/profile" element={<EditProfilePage />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/" replace />} />
