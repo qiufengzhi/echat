@@ -91,7 +91,10 @@ services:
 
   spicedb-migrate: # 一次性迁移：serve 不自动建表，先 migrate head 建好关系元组表
     container_name: echat-dev-spicedb-migrate
-    image: ghcr.io/authzed/spicedb:v1.18.0
+    # 与生产保持同一版本：迁移是单向的，只能向前不能降级。
+    # 本地库若还停在 v1.18.0，换成 v1.56.2 会自动"向前迁移"补齐（安全）；
+    # 反过来（新库 + 老镜像）会报 "unable to find migration for revision: "。
+    image: ghcr.io/authzed/spicedb:v1.56.2
     restart: "no"
     command: ["migrate", "head"]
     environment:
@@ -105,7 +108,7 @@ services:
 
   spicedb:
     container_name: echat-dev-spicedb
-    image: ghcr.io/authzed/spicedb:v1.18.0
+    image: ghcr.io/authzed/spicedb:v1.56.2 # 与 spicedb-migrate 同版本，serve 前会校验库内 revision
     restart: unless-stopped
     command: ["serve"]
     ports:

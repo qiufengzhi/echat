@@ -70,7 +70,11 @@ services:
 
   spicedb-migrate: # 一次性（run --rm）SpiceDB datastore 迁移：serve 不自动建表，须先 migrate head 才可写 schema
     container_name: echat-spicedb-migrate
-    image: ghcr.io/authzed/spicedb:v1.18.0
+    # 必须与库里已有的 schema 版本同代（>= 当初迁移它的版本），否则报
+    # "unable to find migration for revision: "（迁移链回溯时找不到库里记录的 revision）。
+    # 历史沿革：本库最早由 spicedb:latest（v1.56.2）迁移；曾误钉 v1.18.0，老版本不认识新 revision 直接退出。
+    # 教训：不要跨大版本降级 SpiceDB，升级可以（向前迁移），降级不行。
+    image: ghcr.io/authzed/spicedb:v1.56.2
     restart: "no"
     command: ["migrate", "head"] # 幂等，重复执行无副作用，升级镜像时随 up 自动补齐
     environment:
@@ -84,7 +88,7 @@ services:
 
   spicedb: # 对象级授权（Zanzibar）：关系元组存储复用 Postgres（spicedb-db-init 建库 + spicedb-migrate 建表）
     container_name: echat-spicedb
-    image: ghcr.io/authzed/spicedb:v1.18.0
+    image: ghcr.io/authzed/spicedb:v1.56.2 # 与 spicedb-migrate 必须同一版本：serve 会校验库内 revision 是否兼容
     restart: unless-stopped
     command: ["serve"]
     environment:
