@@ -28,7 +28,7 @@ services:
     container_name: echat-dev-nats
     image: nats:2-alpine
     restart: unless-stopped
-    command: ["-js", "-m", "8222"]  # 开启 JetStream，启用 8222 监控 HTTP
+    command: ["-js", "-m", "8222", "-sd", "/data"]  # 开启 JetStream + 8222 监控；-sd 指定事件流落盘到 /data 卷（默认 /tmp，重建即丢）
     ports:
       - "4222:4222"                 # NATS 客户端连接（relay 发布 / 消费者订阅）
       - "8222:8222"                 # JetStream 监控与健康检查

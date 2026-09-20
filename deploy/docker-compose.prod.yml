@@ -27,7 +27,10 @@ services:
     container_name: echat-nats
     image: nats:2-alpine
     restart: unless-stopped
-    command: ["-js", "-m", "8222"] # 开启 JetStream，8222 为监控/健康检查端口
+    command: ["-js", "-m", "8222", "-sd", "/data"] # 开启 JetStream，8222 为监控/健康检查端口
+    # -sd /data 必须显式指定：nats-server 未配置 store_dir 时 JetStream 默认落 /tmp，
+    # 容器重建即丢事件流（已挂的 echat_prod_natsdata 卷会变成空挂），
+    # outbox 投递过的事件与依赖事件重建的投影读模型都会随之丢失。
     volumes:
       - echat_prod_natsdata:/data # 事件流持久化目录，重启不丢已投递事件
     # 不映射宿主端口：relay/消费者在容器内以 nats:4222 访问，8222 需外联时再映射

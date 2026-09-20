@@ -33,6 +33,7 @@
   .env                       # CI 自动写入四个镜像名变量，首次部署 touch 占位
   backend/
     config.yaml              # 后端配置，手动维护和更新
+    migrations/              # CI 每次部署自动覆盖上传（含 atlas.sum），勿手工改动
   agent/
     config.yaml              # Agent LLM 配置
   nginx/
@@ -170,10 +171,20 @@ Let's Encrypt 会自动续期，无需额外操作。证书被两处共用：
 - backend 容器挂载 `live/<domain>` 与 `archive/<domain>` 两个目录（WebTransport/QUIC 握手，前端默认走 `https://echat.qxbnx.cn:4433` 信令）
   > `live/*.pem` 是指向 `../../archive/<domain>/*.pem` 的相对符号链接，只挂 `live` 会让链接在容器内断链（报 `no such file or directory`），故 archive 必须一起挂
 
-certbot 续期替换私钥后，nginx 经 reload 自动生效；backend 进程在启动时加载证书私钥，因此续期后需重启容器使新私钥生效：
+certbot 续期替换私钥后，宿主机上的 nginx 会经 reload 自动生效，但**本项目的 HTTPS 入口是 gateway 容器内的 nginx，宿主机 reload 管不到它**。更隐蔽的是：gateway 与 backend 都是「文件挂载」，容器创建时绑定的是 inode；续期后 `live/` 下的符号链接指向新的 archive 文件，容器内仍读旧 inode，表现为浏览器拿到已过期证书。因此续期后必须重启两个容器让它们重新解析证书：
 
 ```bash
-docker restart echat-backend
+docker restart echat-gateway echat-backend
+```
+
+建议挂到 certbot 续期钩子上，避免忘记：
+
+```bash
+cat > /etc/letsencrypt/renewal-hooks/deploy/restart-echat.sh <<'EOF'
+#!/bin/sh
+docker restart echat-gateway echat-backend
+EOF
+chmod +x /etc/letsencrypt/renewal-hooks/deploy/restart-echat.sh
 ```
 
 5. 确认服务器端口开放：
@@ -183,3 +194,24 @@ docker restart echat-backend
    - 50000-50100/udp（WebRTC SFU 媒体流）
 
 如果服务器只有旧版 `docker-compose`，排查命令可以把上面的 `docker compose` 改成 `docker-compose`。部署时不要直接执行 `docker-compose up -d` 重建旧容器；旧版工具可能读取不到新版镜像元数据里的 `ContainerConfig`，更稳妥的顺序是先 `pull`，再 `down --remove-orphans`，最后 `up -d`。
+
+## 数据库迁移与 schema 漂移
+
+后端启动期只做校验（`store.Migrate`）：拿**二进制内嵌的最新迁移版本**比对库里 `atlas_schema_revisions` 已应用版本，落后就 FATAL 退出。因此每次新增 `backend/migrations/*.sql`，CI 必须先把迁移目录上传到服务器、再由一次性 `migrate` 服务 apply，后端才能起来。
+
+CI 已负责两件事：上传 `backend/migrations`（含 `atlas.sum`，缺失会让 atlas 校验目录哈希失败），以及在 `up -d` 之前显式执行 `docker compose run --rm migrate`。
+
+手工运维（排查/救急）时执行：
+
+```bash
+cd /srv/echat
+docker compose --env-file .env -f docker-compose.prod.yml run --rm migrate  # 幂等，可重复执行
+docker compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans
+```
+
+若后端日志出现 `数据库已应用迁移 <旧版本> 落后于最新 <新版本>，schema 漂移`，说明线上迁移目录还是旧的（或迁移没跑到）：先确认服务器 `backend/migrations` 与仓库一致（含 `atlas.sum`），再执行上面两条命令。
+
+## 基础设施两个易踩的点
+
+- **NATS 必须显式指定 `-sd /data`**：nats-server 未配置 `store_dir` 时 JetStream 默认落 `/tmp`，容器重建即丢事件流，`echat_*_natsdata` 卷会变成空挂（outbox 已投递的事件、依赖事件重建的投影读模型一起丢）。三个 compose 的 nats 都已带 `-sd /data`，新增环境时别漏。
+- **头像上传要两层 nginx 同时放开请求体上限**：后端允许 5 MiB（`backend/profile/avatar.go` 的 `maxAvatarBytes`），而 nginx 默认只有 1 MiB。外层 `deploy/nginx/gateway.prod.conf` 与前端镜像内的 `frontend/nginx.conf` 任一层没设 `client_max_body_size`，请求都会先被挡成 413，且返回的是 nginx 的 HTML 错误页而不是后端 JSON，前端拿不到可读的错误信息。

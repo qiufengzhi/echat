@@ -296,7 +296,7 @@ jobs:
           password: ${{ secrets.DEPLOY_PASSWORD }} # SSH 登录密码，适用于当前服务器的密码登录方式。
           port: ${{ secrets.DEPLOY_PORT || '22' }} # SSH 端口，未配置时默认 22。
           script_stop: true # 远端命令一旦失败，立刻终止步骤。
-          script: mkdir -p "${{ secrets.DEPLOY_PATH }}/nginx" # 创建部署目录，避免后续上传失败。
+          script: mkdir -p "${{ secrets.DEPLOY_PATH }}/nginx" "${{ secrets.DEPLOY_PATH }}/backend" # 创建部署目录（含迁移目录父级），避免后续上传失败。
 
       - name: Upload production compose file # 把生产 compose 文件和 HTTPS 网关配置上传到服务器部署目录。
         uses: appleboy/scp-action@v0.1.7
@@ -309,6 +309,24 @@ jobs:
           target: ${{ secrets.DEPLOY_PATH }} # 服务器上的目标目录。
           strip_components: 1 # 去掉本地 deploy/ 目录层级，保留 nginx 子目录结构。
           overwrite: true # 如果目标文件已存在，则直接覆盖。
+
+      - name: Upload database migrations # 把 Atlas 版本化迁移目录（含 atlas.sum）上传到服务器。
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }} # 目标服务器地址。
+          username: ${{ secrets.DEPLOY_USER }} # SSH 登录用户名。
+          password: ${{ secrets.DEPLOY_PASSWORD }} # SSH 登录密码，适用于当前服务器的密码登录方式。
+          port: ${{ secrets.DEPLOY_PORT || '22' }} # SSH 端口。
+          # 必须与 compose 里 migrate 服务的只读挂载 ./backend/migrations 完全对应。
+          # 为什么必须单独上传：迁移 SQL 编译期内嵌进后端二进制，启动时 store.Migrate 拿
+          # 「内嵌最新版本」比对「库里已应用版本」。若服务器上的迁移目录停留在旧版本，
+          # migrate 服务无新文件可 apply（幂等退出 0，看起来一切正常），后端却因漂移
+          # FATAL 并 restart: unless-stopped 无限崩溃重启。atlas.sum 必须一并上传，
+          # 否则 atlas 校验目录哈希失败、迁移根本跑不起来。
+          source: "backend/migrations"
+          target: ${{ secrets.DEPLOY_PATH }}/backend # 落到 <部署目录>/backend/migrations
+          strip_components: 0 # 保留 backend/migrations 两级目录结构
+          overwrite: true # 每次部署覆盖为仓库当前版本。
 
       - name: Pull and restart services # 在服务器上登录 ACR、拉镜像并重启所有服务。
         uses: appleboy/ssh-action@v1.0.3
@@ -323,6 +341,24 @@ jobs:
             set -eu # 遇到未定义变量或命令失败时立即退出。
             cd "${{ secrets.DEPLOY_PATH }}" # 进入服务器上的部署目录。
 
+            # 写 .env 的镜像变量。必须定义在 try_deploy 之外：ACR 分支若登录失败会直接
+            # return，定义写在分支里的话 GHCR 回退就调到未定义函数（set -e 下整段退出）。
+            write_image_env() {
+              # 只覆盖四个镜像变量，必须保留运维手工写入的基础设施凭据
+              # （POSTGRES_PASSWORD / REDIS_PASSWORD / SPICEDB_PRESHARED_KEY）：
+              # 直接 cat > .env 会整份清空，compose 随即回退 ${VAR:-默认值}，
+              # 与服务器 backend/config.yaml 里填的强密码不一致 → 后端连不上库或授权被拒。
+              touch .env
+              grep -v -E '^(BACKEND_IMAGE|FRONTEND_IMAGE|AGENT_IMAGE|IMAGE_TAG)=' .env > .env.keep || true
+              mv .env.keep .env
+              cat >> .env <<EOF
+            BACKEND_IMAGE=$1
+            FRONTEND_IMAGE=$2
+            AGENT_IMAGE=$3
+            IMAGE_TAG=$4
+            EOF
+            }
+
             # 尝试拉取并部署：先试 ACR（国内快），失败则 fallback 到 GHCR。
             try_deploy() {
               local registry="$1"  # "acr" or "ghcr"
@@ -336,24 +372,22 @@ jobs:
                   echo "ERROR: docker login to ACR failed (exit=$?). Check ACR_USERNAME/ACR_PASSWORD or network."
                   return 1
                 }
-                cat > .env <<EOF
-            BACKEND_IMAGE=${{ needs.build-and-push.outputs.acr_backend_image }}
-            FRONTEND_IMAGE=${{ needs.build-and-push.outputs.acr_frontend_image }}
-            AGENT_IMAGE=${{ needs.build-and-push.outputs.acr_agent_image }}
-            IMAGE_TAG=${tag}
-            EOF
+                write_image_env \
+                  "${{ needs.build-and-push.outputs.acr_backend_image }}" \
+                  "${{ needs.build-and-push.outputs.acr_frontend_image }}" \
+                  "${{ needs.build-and-push.outputs.acr_agent_image }}" \
+                  "${tag}"
               else
                 echo "Logging in to GHCR..."
                 echo "${{ secrets.GITHUB_TOKEN }}" | docker login "${{ env.GHCR_REGISTRY }}" -u "${{ github.actor }}" --password-stdin || {
                   echo "ERROR: docker login to GHCR failed (exit=$?). Check if server can reach ghcr.io."
                   return 1
                 }
-                cat > .env <<EOF
-            BACKEND_IMAGE=${{ needs.build-and-push.outputs.backend_image }}
-            FRONTEND_IMAGE=${{ needs.build-and-push.outputs.frontend_image }}
-            AGENT_IMAGE=${{ needs.build-and-push.outputs.agent_image }}
-            IMAGE_TAG=${tag}
-            EOF
+                write_image_env \
+                  "${{ needs.build-and-push.outputs.backend_image }}" \
+                  "${{ needs.build-and-push.outputs.frontend_image }}" \
+                  "${{ needs.build-and-push.outputs.agent_image }}" \
+                  "${tag}"
               fi
 
               echo "Pulling images..."
@@ -366,7 +400,31 @@ jobs:
               # 镜像本身没坏，单独重拉同一镜像是正常的。
               # COMPOSE_PARALLEL_LIMIT=1 强制一个一个拉，从根上避开并发竞态。
               pull_images() {
-                COMPOSE_PARALLEL_LIMIT=1 docker compose --env-file .env -f docker-compose.prod.yml pull
+                # 第一遍全量拉取（含 postgres/nats/redis/spicedb/atlas/nginx 等基础设施与
+                # 一次性工具镜像），失败不阻断：这些镜像几乎不变，不该由它们决定本次部署成败。
+                # 反例教训：早先这里整段 pull 失败就判定 registry 不可用，于是 atlas 之类
+                # 工具镜像偶发拉不动时，已经拉到的业务镜像也跟着不上线，白跑一轮部署。
+                COMPOSE_PARALLEL_LIMIT=1 docker compose --env-file .env -f docker-compose.prod.yml pull || true
+
+                # 第二遍只严格校验本次要上线的三个业务镜像：只有它们拉到才认为可部署。
+                COMPOSE_PARALLEL_LIMIT=1 docker compose --env-file .env -f docker-compose.prod.yml pull backend frontend agent
+              }
+
+              # 应用数据库迁移（幂等，可重复执行）：必须在 up 之前跑完。
+              # 为什么不能只依赖 backend 的 depends_on: service_completed_successfully：
+              # 1) up -d 不保证重跑已成功退出的一次性容器（配置哈希未变时直接跳过），
+              #    新增迁移文件可能压根没被 apply；
+              # 2) 即便跑了，也不改变校验顺序——后端启动期 store.Migrate 拿「二进制内嵌的
+              #    最新迁移版本」比对库里已应用版本，落后即 FATAL 退出，被 restart:
+              #    unless-stopped 拉起后再次 FATAL，形成崩溃重启循环（本次线上故障表现）。
+              # 这里显式 run --rm 一次，迁移失败即让本 registry 的部署失败，避免带着
+              # 漂移的 schema 把后端拉起来刷日志。
+              migrate_db() {
+                # 先清掉上一轮 up 留下的一次性 migrate 容器：该服务声明了固定
+                # container_name（echat-migrate），残留容器可能让 run 报名字冲突。
+                # 删除后 up -d 会重建并重跑一次，迁移幂等，无副作用。
+                docker compose --env-file .env -f docker-compose.prod.yml rm -f migrate || true
+                docker compose --env-file .env -f docker-compose.prod.yml run --rm migrate
               }
 
               # 启动栈：先确保 compose 网络存在，再 up。
@@ -394,8 +452,9 @@ jobs:
                 docker compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans
               }
 
-              # 第一次拉取成功：直接重启服务
+              # 第一次拉取成功：先应用迁移，再重启服务
               if pull_images; then
+                migrate_db
                 up_stack
                 return 0
               fi
@@ -409,6 +468,7 @@ jobs:
               docker image prune -f || true
 
               if pull_images; then
+                migrate_db
                 up_stack
                 return 0
               fi
