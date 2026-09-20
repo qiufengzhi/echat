@@ -201,6 +201,8 @@ chmod +x /etc/letsencrypt/renewal-hooks/deploy/restart-echat.sh
 
 CI 已负责两件事：上传 `backend/migrations`（含 `atlas.sum`，缺失会让 atlas 校验目录哈希失败），以及在 `up -d` 之前显式执行 `docker compose run --rm migrate`。
 
+两步任一失败都会终止部署：`run --rm migrate` 退出码非 0 直接判失败；迁移跑完还会按 `store.Migrate` 同口径比对「目录内最新迁移版本」与库里 `atlas_schema_revisions` 已应用版本，不一致同样判失败。只看退出码不够——atlas 在迁移目录落后时是**幂等退出 0** 的（无事可做即成功），必须复核版本才能发现「服务器目录没更新 / apply 到了别的库」这类静默漂移。
+
 手工运维（排查/救急）时执行：
 
 ```bash

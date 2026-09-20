@@ -325,7 +325,12 @@ jobs:
           # 否则 atlas 校验目录哈希失败、迁移根本跑不起来。
           source: "backend/migrations"
           target: ${{ secrets.DEPLOY_PATH }}/backend # 落到 <部署目录>/backend/migrations
-          strip_components: 0 # 保留 backend/migrations 两级目录结构
+          # strip_components 必须=1：从 source「backend/migrations」去掉第一级 backend/，
+          # 剩 migrations/，拼到 target/backend → backend/migrations（与 compose migrate
+          # 服务的只读挂载 ./backend/migrations 对齐）。
+          # strip=0 会多一层落到 backend/backend/migrations（migrate 挂载不到），migrate
+          # 幂等退出 0、后端 store.Migrate 却因漂移 FATAL——2026-09-20 线上故障即此。
+          strip_components: 1
           overwrite: true # 每次部署覆盖为仓库当前版本。
 
       - name: Pull and restart services # 在服务器上登录 ACR、拉镜像并重启所有服务。
@@ -424,7 +429,37 @@ jobs:
                 # container_name（echat-migrate），残留容器可能让 run 报名字冲突。
                 # 删除后 up -d 会重建并重跑一次，迁移幂等，无副作用。
                 docker compose --env-file .env -f docker-compose.prod.yml rm -f migrate || true
-                docker compose --env-file .env -f docker-compose.prod.yml run --rm migrate
+                # 失败必须上抛：早先这里不判返回码，atlas 拉不动镜像 / 目录哈希校验失败时
+                # 迁移静默跳过，后端却照常 up，于是带着漂移 schema 崩溃重启（2026-09-20 线上故障）。
+                if ! docker compose --env-file .env -f docker-compose.prod.yml run --rm migrate; then
+                  echo "ERROR: 数据库迁移执行失败，终止本次部署（不让后端带漂移 schema 起来）"
+                  return 1
+                fi
+                verify_migration
+              }
+
+              # 迁移后复核：按与后端 store.Migrate 相同的口径比对「目录内最新迁移版本」与
+              # 「库里 atlas_schema_revisions 已应用版本」。仅靠 run --rm migrate 的退出码不够：
+              # atlas 在目录落后时也会幂等退出 0（无事可做即成功），只有比对版本才能发现
+              # 「迁移目录没上传 / apply 到了别的库」这类静默漂移。
+              verify_migration() {
+                local latest applied
+                latest=$(ls backend/migrations/*.sql 2>/dev/null | xargs -n1 basename | cut -d_ -f1 | sort | tail -1)
+                if [ -z "$latest" ]; then
+                  echo "ERROR: 服务器上 backend/migrations 为空，无法校验迁移版本"
+                  return 1
+                fi
+                # POSTGRES_* 来自部署目录的 .env，缺省值与 compose 里 migrate 服务保持一致
+                set -a; . ./.env 2>/dev/null || true; set +a
+                applied=$(docker compose --env-file .env -f docker-compose.prod.yml exec -T postgres \
+                  psql -U "${POSTGRES_USER:-echat}" -d "${POSTGRES_DB:-echat}" -tAc \
+                  "SELECT version FROM atlas_schema_revisions.atlas_schema_revisions WHERE type = 2 ORDER BY executed_at DESC LIMIT 1" \
+                  | tr -d '[:space:]')
+                if [ "$applied" != "$latest" ]; then
+                  echo "ERROR: 迁移复核失败：库内已应用 ${applied:-<空>}，迁移目录最新 ${latest}——schema 仍漂移"
+                  return 1
+                fi
+                echo "迁移复核通过：已应用 ${applied}"
               }
 
               # 启动栈：先确保 compose 网络存在，再 up。
@@ -454,7 +489,7 @@ jobs:
 
               # 第一次拉取成功：先应用迁移，再重启服务
               if pull_images; then
-                migrate_db
+                migrate_db || return 1
                 up_stack
                 return 0
               fi
@@ -468,7 +503,7 @@ jobs:
               docker image prune -f || true
 
               if pull_images; then
-                migrate_db
+                migrate_db || return 1
                 up_stack
                 return 0
               fi
