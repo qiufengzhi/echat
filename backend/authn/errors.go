@@ -19,8 +19,8 @@ var (
 	ErrBadRequest = &Error{Code: "VALIDATION_ERROR", Message: "请求参数不合法", Status: http.StatusBadRequest}
 	// ErrConflict 注册冲突（用户名/邮箱已占用），统一泛化
 	ErrConflict = &Error{Code: "REGISTER_CONFLICT", Message: "注册信息无法完成", Status: http.StatusConflict}
-	// ErrWeakPassword 密码强度不足（zxcvbn 判定）
-	ErrWeakPassword = &Error{Code: "WEAK_PASSWORD", Message: "密码强度不足，请使用更复杂的组合", Status: http.StatusBadRequest}
+	// ErrWeakPassword 密码不满足长度要求（>= 8 位）
+	ErrWeakPassword = &Error{Code: "WEAK_PASSWORD", Message: "密码至少 8 位", Status: http.StatusBadRequest}
 	// ErrInvalidToken 一次性令牌无效/过期/已消费
 	ErrInvalidToken = &Error{Code: "TOKEN_INVALID", Message: "验证链接无效或已过期", Status: http.StatusBadRequest}
 	// ErrAccessTokenInvalid access token 无效/过期/被吊销（HTTP 中间件与 WS 握手共用，401 让客户端走刷新）

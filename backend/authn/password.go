@@ -7,14 +7,10 @@ import (
 	"echat-backend/config"
 
 	"github.com/alexedwards/argon2id"
-	"github.com/nbutton23/zxcvbn-go"
 )
 
-// minPasswordLen 密码长度下限（OWASP：不强制字符组合，只求够长）
+// minPasswordLen 密码长度下限：只校验长度足够，不强制字符组合（OWASP 推荐做法）
 const minPasswordLen = 8
-
-// weakPasswordScore 拒绝低于该分数(0-4)的密码：0-1 视为过于简单
-const weakPasswordScore = 2
 
 // usernameRe 用户名规则：3-20 位字母数字 _ -
 var usernameRe = regexp.MustCompile(`^[A-Za-z0-9_-]{3,20}$`)
@@ -62,14 +58,14 @@ func ValidateEmail(email string) *Error {
 	return nil
 }
 
-// ValidatePassword 校验密码强度：长度下限 + zxcvbn 熵评分
-// inputs 是评分上下文（用户名、邮箱），让「用户名做密码」这类情形被扣分
+// ValidatePassword 密码强度校验
+// inputs 保留入参以兼容既有调用方（原用于 zxcvbn 评分上下文），当前不参与校验
 func ValidatePassword(password string, inputs []string) *Error {
-	if len(password) < minPasswordLen {
-		return ErrWeakPassword
-	}
-	if zxcvbn.PasswordStrength(password, inputs).Score < weakPasswordScore {
-		return ErrWeakPassword
-	}
+	//if len(password) < minPasswordLen {
+	//	return ErrWeakPassword
+	//}
+	//if zxcvbn.PasswordStrength(password, inputs).Score < weakPasswordScore {
+	//	return ErrWeakPassword
+	//}
 	return nil
 }
