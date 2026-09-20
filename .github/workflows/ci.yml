@@ -369,19 +369,47 @@ jobs:
                 COMPOSE_PARALLEL_LIMIT=1 docker compose --env-file .env -f docker-compose.prod.yml pull
               }
 
+              # 启动栈：先确保 compose 网络存在，再 up。
+              # 已知故障：若 echat 的默认网络被删（docker system prune / network prune 都会清掉
+              # "没有被运行中的容器使用"的网络），残留容器仍持有旧网络 ID，up 在 start 阶段直接报
+              #   failed to set up container networking: network <id> not found
+              # 且 compose 不一定会重建这些容器（配置哈希未变），于是整个部署卡死。
+              # 这里做两级兜底：先 --force-recreate 让所有容器按当前网络重建；
+              # 仍失败则 down（不带 -v，命名卷保留，数据不丢）后重新 up，网络与容器全部重建。
+              up_stack() {
+                if docker compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans; then
+                  return 0
+                fi
+
+                echo "WARN: docker compose up failed, retrying with --force-recreate..."
+                if docker compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans --force-recreate; then
+                  return 0
+                fi
+
+                echo "WARN: still failing, recreating project networks and containers..."
+                echo "--- docker networks for diagnosis ---"
+                docker network ls || true
+                echo "-------------------------------------"
+                docker compose --env-file .env -f docker-compose.prod.yml down --remove-orphans --timeout 30 || true
+                docker compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans
+              }
+
               # 第一次拉取成功：直接重启服务
               if pull_images; then
-                docker compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans
+                up_stack
                 return 0
               fi
 
-              # 第一次失败：清理悬空层缓存后重试一次。
-              # 只 prune 悬空对象（不加 -a），避免删掉正在使用的旧镜像拖慢回滚。
+              # 第一次失败：清理悬空镜像层后重试一次。
+              # 注意：这里必须用 docker image prune，不能用 docker system prune。
+              # system prune 会连带删除"未被运行中容器使用"的网络和已停止的容器，
+              # 本项目网络一旦被删，随后 up 就会报 network not found（正是本次故障根因）。
+              # 只 prune 悬空镜像（不加 -a），既腾出层缓存空间，又不删正在使用的旧镜像（回滚更快）。
               echo "WARN: first pull failed (registry=${registry}), cleaning dangling layers and retrying once..."
-              docker system prune -f || true
+              docker image prune -f || true
 
               if pull_images; then
-                docker compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans
+                up_stack
                 return 0
               fi
 
