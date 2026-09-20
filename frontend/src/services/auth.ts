@@ -3,9 +3,16 @@
 // 设计：access 放 localStorage 供 WebSocket ?token= 握手使用，refresh 走 httpOnly cookie
 // 后端已签发，前端不接触 refresh 明文。voice 房间只读 access，失效时调用 refresh 换新后重连
 import { clearRoomJoinDefaultsCache } from './settings'
+import { apiFetch, httpError, safeJson } from './request'
 
 const ACCESS_KEY = 'echat_access'
 const USER_KEY = 'echat_user'
+
+// SessionResponse 登录/刷新成功响应体（与后端 SessionResult 对应），前端只消费这两字段
+interface SessionResponse {
+  accessToken: string // 短命无状态 JWT
+  user: AuthUser // 登录用户概要
+}
 
 // AuthUser 后端 /auth/login 响应中的用户概要
 export interface AuthUser {
@@ -42,29 +49,40 @@ export function isAuthed(): boolean {
 }
 
 // login 用 用户名/邮箱 + 密码 换取双 token，access 存本地、refresh 由后端写 cookie
+// 失败时抛人话错误：业务 message 优先，网关 5xx/网络异常走 httpError 兜底，绝不外泄原始解析异常
 export async function login(identifier: string, password: string): Promise<AuthUser> {
-  const res = await fetch('/api/v1/auth/login', {
+  const res = await apiFetch('/api/v1/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
     body: JSON.stringify({ identifier, password }),
   })
-  const data = await res.json()
+  const data = await safeJson<SessionResponse>(res)
   if (!res.ok) {
-    throw new Error(data?.error?.message || '登录失败，请稍后重试')
+    throw httpError(res, data)
+  }
+  if (!data?.accessToken) {
+    throw new Error('登录失败，请稍后重试')
   }
   saveSession(data.accessToken, data.user)
   return data.user as AuthUser
 }
 
 // refresh 用 httpOnly cookie 里的 refresh 换新 access；失败说明会话已失效
+// 任何失败（含网络异常、网关 5xx、响应非 JSON）都静默返回 false，绝不抛原始异常污染调用方
 export async function refresh(): Promise<boolean> {
-  const res = await fetch('/api/v1/auth/refresh', {
-    method: 'POST',
-    credentials: 'include',
-  })
+  let res: Response
+  try {
+    res = await apiFetch('/api/v1/auth/refresh', {
+      method: 'POST',
+      credentials: 'include',
+    })
+  } catch {
+    return false
+  }
   if (!res.ok) return false
-  const data = await res.json()
+  const data = await safeJson<SessionResponse>(res)
+  if (!data?.accessToken) return false
   saveSession(data.accessToken, data.user)
   return true
 }
@@ -74,7 +92,7 @@ export async function refresh(): Promise<boolean> {
 // 这里对过期 token 自愈，refresh 失败或二次 401 才把结果原样交还调用方
 export async function authedFetch(input: string, init: RequestInit = {}): Promise<Response> {
   const send = (token: string | null) =>
-    fetch(input, {
+    apiFetch(input, {
       ...init,
       headers: {
         ...init.headers,
@@ -123,18 +141,22 @@ export interface RegisterResult {
 }
 
 // register 创建账号；带 email 走邮箱验证路径（返回 needVerify），否则本地账号直接可用
+// 失败时抛人话错误，与 login 相同的收敛策略
 export async function register(input: RegisterInput): Promise<RegisterResult> {
   const body: Record<string, string> = { username: input.username, password: input.password }
   if (input.email) body.email = input.email
-  const res = await fetch('/api/v1/auth/register', {
+  const res = await apiFetch('/api/v1/auth/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
     body: JSON.stringify(body),
   })
-  const data = await res.json()
+  const data = await safeJson<RegisterResult>(res)
   if (!res.ok) {
-    throw new Error(data?.error?.message || '注册失败，请稍后重试')
+    throw httpError(res, data)
   }
-  return data as RegisterResult
+  if (!data?.id) {
+    throw new Error('注册失败，请稍后重试')
+  }
+  return data
 }
