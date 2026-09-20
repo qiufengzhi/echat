@@ -42,7 +42,7 @@ import (
 	"time"
 
 	"github.com/gunter-q12/resample"
-	"github.com/pion/rtp"
+	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 )
@@ -205,7 +205,28 @@ func (r *SFURoom) Join(clientID string) error {
 		settingEngine.SetNAT1To1IPs(nat1To1IPs, webrtc.ICECandidateTypeHost)
 	}
 
-	api := webrtc.NewAPI(webrtc.WithSettingEngine(settingEngine))
+	// 自建拦截器链代替默认链：默认链含 stats interceptor，多 PC 并发读 + 重协商时偶发 SIGSEGV
+	// 本项目不消费服务端 GetStats，故按 pion 官方建议复刻默认链时略去 stats，保留 nack/report/twcc
+	mediaEngine := &webrtc.MediaEngine{}
+	if err := mediaEngine.RegisterDefaultCodecs(); err != nil {
+		return fmt.Errorf("register default codecs: %w", err)
+	}
+	registry := &interceptor.Registry{}
+	if err := webrtc.ConfigureNack(mediaEngine, registry); err != nil {
+		return fmt.Errorf("configure nack: %w", err)
+	}
+	if err := webrtc.ConfigureRTCPReports(registry); err != nil {
+		return fmt.Errorf("configure rtcp reports: %w", err)
+	}
+	if err := webrtc.ConfigureTWCCSender(mediaEngine, registry); err != nil {
+		return fmt.Errorf("configure twcc sender: %w", err)
+	}
+
+	api := webrtc.NewAPI(
+		webrtc.WithMediaEngine(mediaEngine),
+		webrtc.WithInterceptorRegistry(registry),
+		webrtc.WithSettingEngine(settingEngine),
+	)
 
 	cg := webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
@@ -627,22 +648,28 @@ func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
 			}
 		}
 
-		// 解码 Opus → PCM，送 ASR（每个 RTP 包都需要）
-		go func() {
-			pcm, err := decodeOpusToInt16(rtpPacket.Payload, 16000)
-			if err != nil {
-				logger.Warnw("解码失败", "source", sourceID[:8], "error", err)
-			} else if len(pcm) > 0 {
-				// 仅有实际音频数据才送 ASR，DTX 静音包解码后 pcm 为空，直接跳过
-				asr_cli.GlobalRecognizer.AudioIn <- asrpb.AudioChunk{
-					SessionId:  sessionID,
-					RoomId:     r.ID,
-					ClientId:   sourceID,
-					Pcm:        int16ToLEBytes(pcm),
-					SampleRate: 16000,
-				}
+		// 就地解码 Opus → PCM 并送 ASR（每个 RTP 包一次）
+		// 不能每包起 goroutine 阻塞发送：ASR 消费端一旦被慢/失败的云端建连卡住，
+		// AudioIn 通道（缓冲 64）会满，阻塞的 goroutine 持续堆积，最终拖垮进程
+		pcm, decErr := decodeOpusToInt16(rtpPacket.Payload, 16000)
+		if decErr != nil {
+			logger.Warnw("解码失败", "source", sourceID[:8], "error", decErr)
+		} else if len(pcm) > 0 {
+			// 仅有实际音频数据才送 ASR，DTX 静音包解码后 pcm 为空，直接跳过
+			chunk := asrpb.AudioChunk{
+				SessionId:  sessionID,
+				RoomId:     r.ID,
+				ClientId:   sourceID,
+				Pcm:        int16ToLEBytes(pcm),
+				SampleRate: 16000,
 			}
-		}()
+			// 非阻塞发送：ASR 消费端繁忙时 AudioIn 会满，直接按背压丢弃，不阻塞音频转发
+			select {
+			case asr_cli.GlobalRecognizer.AudioIn <- chunk:
+			default:
+				logger.Debugw("ASR 输入队列满，丢弃音频块", "source", sourceID[:8])
+			}
+		}
 
 		// TTS 音频处理循环只启动一次，避免每个 RTP 包都泄漏一个 goroutine
 		if !ttsStarted.Swap(true) {
@@ -650,7 +677,6 @@ func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
 				sessionID: sessionID,
 				roomId:    r.ID,
 				clientId:  sourceID,
-				clients:   forwardClient,
 			}
 			go r.runAITTSLoop(acr)
 		}
@@ -660,12 +686,6 @@ func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
 // runAITTSLoop TTS 音频处理主循环：从 TTS 管道读取 PCM → 重采样 → Opus 编码 → RTP 发送
 // 由 forwardRtp 在首包到达时启动一次，整个 session 复用同一循环
 func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
-	aiTtsTrack, err := r.getAITtsTrack(acr.clientId)
-	if err != nil {
-		logger.Warnw("获取AI TTS音轨失败", "source", acr.clientId[:8], "error", err)
-		return
-	}
-
 	// 创建 Opus 编码器：48kHz 单声道 VoIP 模式，整个 TTS 会话复用同一个实例
 	// CGO_ENABLED=1 编译时使用原生 libopus，编码质量最佳
 	enc, err := newOpusEncoderPreset()
@@ -679,8 +699,6 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 	var pcmBuf []int16    // PCM 采样缓冲区，用于帧对齐（TTS 输出可能不对齐 20ms 帧边界）
 	var totalPCM int      // 累计收到的 TTS PCM 字节数（16kHz 原始）
 	var framesEncoded int // 累计编码发送的 Opus 帧数
-	var relaySeq uint16   // relay 轨 RTP 序号（其他客户端 relay 仍走手动 RTP）
-	var relayTs uint32    // relay 轨 RTP 时间戳
 
 	lrs := llmpb.LLMResponse{
 		SessionId: acr.sessionID, // 使用 forwardRtp 的一致 sessionID，保证和 LLM 返回的 SessionId 一致
@@ -724,7 +742,6 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 		defer close(senderDone)
 		sendTicker := time.NewTicker(20 * time.Millisecond)
 		defer sendTicker.Stop()
-		var sent int // 已发送帧计数，用于 relay 首帧 Marker 判定
 		for {
 			select {
 			case <-sendTicker.C:
@@ -734,32 +751,33 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 						// 队列已关闭且排空，发送完成
 						return
 					}
-					// 写入 AI TTS 轨（pion WriteSample 自动管理 seq/ts/marker）
-					if err := aiTtsTrack.WriteSample(media.Sample{
-						Data:               qf.payload,
-						Duration:           20 * time.Millisecond,
-						PrevDroppedPackets: 0,
-					}); err != nil {
-						logger.Warnw("写入AI TTS轨失败", "source", acr.clientId[:8], "error", err)
+
+					// 把 AI 音频写给房间内每个当前成员各自独立的 AI 音轨
+					// 每个成员音轨都是 TrackLocalStaticSample，WriteSample 由 pion packetizer/sequencer
+					// 维护单调连续的 seq/ts，播放端 jitter buffer 才能正常解码
+					// 若像之前那样混进说话者的麦克风中继轨，AI 帧的 seq/ts 与麦克风包各自起算，
+					// 会被浏览器当成已过期的旧包丢弃，导致只有说话者本人（独立 AI 轨）能听到
+					r.lock.RLock()
+					recipients := make([]string, 0, len(r.peers))
+					for destID := range r.peers {
+						recipients = append(recipients, destID)
 					}
-					// 写入 relay 轨（其他客户端），relay 使用 TrackLocalStaticRTP 需手动构造 RTP 包
-					relayMarker := sent == 0
-					for clientID, relay := range acr.clients {
-						if err := relay.WriteRTP(&rtp.Packet{
-							Header: rtp.Header{
-								Version:        2,
-								Marker:         relayMarker,
-								SequenceNumber: relaySeq,
-								Timestamp:      relayTs,
-							},
-							Payload: qf.payload,
+					r.lock.RUnlock()
+
+					for _, destID := range recipients {
+						destTrack, err := r.getAITtsTrack(destID)
+						if err != nil {
+							logger.Warnw("获取AI TTS音轨失败", "dest", destID[:8], "error", err)
+							continue
+						}
+						if err := destTrack.WriteSample(media.Sample{
+							Data:               qf.payload,
+							Duration:           20 * time.Millisecond,
+							PrevDroppedPackets: 0,
 						}); err != nil {
-							logger.Warnw("写入AI中继轨失败", "dest", clientID[:8], "error", err)
+							logger.Warnw("写入AI TTS轨失败", "dest", destID[:8], "error", err)
 						}
 					}
-					relaySeq++
-					sent++
-					relayTs += opusEncoderFrameSamples
 				default:
 					// 队列为空，等待下一次 tick
 				}
@@ -871,7 +889,6 @@ audioLoopDone:
 		"totalPCM", totalPCM,
 		"resampledBytes", totalResampledBytes,
 		"framesEncoded", framesEncoded,
-		"relaySeq", relaySeq,
 	)
 }
 
