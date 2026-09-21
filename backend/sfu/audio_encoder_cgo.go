@@ -1,8 +1,6 @@
-//go:build opus_native
-
 // Package sfu 原生 libopus 编码器（CGo 链接系统 libopus，编码质量最佳）
-// 编译方式: CGO_ENABLED=1 go build -tags opus_native .
-// 需预装: opus-dev (Alpine) / libopus-dev (Debian) / libopus (其他)
+// 默认编码器，替代早期 WASM opus 编码（jj11hh/opus wazero 桥会越界写宿主内存，导致任意协程随机崩溃）
+// 需预装: opus-dev (Alpine) / libopus-dev (Debian) / mingw-w64-opus (Windows)
 
 package sfu
 

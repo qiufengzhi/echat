@@ -16,8 +16,8 @@ RUN go mod download
 # 复制源码
 COPY . .
 
-# 构建（-tags opus_native 启用原生 libopus 编码器，需 CGo + opus-dev）
-RUN CGO_ENABLED=1 GOOS=linux go build -tags opus_native -o server .
+# 构建（原生 libopus 编码器需 CGo + opus-dev，默认开启）
+RUN CGO_ENABLED=1 GOOS=linux go build -o server .
 
 # 运行阶段
 FROM ${REG}/alpine:3.21
