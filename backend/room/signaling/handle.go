@@ -356,6 +356,11 @@ func disconnect(client *gateway.Client, preferredNextHostID string, reason strin
 			r := getRoomByID(roomID)
 			if r != nil {
 				outcome := r.Leave(client.ConnID, client.UserID, preferredNextHostID)
+				// 交接目标：多端在线时选主可能仍选中离开者本人，此时房主身份未变，不构成交接
+				handoverTo := outcome.NextHostID
+				if outcome.WasHost && handoverTo == client.UserID {
+					handoverTo = ""
+				}
 
 				if outcome.Remaining > 0 {
 					broadcastToRoom(roomID, client.ConnID, MsgTypeUserLeft, UserLeftPayload{
@@ -363,23 +368,24 @@ func disconnect(client *gateway.Client, preferredNextHostID string, reason strin
 						HostID: outcome.NextHostID,
 					})
 
-					if outcome.WasHost && outcome.NextHostID != "" && outcome.NextHostID != client.UserID {
+					if handoverTo != "" {
 						aiState.Set(roomID, "offline") // 房主交接时重置 AI 为离线，新房主需重新开启
 						broadcastToRoom(roomID, client.ConnID, MsgTypeHostChanged, map[string]string{
-							"hostId": outcome.NextHostID,
+							"hostId": handoverTo,
 						})
 					}
 				}
 
 				// 当前态写库 + 事件同事务记账：离开/交接/清空在一个事务内收敛
+				// handoverTo 为空（房主未变或房间清空）时只记离开事实，不记交接事件
 				if persister != nil {
 					_ = persister.LeaveRoom(context.Background(), r, client.UserID,
-						outcome.WasHost, outcome.NextHostID, outcome.ShouldDelete, reason)
+						outcome.WasHost, handoverTo, outcome.ShouldDelete, reason)
 				}
 
 				// 授权投影：房主交接写 SpiceDB，随后撤销离开者全部角色元组（幂等）
-				if outcome.WasHost && outcome.NextHostID != "" {
-					transferHost(r, client.UserID, outcome.NextHostID)
+				if handoverTo != "" {
+					transferHost(r, client.UserID, handoverTo)
 				}
 				removeRoles(r, client.UserID, outcome.RemovedRole, outcome.RemovedMuted)
 

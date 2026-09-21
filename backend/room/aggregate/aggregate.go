@@ -114,6 +114,7 @@ type LeaveOutcome struct {
 	// WasHost 离开者是否原房主
 	WasHost bool
 	// NextHostID 离开后的房主；房间非空且有值
+	// 多端场景可能等于离开者本人（该用户另有连接在线，房主身份未变），由编排层据此判定是否构成交接
 	NextHostID string
 	// ShouldDelete 房间是否已清空（应删除内存实例与关闭事实行）
 	ShouldDelete bool
@@ -182,6 +183,7 @@ func (r *Room) hasUser(userID string) bool {
 
 // chooseNextHost 在剩余成员中选下一任房主：preferred 在线则优先，否则在用户 id 中随机
 // 调用方须已持有 r.Lock；空房返回空串
+// 多端在线时可能选中离开者本人（其另一条连接仍在场），房主未变，由编排层识别为无交接
 func (r *Room) chooseNextHost(preferredNextHostID string) string {
 	if preferredNextHostID != "" && r.hasUser(preferredNextHostID) {
 		return preferredNextHostID

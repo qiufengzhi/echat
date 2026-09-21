@@ -12,6 +12,7 @@ type FactStore interface {
 	// JoinRoom 落一条成员加入事实：按需建/复开房间行、upsert 成员在场，并同事务记账 room.created/room.joined
 	JoinRoom(ctx context.Context, room *Room, member Session) error
 	// LeaveRoom 落一条成员离开事实：标记离场、交接房主或关闭清空房间，并同事务记账 room.left 等
+	// nextHostID 为交接目标，空表示房主未变（多端摘连接）或房间清空，此时不记房间交接事件
 	LeaveRoom(ctx context.Context, room *Room, leaverUserID string, wasHost bool, nextHostID string, shouldDelete bool, reason string) error
 }
 

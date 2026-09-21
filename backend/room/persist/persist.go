@@ -167,7 +167,7 @@ func (p *Persister) JoinRoom(ctx context.Context, room *aggregate.Room, member a
 }
 
 // LeaveRoom 实现 aggregate.FactStore：把 leave/交接/清空的当前态写库并与领域事件同事务记账
-// room 内存聚合房间，leaverUserID 离开成员身份，wasHost 是否原房主，nextHostID 新房主，shouldDelete 房间是否清空，reason 离开来源（leave/disconnect/kicked）
+// room 内存聚合房间，leaverUserID 离开成员身份，wasHost 是否原房主，nextHostID 交接目标（空表示房主未变或房间清空，不记交接事件），shouldDelete 房间是否清空，reason 离开来源（leave/disconnect/kicked）
 func (p *Persister) LeaveRoom(ctx context.Context, room *aggregate.Room, leaverUserID string, wasHost bool, nextHostID string, shouldDelete bool, reason string) error {
 	ctx, cancel := context.WithTimeout(ctx, persistTimeout)
 	defer cancel()
