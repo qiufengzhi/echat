@@ -22,6 +22,14 @@ type Config struct {
 	Batch int
 }
 
+// 重投退避参数：不带延迟的 Nak 会让 JetStream 立刻把消息重投回来，
+// 一条持续失败的事件足以把消费循环打成热循环（实测约 3ms 一轮、每秒数百次）
+// 指数退避到上限后按固定间隔继续重投，等下游恢复或事件源修复后自然收敛
+const (
+	nakBaseDelay = time.Second
+	nakMaxDelay  = 30 * time.Second
+)
+
 // Router 订阅 JetStream 并按事件 type 分发到各投影器
 // 单 durable consumer 顺序消费 room.>，逐条投递，全部投影器成功才 Ack
 type Router struct {
@@ -64,7 +72,7 @@ func (r *Router) projectorsOf(eventType string) []Projector {
 }
 
 // Run 连接 NATS 后用 durable consumer 订阅 room.> 循环消费并按 type 分发
-// 连接或建订阅失败均指数退避重试；处理成功才 ack，失败 Nak 重投
+// 连接或建订阅失败均指数退避重试；处理成功才 ack，失败按投递次数退避后重投
 // ctx 用于中断消费；返回 nil 表示被 ctx 取消退出
 func (r *Router) Run(ctx context.Context) error {
 	if err := r.connectNATS(ctx); err != nil {
@@ -165,7 +173,7 @@ func (r *Router) connectNATS(ctx context.Context) error {
 }
 
 // handleMsg 解码一条消息并按事件类型投递给关注的投影器
-// 解码失败视为毒消息直接 Ack；投影失败 Nak 交由 JetStream 重投
+// 解码失败视为毒消息直接 Ack；投影失败按投递次数退避后 Nak 重投
 func (r *Router) handleMsg(ctx context.Context, m *nats.Msg) {
 	var ev Event
 	if err := json.Unmarshal(m.Data, &ev); err != nil {
@@ -182,12 +190,36 @@ func (r *Router) handleMsg(ctx context.Context, m *nats.Msg) {
 	for _, p := range handlers {
 		if err := p.Handle(ctx, ev); err != nil && firstErr == nil {
 			firstErr = err
-			logger.Warnw("投影失败，等待重投", "type", ev.Type, "eventID", ev.ID, "error", err)
 		}
 	}
-	if firstErr != nil {
-		_ = m.Nak()
+	if firstErr == nil {
+		_ = m.Ack()
 		return
 	}
-	_ = m.Ack()
+	delivered := deliveredCount(m)
+	delay := nakDelay(delivered)
+	logger.Warnw("投影失败，退避后重投", "type", ev.Type, "eventID", ev.ID,
+		"delivered", delivered, "delay", delay, "error", firstErr)
+	_ = m.NakWithDelay(delay)
+}
+
+// nakDelay 计算该消息本次失败后的重投延迟：第 n 次投递失败后等 base*2^(n-1)，上限 nakMaxDelay
+// delivered 为已投递次数（含本次，首次为 1）
+func nakDelay(delivered uint64) time.Duration {
+	delay := nakBaseDelay
+	for i := uint64(2); i <= delivered; i++ {
+		delay *= 2
+		if delay >= nakMaxDelay {
+			return nakMaxDelay
+		}
+	}
+	return delay
+}
+
+// deliveredCount 取该消息的已投递次数（含本次）；元数据不可得时按首次投递处理
+func deliveredCount(m *nats.Msg) uint64 {
+	if md, err := m.Metadata(); err == nil && md.NumDelivered > 0 {
+		return md.NumDelivered
+	}
+	return 1
 }

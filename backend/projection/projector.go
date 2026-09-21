@@ -3,7 +3,7 @@
 // 定位：CQRS 读侧（事件骨干从「只写」变「可读」）——写侧是事务性 Outbox + relay（outbox 包），
 // 读侧是 durable consumer + 幂等投影（本包），重复投递同一事件不产生重复数据
 // 投影器各维护一个读模型：active_rooms / room:members:* / user_room_history
-// 消费至少一次语义：Handle 返回 nil 才 Ack，否则 Nak 重投，处理须幂等
+// 消费至少一次语义：Handle 返回 nil 才 Ack，否则按投递次数退避后 Nak 重投，处理须幂等
 package projection
 
 import (
