@@ -70,6 +70,10 @@ func TestE2E(t *testing.T) {
 	mustNoErr(t, c.TransferHost(ctx, room, host, coworker))
 	must(t, c, ctx, true, "交接后新 host 生效", "host", room, coworker)
 	must(t, c, ctx, false, "旧 host 失去交接权", "transfer_host", room, host)
+
+	// 自交接（多端上线时房主摘掉一条连接）：语义应为「房主没变」而非非法请求
+	mustNoErr(t, c.TransferHost(ctx, room, coworker, coworker))
+	must(t, c, ctx, true, "自交接后房主不变", "host", room, coworker)
 }
 
 // must 断言 Can 判定结果与期望一致，判定出错立即失败

@@ -39,13 +39,17 @@ func (c *Client) RemoveRoomRole(ctx context.Context, role, roomID, userID string
 }
 
 // TransferHost 房主交接：一次请求内删旧 host 写新 host，保证任意时刻恰好一个 host，天然防双房主
+// from == to（多端在线时房主只摘掉一条连接，本人仍是房主）退化为单条 TOUCH：
+// 同一关系在一次请求里出现两次会被 SpiceDB 判为 InvalidArgument，而这并非可重试的瞬时故障
 func (c *Client) TransferHost(ctx context.Context, roomID, from, to string) error {
-	_, err := c.raw.WriteRelationships(ctx, &v1.WriteRelationshipsRequest{
-		Updates: []*v1.RelationshipUpdate{
-			{Operation: v1.RelationshipUpdate_OPERATION_DELETE, Relationship: roomRelationship("host", roomID, from)},
-			{Operation: v1.RelationshipUpdate_OPERATION_TOUCH, Relationship: roomRelationship("host", roomID, to)},
-		},
-	})
+	updates := []*v1.RelationshipUpdate{
+		{Operation: v1.RelationshipUpdate_OPERATION_DELETE, Relationship: roomRelationship("host", roomID, from)},
+		{Operation: v1.RelationshipUpdate_OPERATION_TOUCH, Relationship: roomRelationship("host", roomID, to)},
+	}
+	if from == to {
+		updates = updates[1:]
+	}
+	_, err := c.raw.WriteRelationships(ctx, &v1.WriteRelationshipsRequest{Updates: updates})
 	if err == nil {
 		c.cache.invalidateRoom(roomID)
 	}
