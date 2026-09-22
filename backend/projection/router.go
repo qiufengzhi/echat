@@ -30,6 +30,10 @@ const (
 	nakMaxDelay  = 30 * time.Second
 )
 
+// reconnectPollInterval 断连期间等待 NATS 恢复的轮询间隔
+// 这段窗口不做 Fetch：nats.go 重连后自动重订阅，恢复即按 durable 位点续读
+const reconnectPollInterval = 500 * time.Millisecond
+
 // Router 订阅 JetStream 并按事件 type 分发到各投影器
 // 单 durable consumer 顺序消费 room.>，逐条投递，全部投影器成功才 Ack
 type Router struct {
@@ -95,6 +99,15 @@ func (r *Router) Run(ctx context.Context) error {
 			return nil
 		default:
 		}
+		if !r.connected() {
+			// 断连期间不发起 Fetch：否则每秒一次超时 Fetch 只会堆无效忙循环与警告日志
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(reconnectPollInterval):
+			}
+			continue
+		}
 		msgs, err := sub.Fetch(batch, nats.MaxWait(time.Second))
 		if err != nil {
 			if errors.Is(err, nats.ErrTimeout) {
@@ -108,6 +121,11 @@ func (r *Router) Run(ctx context.Context) error {
 			r.handleMsg(ctx, m)
 		}
 	}
+}
+
+// connected 判断 NATS 当前是否已连上；消费循环据此跳过断连窗口
+func (r *Router) connected() bool {
+	return r.nc != nil && r.nc.Status() == nats.CONNECTED
 }
 
 // subscribe 建立 durable pull consumer，失败指数退避重试直至 ctx 取消
@@ -147,6 +165,16 @@ func (r *Router) connectNATS(ctx context.Context) error {
 			nats.MaxReconnects(-1),
 			nats.ReconnectWait(time.Second),
 			nats.Timeout(5*time.Second),
+			// 连接生命周期可观测：断连/恢复/永久关闭必须落日志，否则停机期间投影静默停摆无人知晓
+			nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+				logger.Warnw("NATS 断连，投影暂停消费等待重连", "durable", r.cfg.Durable, "error", err)
+			}),
+			nats.ReconnectHandler(func(nc *nats.Conn) {
+				logger.Infow("NATS 已重连，投影从 durable 位点续读", "url", nc.ConnectedUrl(), "durable", r.cfg.Durable)
+			}),
+			nats.ClosedHandler(func(_ *nats.Conn) {
+				logger.Warnw("NATS 连接已永久关闭，投影停止消费（需人工介入）", "durable", r.cfg.Durable)
+			}),
 		)
 		if err == nil {
 			if js, jerr := nc.JetStream(); jerr == nil {
