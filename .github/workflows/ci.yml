@@ -19,7 +19,10 @@ permissions:
 
 concurrency:
   group: deploy-${{ github.ref }} # 同一分支只保留一个部署流程，避免并发覆盖
-  cancel-in-progress: true # 新的提交到来时取消旧的同分支部署
+  # 必须为 false：设成 true 时，连续推送会把「正在推镜像」的部署直接砍掉，
+  # 表现为日志末尾一行 "Error: The operation was canceled."（镜像推到一半、
+  # manifest 未提交，deploy 作业也不会执行）。部署是串行语义，新提交排队即可。
+  cancel-in-progress: false
 
 env:
   GHCR_REGISTRY: ghcr.io # GitHub Container Registry，面向海外 / GitHub Actions 内部使用
@@ -71,7 +74,9 @@ jobs:
   build-and-push: # 校验通过后构建镜像并推送到可用 registry。每服务只构建一次，按需打多 registry tag
     needs: verify # 依赖 verify 成功，避免无效代码进入部署阶段
     runs-on: ubuntu-latest
-    timeout-minutes: 30 # 三个服务构建总时长上限
+    timeout-minutes: 60 # 三个服务构建 + GHCR↔ACR 同步总时长上限。
+    # 30 分钟不够：ACR 在 GitHub 海外 Runner 上推送很慢（单层可重试数十秒），
+    # 超时会在推送中途砍掉整个作业，日志只剩 "Error: The operation was canceled."。
     outputs:
       backend_image: ${{ steps.image-vars.outputs.backend_image }} # GHCR 后端镜像名
       frontend_image: ${{ steps.image-vars.outputs.frontend_image }} # GHCR 前端镜像名
@@ -150,15 +155,26 @@ jobs:
         id: sync-backend-acr
         if: steps.acr-login.outcome == 'success' && (success() || failure())
         continue-on-error: true
+        timeout-minutes: 20 # 单独限时：ACR 同步再慢也不能拖到整个作业超时被取消。
         run: |
           src="${{ steps.image-vars.outputs.backend_image }}:${{ steps.image-vars.outputs.image_tag }}"
           dst="${{ steps.image-vars.outputs.acr_backend_image }}"
           tag="${{ steps.image-vars.outputs.image_tag }}"
-          docker pull "${src}"
-          docker tag "${src}" "${dst}:${tag}"
-          docker tag "${src}" "${dst}:latest"
-          docker push "${dst}:${tag}"
-          docker push "${dst}:latest"
+          # ACR 在 GitHub 海外 Runner 上不稳定，日志里常见单层 "Retrying in N seconds"。
+          # 单次失败不代表镜像有问题，整步重试 3 次，避免一次抖动就丢掉这个 registry。
+          for attempt in 1 2 3; do
+            if docker pull "${src}" \
+              && docker tag "${src}" "${dst}:${tag}" \
+              && docker tag "${src}" "${dst}:latest" \
+              && docker push "${dst}:${tag}" \
+              && docker push "${dst}:latest"; then
+              exit 0
+            fi
+            echo "WARN: ACR sync attempt ${attempt} failed, retrying in 10s..."
+            sleep 10
+          done
+          echo "ERROR: ACR sync failed after 3 attempts: ${dst}"
+          exit 1
 
       - name: Track backend results
         id: track-backend
@@ -188,15 +204,24 @@ jobs:
         id: sync-frontend-acr
         if: steps.acr-login.outcome == 'success' && (success() || failure())
         continue-on-error: true
+        timeout-minutes: 20 # 同上：同步慢不得拖垮整个作业。
         run: |
           src="${{ steps.image-vars.outputs.frontend_image }}:${{ steps.image-vars.outputs.image_tag }}"
           dst="${{ steps.image-vars.outputs.acr_frontend_image }}"
           tag="${{ steps.image-vars.outputs.image_tag }}"
-          docker pull "${src}"
-          docker tag "${src}" "${dst}:${tag}"
-          docker tag "${src}" "${dst}:latest"
-          docker push "${dst}:${tag}"
-          docker push "${dst}:latest"
+          for attempt in 1 2 3; do
+            if docker pull "${src}" \
+              && docker tag "${src}" "${dst}:${tag}" \
+              && docker tag "${src}" "${dst}:latest" \
+              && docker push "${dst}:${tag}" \
+              && docker push "${dst}:latest"; then
+              exit 0
+            fi
+            echo "WARN: ACR sync attempt ${attempt} failed, retrying in 10s..."
+            sleep 10
+          done
+          echo "ERROR: ACR sync failed after 3 attempts: ${dst}"
+          exit 1
 
       - name: Track frontend results
         id: track-frontend
@@ -226,15 +251,24 @@ jobs:
         id: sync-agent-acr
         if: steps.acr-login.outcome == 'success' && (success() || failure())
         continue-on-error: true
+        timeout-minutes: 20 # 同上：同步慢不得拖垮整个作业。
         run: |
           src="${{ steps.image-vars.outputs.agent_image }}:${{ steps.image-vars.outputs.image_tag }}"
           dst="${{ steps.image-vars.outputs.acr_agent_image }}"
           tag="${{ steps.image-vars.outputs.image_tag }}"
-          docker pull "${src}"
-          docker tag "${src}" "${dst}:${tag}"
-          docker tag "${src}" "${dst}:latest"
-          docker push "${dst}:${tag}"
-          docker push "${dst}:latest"
+          for attempt in 1 2 3; do
+            if docker pull "${src}" \
+              && docker tag "${src}" "${dst}:${tag}" \
+              && docker tag "${src}" "${dst}:latest" \
+              && docker push "${dst}:${tag}" \
+              && docker push "${dst}:latest"; then
+              exit 0
+            fi
+            echo "WARN: ACR sync attempt ${attempt} failed, retrying in 10s..."
+            sleep 10
+          done
+          echo "ERROR: ACR sync failed after 3 attempts: ${dst}"
+          exit 1
 
       - name: Track agent results
         id: track-agent
