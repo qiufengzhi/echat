@@ -53,8 +53,19 @@ jobs:
         with:
           go-version: "1.26" # 与后端 Dockerfile 和 go.mod 使用的 Go 版本保持一致
 
+      - name: Install libopus # 安装原生 opus 头文件与库
+        # 必须：sfu/audio_encoder_cgo.go 是默认且唯一的 Opus 编码器实现（CGo 链接系统 libopus，
+        # WASM 版 jj11hh/opus 因越界写宿主内存已移除），无 build tag 兜底。
+        # 缺 opus/opus.h 时 `go test ./...` 直接 fatal error: opus/opus.h: No such file or directory。
+        # 与 backend/Dockerfile 里的 apk add opus-dev 对齐，保证 CI 与镜像构建环境一致。
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libopus-dev
+
       - name: Test backend # 运行后端测试，至少保证编译和包依赖正常
         working-directory: backend
+        env:
+          CGO_ENABLED: "1" # 必须开启 CGo，否则 sfu 包缺少 newOpusEncoderImpl 实现
         run: go test ./...
 
   build-and-push: # 校验通过后构建镜像并推送到可用 registry。每服务只构建一次，按需打多 registry tag

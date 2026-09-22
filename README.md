@@ -29,7 +29,11 @@ echat/
 
 ## 快速开始
 
-**前置依赖**：Docker + Docker Compose、Go ≥ 1.26、Node.js ≥ 18、Python ≥ 3.10
+**前置依赖**：Docker + Docker Compose、Go ≥ 1.26、Node.js ≥ 18、Python ≥ 3.10、libopus（本地跑后端必需）
+
+> 后端 SFU 的 Opus 编码器为 CGo 原生实现（`backend/sfu/audio_encoder_cgo.go`），本地编译/测试需先装 opus 开发包：
+> Alpine `apk add opus-dev`、Debian/Ubuntu `apt install libopus-dev`、macOS `brew install opus`、Windows `mingw-w64-opus`。
+> 未安装会报 `fatal error: opus/opus.h: No such file or directory`。Docker 构建与 GitHub Actions 已内置该依赖。
 
 ```bash
 # 1. 起基础设施（PostgreSQL + NATS + Redis + SpiceDB）
