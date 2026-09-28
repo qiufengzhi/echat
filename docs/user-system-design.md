@@ -1,6 +1,6 @@
 # eChat 用户系统设计
 
-> **定位说明（2026-08-26 更新）**：本文件是**概念讲解**（认证≠授权、users/identities 解耦、双 token、RBAC/Zanzibar 演进思想）。**落地规格以 [user-system-spec.md](user-system-spec.md) 为准**——授权方案已由「手写 mini-RBAC」改为 **SpiceDB/Zanzibar**（见 [frontier-architecture-blueprint.md](../docs/frontier-architecture-blueprint.md) §3.5），其余概念（解耦、双 token、角色矩阵）仍成立。
+> **定位说明（2026-08-26 更新）**：本文件是**概念讲解**（认证≠授权、users/identities 解耦、双 token、RBAC/Zanzibar 演进思想）。**落地规格以 [user-system-spec.md](user-system-spec.md) 为准**——授权方案已由「手写 mini-RBAC」改为 **SpiceDB/Zanzibar**（见 [frontier-architecture-blueprint.md](frontier-architecture-blueprint.md) §3.5），其余概念（解耦、双 token、角色矩阵）仍成立。
 > 本文档为 eChat 引入用户系统（认证 + 授权 + 账户建模）的设计蓝图。
 > 每个技术点标注定位：✅ 现在落地 ／ 🔮 未来演进。
 

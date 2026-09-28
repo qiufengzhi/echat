@@ -7,6 +7,7 @@
 | 序号 | 案例 | 日期 | 状态 | 一句话总结                                                      |
 |------|------|------|------|------------------------------------------------------------|
 | 1 | [tts-audio-truncation](tts-audio-truncation/) | 2026-07-26 ~ 2026-07-27 | ✅ 已解决 | TTS 合成语音帧突发发送导致 Chrome NetEq 缓冲区溢出，多次尝试后通过 Frame Pacing 解决 |
+| 2 | [opus-wasm-memory-corruption](opus-wasm-memory-corruption/) | 2026-09-21 | ✅ 已解决 | `jj11hh/opus` WASM 桥越界写宿主 Go 堆导致全进程随机崩溃，移除后本地与部署统一走 CGo 原生 libopus |
 
 ## 目录结构约定
 

@@ -2,7 +2,7 @@
 
 > **分层位置**：本文档只回答「**要实现什么、按什么阶段、每阶段验收什么**」。具体「怎么实现」见 HOW 层文档，本页只给链接，不复述机制。
 > **状态**：计划，随实现推进维护；每阶段完成即勾选。
-> **配套**：实现细节 → [frontier-architecture-blueprint.md](frontier-architecture-blueprint.md)（架构）与 [user-system-spec.md](../designs/user-system-spec.md)（用户系统）。
+> **配套**：实现细节 → [frontier-architecture-blueprint.md](frontier-architecture-blueprint.md)（架构）与 [user-system-spec.md](user-system-spec.md)（用户系统）。
 
 ---
 

@@ -1,6 +1,6 @@
 # eChat 用户系统完整规格（User System Specification）
 
-> **分层位置**：本文档是 **HOW 层（用户系统怎么实现）**；「要实现什么 + 阶段计划」见 [docs/roadmap.md](../docs/roadmap.md)
+> **分层位置**：本文档是 **HOW 层（用户系统怎么实现）**；「要实现什么 + 阶段计划」见 [docs/roadmap.md](roadmap.md)
 > **日期**：2026-08-26
 > **状态**：规格设计，是用户系统的权威落地依据
 > **范围**：Go 后端为主；涉及与前端协作的协议（API / WebSocket 鉴权 / Token 载体）
@@ -442,7 +442,7 @@ GET /api/v1/users/me → {
 
 ## 十三、阶段对应关系（WHAT 层已独立成文）
 
-分阶段的「要实现什么 / 验收 / 依赖」已移入 **[docs/roadmap.md](../docs/roadmap.md)**（WHAT 层），本表仅列本 HOW 文档各小节落在哪个阶段：
+分阶段的「要实现什么 / 验收 / 依赖」已移入 **[docs/roadmap.md](roadmap.md)**（WHAT 层），本表仅列本 HOW 文档各小节落在哪个阶段：
 
 | 本文档小节 | 内容 | 阶段 |
 |-----------|------|------|
