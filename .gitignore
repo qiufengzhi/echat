@@ -48,9 +48,8 @@ backend/data/
 # Python / agent
 __pycache__/
 *.pyc
+.pytest_cache/
 
 journey.html
 journey.md
 .recall/
-
-agent/test/
