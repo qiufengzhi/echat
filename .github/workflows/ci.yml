@@ -69,7 +69,20 @@ jobs:
         working-directory: backend
         env:
           CGO_ENABLED: "1" # 必须开启 CGo，否则 sfu 包缺少 newOpusEncoderImpl 实现
-        run: go test ./...
+        run: go test -race ./... # 开启竞态检测：agentcli 的分片连接池与在途轮次表都是并发路径
+
+      - name: Set up Python # 准备 agent 测试所需的 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13" # 与本地开发环境一致
+          cache: pip # 缓存 pip 依赖，加快重复构建
+          cache-dependency-path: agent/requirements.txt # 以 agent 依赖清单作为缓存键
+
+      - name: Test agent # 运行 Python 侧测试：编排、每轮 RPC 服务、provider 并发与超时
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r agent/requirements.txt pytest
+          python -m pytest agent/test -q
 
   build-and-push: # 校验通过后构建镜像并推送到可用 registry。每服务只构建一次，按需打多 registry tag
     needs: verify # 依赖 verify 成功，避免无效代码进入部署阶段
