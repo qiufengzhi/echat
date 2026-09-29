@@ -36,11 +36,12 @@ func skipLeadingPartialRunes(s string) string {
 //   - 处理用户打断（barge-in），取消进行中的合成任务
 type Service struct {
 	buffer map[string]*sentenceBuffer // sessionID -> 缓冲区
-	mu     sync.Mutex                 // 保护 buffer map
+	mu     sync.RWMutex               // 保护 buffer map 的增删查，不护业务处理
 }
 
 // sentenceBuffer 每个 session 的文本缓冲区
 type sentenceBuffer struct {
+	mu       sync.Mutex       // 保护本会话的文本缓冲，只被同会话的调用竞争
 	text     strings.Builder  // 累积的文本
 	roomID   string           // 房间 ID
 	clientID string           // 客户端 ID
@@ -57,36 +58,48 @@ func init() {
 	}
 }
 
-func (ss *Service) createSessionID(resp *llm.LLMResponse) {
+// getOrCreate 取会话缓冲，不存在则创建（含其 TTS 管道）
+//
+// 只在读写缓冲区表时持锁，返回后立即释放，不同会话之间不互相阻塞
+// resp: 本轮响应，取其会话 ID、房间与客户端信息
+// return: 该会话的缓冲指针
+func (ss *Service) getOrCreate(resp *llm.TurnResponse) *sentenceBuffer {
 	sessionID := resp.SessionId
-	// 如果该 session 还没有缓冲区，创建一个
-	if _, ok := ss.buffer[sessionID]; !ok {
-		sp, exists := provider.GetSession(sessionID)
-		if !exists {
-			sp = provider.CreateSession(sessionID)
-		}
-
-		ss.buffer[sessionID] = &sentenceBuffer{
-			roomID:   resp.RoomId,
-			clientID: resp.ClientId,
-			seq:      resp.Seq,
-			sp:       sp,
-		}
+	ss.mu.RLock()
+	sb, ok := ss.buffer[sessionID]
+	ss.mu.RUnlock()
+	if ok {
+		return sb
 	}
+
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if sb, ok = ss.buffer[sessionID]; ok {
+		return sb
+	}
+	sp, exists := provider.GetSession(sessionID)
+	if !exists {
+		sp = provider.CreateSession(sessionID)
+	}
+	sb = &sentenceBuffer{
+		roomID:   resp.RoomId,
+		clientID: resp.ClientId,
+		seq:      resp.Seq,
+		sp:       sp,
+	}
+	ss.buffer[sessionID] = sb
+	return sb
 }
 
 // ProcessText 处理 LLM 的流式响应
 // 将 token 累积到缓冲区，遇到句结束符时送入 TTS
-func (ss *Service) ProcessText(resp *llm.LLMResponse) {
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
+// 同一会话内串行调用，跨会话各持自己的缓冲锁，一个会话慢不阻塞其他会话
+func (ss *Service) ProcessText(resp *llm.TurnResponse) {
+	sb := ss.getOrCreate(resp)
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
 
 	sessionID := resp.SessionId
-
-	// 创建会话
-	ss.createSessionID(resp)
-
-	sb := ss.buffer[sessionID]
 
 	// 跳过前导非法 UTF-8 字节（上一段字符被 gRPC 流拆分的尾巴），再累积
 	sb.text.WriteString(skipLeadingPartialRunes(resp.ResponseText))
@@ -121,7 +134,9 @@ func (ss *Service) ProcessText(resp *llm.LLMResponse) {
 				logger.Warnw("最后一句队列已满，丢弃", "sessionID", sessionID)
 			}
 		}
+		ss.mu.Lock()
 		delete(ss.buffer, sessionID)
+		ss.mu.Unlock()
 		logger.Infow("会话结束，清理缓冲区", "sessionID", sessionID)
 	}
 }
@@ -145,14 +160,12 @@ func (ss *Service) BargeIn(sessionID string) {
 	logger.Infow("用户打断，已清理所有数据", "sessionID", sessionID)
 }
 
-// GetAudio 获取合成的音频输出通道（线程安全）
-func (ss *Service) GetAudio(resp *llm.LLMResponse) <-chan []byte {
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
-	// 获取会话
-	ss.createSessionID(resp)
-	// 返回音频输出通道
-	return ss.buffer[resp.SessionId].sp.AudioCh()
+// GetAudio 获取合成的音频输出通道
+//
+// resp: 本轮响应，取其会话 ID 定位缓冲
+// return: 该会话的合成音频输出通道
+func (ss *Service) GetAudio(resp *llm.TurnResponse) <-chan []byte {
+	return ss.getOrCreate(resp).sp.AudioCh()
 }
 
 // splitAtSentenceEnd 在文本中查找第一个句结束符，将文本分割为句子和剩余部分

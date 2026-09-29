@@ -46,11 +46,6 @@ class LLMServiceStub:
                 request_serializer=llm__pb2.CloseSessionRequest.SerializeToString,
                 response_deserializer=llm__pb2.CloseSessionResponse.FromString,
                 _registered_method=True)
-        self.ChatStream = channel.stream_stream(
-                '/llm.LLMService/ChatStream',
-                request_serializer=llm__pb2.LLMRequest.SerializeToString,
-                response_deserializer=llm__pb2.LLMResponse.FromString,
-                _registered_method=True)
         self.HealthCheck = channel.unary_unary(
                 '/llm.LLMService/HealthCheck',
                 request_serializer=llm__pb2.HealthCheckRequest.SerializeToString,
@@ -75,12 +70,6 @@ class LLMServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def ChatStream(self, request_iterator, context):
-        """ChatStream 鏁磋繘绋嬪崟娴佹帴鍙ｏ紝涓€涓繘绋嬪叡鐢ㄤ竴鏉″弻鍚戞祦鎵胯浇鎵€鏈変細璇?        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
     def HealthCheck(self, request, context):
         """HealthCheck 鍋ュ悍妫€鏌?        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -99,11 +88,6 @@ def add_LLMServiceServicer_to_server(servicer, server):
                     servicer.CloseSession,
                     request_deserializer=llm__pb2.CloseSessionRequest.FromString,
                     response_serializer=llm__pb2.CloseSessionResponse.SerializeToString,
-            ),
-            'ChatStream': grpc.stream_stream_rpc_method_handler(
-                    servicer.ChatStream,
-                    request_deserializer=llm__pb2.LLMRequest.FromString,
-                    response_serializer=llm__pb2.LLMResponse.SerializeToString,
             ),
             'HealthCheck': grpc.unary_unary_rpc_method_handler(
                     servicer.HealthCheck,
@@ -167,33 +151,6 @@ class LLMService:
             '/llm.LLMService/CloseSession',
             llm__pb2.CloseSessionRequest.SerializeToString,
             llm__pb2.CloseSessionResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def ChatStream(request_iterator,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.stream_stream(
-            request_iterator,
-            target,
-            '/llm.LLMService/ChatStream',
-            llm__pb2.LLMRequest.SerializeToString,
-            llm__pb2.LLMResponse.FromString,
             options,
             channel_credentials,
             insecure,

@@ -35,7 +35,7 @@ from agent.memory.in_memory import InMemoryMemory
 from agent.memory.sqlite_memory import SQLiteMemory
 from agent.pb import llm_pb2_grpc
 from agent.providers.openai_compatible import OpenAICompatibleProvider
-from agent.server.grpc_service import LLMServiceServicer
+from agent.server.turn_service import TurnServiceServicer
 from agent.server.health import HealthService
 from agent.server.http_api import build_http_app
 from agent.server.interceptors import ErrorHandlingInterceptor, LoggingInterceptor
@@ -138,7 +138,7 @@ async def serve(cfg: Config, orchestrator: ChatOrchestrator, tool_registry: Tool
             await tool_registry.register(tool)
         logger.info("已启用工具: {}", tool_registry.list_names())
 
-    # 拦截器：日志 + 错误处理（Timeout 默认不启用，双向流是长连接）
+    # 拦截器：日志 + 错误处理（Timeout 默认不启用，单轮超时由调用方的 RPC deadline 控制）
     interceptors = [
         LoggingInterceptor(),
         ErrorHandlingInterceptor(),
@@ -154,7 +154,7 @@ async def serve(cfg: Config, orchestrator: ChatOrchestrator, tool_registry: Tool
     server = grpc.aio.server(interceptors=interceptors, options=options)
 
     health_service = HealthService(orchestrator)
-    servicer = LLMServiceServicer(orchestrator, health_service=health_service)
+    servicer = TurnServiceServicer(orchestrator, health_service=health_service)
     llm_pb2_grpc.add_LLMServiceServicer_to_server(servicer, server)
 
     addr = f"{cfg.server.host}:{cfg.server.port}"

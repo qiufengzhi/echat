@@ -10,11 +10,12 @@ Agent 测试套件（无第三方测试依赖，用 asyncio.run / get_event_loop
   tools/           工具注册表与内置工具
   strategies/      三种自主循环策略（mock provider）
   orchestrator     编排引擎（会话、健康、历史）
-  grpc server      真实 aio server + client（ChatStream + HealthCheck）
+  turn servicer    真实 aio server + client（每轮一次 RPC：Generate、CloseSession、HealthCheck）
 """
 
 import asyncio
 import sys
+import time
 from pathlib import Path
 
 # 保证 agent.* 可导入
@@ -91,6 +92,48 @@ class FakeProvider(BaseLLMProvider):
             yield DoneEvent(cancelled=True, finish_reason="cancelled")
 
 
+class PacedProvider(BaseLLMProvider):
+    """按固定节奏产出的 mock provider，用于验证会话内串行、会话间并行与取消"""
+
+    model_name = "paced-model"  # 当前模型名
+    token_limit = 4096  # 上下文窗口大小
+
+    def __init__(self, tokens: int = 6, interval: float = 0.05, text: str = "字"):
+        """初始化节奏可控的 mock provider
+
+        tokens: 每轮产出的事件数
+        interval: 每个事件之间的间隔秒数
+        text: 事件文本前缀，序号自动追加
+        """
+        self._tokens = tokens  # 每轮事件数
+        self._interval = interval  # 事件间隔秒数
+        self._text = text  # 事件文本前缀
+        self.active = 0  # 当前正在生成的调用数
+        self.max_active = 0  # 观测到的最大并发调用数
+        self.cancelled = 0  # 被取消的调用次数
+
+    async def chat_stream(self, messages, tools=None, cancel_event=None):
+        """按节奏逐事件产出，并记录并发与取消
+
+        messages: 对话上下文，假实现不解析仅原样接收
+        tools: 工具 schema 列表，假实现不使用
+        cancel_event: 取消信号，假实现不使用
+        return: 按节奏产出的事件流
+        """
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            for i in range(self._tokens):
+                await asyncio.sleep(self._interval)
+                yield TokenEvent(content=f"{self._text}{i}")
+            yield DoneEvent(finish_reason="stop")
+        except asyncio.CancelledError:
+            self.cancelled += 1
+            raise
+        finally:
+            self.active -= 1
+
+
 async def make_fake_registry():
     """构造带 get_time 的假注册表，不依赖网络
 
@@ -118,6 +161,7 @@ _BASE_CONFIG = {
     "session": {"ttl_seconds": 3600, "max_history": 12, "max_sessions": 100},
     "strategy": "simple",
     "tools": {"enabled": True, "max_rounds": 5, "tool_timeout": 5.0, "allowed_tools": []},
+    "search": {"api_key": "test-search-key", "base_url": "http://fake-search", "timeout": 1.0},
     "memory": {"backend": "in_memory", "sqlite_path": "agent/data/test.db"},
     "logging": {"level": "INFO", "dir": "logs", "retention_days": 1},
 }
@@ -440,15 +484,21 @@ class TestOrchestrator:
 
         run(inner())
 
-    def test_invalid_session_id(self):
-        """非法 session_id 产出 ErrorEvent"""
+    def test_session_pool_full(self):
+        """会话池达到上限且无可淘汰会话时抛 SESSION_POOL_FULL"""
 
         async def inner():
-            """验证非法 session_id 产出 ErrorEvent"""
-            cfg = make_config()
+            """把上限压到 1，连续创建两个会话验证第二个被拒"""
+            cfg = make_config(session={"ttl_seconds": 3600, "max_history": 12, "max_sessions": 1})
             orch = ChatOrchestrator(FakeProvider(), await make_fake_registry(), InMemoryMemory(), cfg)
-            evts = [e async for e in orch.handle_message("bad id!", "你好")]
-            assert any(isinstance(e, ErrorEvent) for e in evts)
+            first = await orch.get_or_create_session("s-1", "room1")
+            assert first is not None
+            try:
+                await orch.get_or_create_session("s-2", "room2")
+            except RuntimeError as exc:
+                assert "SESSION_POOL_FULL" in str(exc)
+            else:
+                raise AssertionError("会话池满时应抛 SESSION_POOL_FULL")
 
         run(inner())
 
@@ -470,65 +520,188 @@ class TestOrchestrator:
 
 
 # =============================================================================
-# 6. gRPC server（真实起一个 aio server + client）
+# 6. 每轮一次 RPC 的服务实现（真实起一个 aio server + client）
 # =============================================================================
-def test_grpc_chat_and_health():
-    """起真实 aio server，验证 ChatStream 与 HealthCheck"""
+async def make_turn_stub(provider):
+    """起真实 aio server，返回客户端 stub 与相关对象
+
+    provider: 注入编排引擎的 mock provider
+    return: (stub, channel, server, orchestrator)，调用方负责关闭通道与服务端
+    """
+    import grpc
+
+    from agent.pb import llm_pb2_grpc
+    from agent.server.health import HealthService
+    from agent.server.interceptors import ErrorHandlingInterceptor, LoggingInterceptor
+    from agent.server.turn_service import TurnServiceServicer
+
+    cfg = make_config()
+    reg = await make_fake_registry()
+    orch = ChatOrchestrator(provider, reg, InMemoryMemory(), cfg)
+
+    server = grpc.aio.server(interceptors=[LoggingInterceptor(), ErrorHandlingInterceptor()])
+    servicer = TurnServiceServicer(orch, health_service=HealthService(orch))
+    llm_pb2_grpc.add_LLMServiceServicer_to_server(servicer, server)
+    port = server.add_insecure_port("127.0.0.1:0")
+    await server.start()
+
+    channel = grpc.aio.insecure_channel(f"127.0.0.1:{port}")
+    return llm_pb2_grpc.LLMServiceStub(channel), channel, server, orch
+
+
+async def close_turn_server(channel, server):
+    """关闭测试用的通道与服务端
+
+    channel: 客户端通道
+    server: aio 服务端
+    """
+    await channel.close()
+    await server.stop(0)
+
+
+async def collect_turn(stub, session_id, turn_id, user_text="你好"):
+    """跑完一轮并收集全部响应事件
+
+    stub: 客户端 stub
+    session_id: 会话 ID
+    turn_id: 轮次 ID
+    user_text: 用户输入文本
+    return: 本轮收到的响应事件列表
+    """
+    from agent.pb import llm_pb2
+
+    responses = []
+    async for resp in stub.Generate(
+        llm_pb2.TurnRequest(
+            session_id=session_id,
+            room_id="room1",
+            client_id="c1",
+            turn_id=turn_id,
+            user_text=user_text,
+            seq=1,
+        )
+    ):
+        responses.append(resp)
+    return responses
+
+
+def test_turn_generate_health_and_close():
+    """一轮 Generate 应流式返回回复并以一个结束事件收尾；健康检查与会话释放可用"""
 
     async def inner():
-        """启动真实 aio server，验证 ChatStream 与 HealthCheck"""
-        import grpc
+        """验证 Generate 的正常路径、HealthCheck 与会话释放的幂等语义"""
+        from agent.pb import llm_pb2
 
-        from agent.pb import llm_pb2, llm_pb2_grpc
-        from agent.server.grpc_service import LLMServiceServicer
-        from agent.server.health import HealthService
-        from agent.server.interceptors import ErrorHandlingInterceptor, LoggingInterceptor
+        stub, channel, server, _ = await make_turn_stub(FakeProvider([("echo", "你好世界")]))
+        try:
+            hresp = await stub.HealthCheck(llm_pb2.HealthCheckRequest(service="llm"))
+            assert hresp.status == llm_pb2.HealthCheckResponse.SERVING
 
-        cfg = make_config()
-        reg = await make_fake_registry()
-        prov = FakeProvider([("echo", "你好世界")])
-        orch = ChatOrchestrator(prov, reg, InMemoryMemory(), cfg)
+            responses = await collect_turn(stub, "t1", "turn-1")
+            texts = [r.response_text for r in responses]
+            finals = [r for r in responses if r.is_final]
+            assert "你好世界" in texts
+            assert len(finals) == 1
+            assert all(r.turn_id == "turn-1" for r in responses)
 
-        server = grpc.aio.server(interceptors=[LoggingInterceptor(), ErrorHandlingInterceptor()])
-        servicer = LLMServiceServicer(orch, health_service=HealthService(orch))
-        llm_pb2_grpc.add_LLMServiceServicer_to_server(servicer, server)
-        port = server.add_insecure_port("127.0.0.1:0")
-        await server.start()
-
-        channel = grpc.aio.insecure_channel(f"127.0.0.1:{port}")
-        stub = llm_pb2_grpc.LLMServiceStub(channel)
-
-        # HealthCheck
-        hresp = await stub.HealthCheck(llm_pb2.HealthCheckRequest(service="llm"))
-        assert hresp.status == llm_pb2.HealthCheckResponse.SERVING
-        assert hresp.active_sessions == 0
-
-        # ChatStream 双向流
-        async def gen():
-            """产出一条正常聊天请求，验证回复文本与结束标记"""
-            yield llm_pb2.LLMRequest(
-                session_id="grpc1", room_id="room1", client_id="c1",
-                user_text="你好", is_last=True, seq=1,
+            # 会话释放：首次存在返回 true，重复释放返回 false
+            first = await stub.CloseSession(
+                llm_pb2.CloseSessionRequest(session_id="t1", reason="room_closed")
             )
+            assert first.closed is True
+            second = await stub.CloseSession(
+                llm_pb2.CloseSessionRequest(session_id="t1", reason="room_closed")
+            )
+            assert second.closed is False
+        finally:
+            await close_turn_server(channel, server)
 
-        responses = []
-        async for resp in stub.ChatStream(gen()):
-            responses.append(resp)
+    run(inner())
 
-        texts = [r.response_text for r in responses]
-        finals = [r for r in responses if r.is_final]
-        assert "你好世界" in texts
-        assert len(finals) == 1
 
-        # 取消信号
-        async def gen_cancel():
-            """产出一条取消请求，验证中断响应的结束标记"""
-            yield llm_pb2.LLMRequest(session_id="grpc1", cancel=True, seq=2)
+def test_turn_different_sessions_run_parallel():
+    """不同会话的两轮应并行执行"""
 
-        async for resp in stub.ChatStream(gen_cancel()):
-            assert resp.is_final
+    async def inner():
+        """两个会话同时发起，断言 provider 侧观测到并发"""
+        prov = PacedProvider(tokens=6, interval=0.05)
+        stub, channel, server, _ = await make_turn_stub(prov)
+        try:
+            started = time.monotonic()
+            results = await asyncio.gather(
+                collect_turn(stub, "s-a", "turn-a"),
+                collect_turn(stub, "s-b", "turn-b"),
+            )
+            elapsed = time.monotonic() - started
+            assert prov.max_active == 2, f"不同会话应并行，实际最大并发 {prov.max_active}"
+            # 单轮约 0.3s，串行会接近 0.6s，这里给宽松上限
+            assert elapsed < 0.55, f"并行耗时异常: {elapsed:.2f}s"
+            assert [len(r) for r in results] == [7, 7]
+        finally:
+            await close_turn_server(channel, server)
 
-        await channel.close()
-        await server.stop(0)
+    run(inner())
+
+
+def test_turn_same_session_serialized():
+    """同一会话的两轮应串行执行"""
+
+    async def inner():
+        """同会话同时发起两轮，断言 provider 侧无并发"""
+        prov = PacedProvider(tokens=4, interval=0.05)
+        stub, channel, server, _ = await make_turn_stub(prov)
+        try:
+            await asyncio.gather(
+                collect_turn(stub, "s-same", "turn-1"),
+                collect_turn(stub, "s-same", "turn-2"),
+            )
+            assert prov.max_active == 1, f"同一会话应串行，实际最大并发 {prov.max_active}"
+        finally:
+            await close_turn_server(channel, server)
+
+    run(inner())
+
+
+def test_turn_cancel_stops_generation_and_releases_lock():
+    """取消一轮应立刻停止生成，并释放会话锁（后续轮次可正常结束）"""
+
+    async def inner():
+        """取消在途轮次，断言 provider 收到取消且会话可继续使用"""
+        from agent.pb import llm_pb2
+
+        prov = PacedProvider(tokens=50, interval=0.05)
+        stub, channel, server, _ = await make_turn_stub(prov)
+        try:
+            call = stub.Generate(
+                llm_pb2.TurnRequest(
+                    session_id="s-cancel", room_id="room1", client_id="c1",
+                    turn_id="turn-c", user_text="你好",
+                )
+            )
+            got_first = False
+            async for _resp in call:
+                got_first = True
+                break
+            assert got_first, "取消前应至少收到一个事件"
+
+            call.cancel()
+            try:
+                async for _resp in call:
+                    pass
+            except asyncio.CancelledError:
+                pass
+
+            for _ in range(100):
+                if prov.cancelled == 1:
+                    break
+                await asyncio.sleep(0.02)
+            assert prov.cancelled == 1, "服务端应停止本轮生成"
+            assert prov.active == 0, "取消后不应有仍在生成的调用"
+
+            # 会话锁已释放：同一会话再跑一轮能正常结束
+            responses = await collect_turn(stub, "s-cancel", "turn-d", user_text="再来一句")
+            assert any(r.is_final for r in responses)
+        finally:
+            await close_turn_server(channel, server)
 
     run(inner())

@@ -114,6 +114,28 @@ class ChatOrchestrator:
             session.cancel()
             logger.info("已请求取消会话 {} 的生成", session_id)
 
+    async def close_session(self, session_id: str) -> bool:
+        """释放会话：取消在途生成、保存历史、从会话池移除
+
+        session_id: 要释放的会话标识
+        return: 会话存在并被释放返回 True，不存在返回 False
+        """
+        async with self._pool_lock:
+            session = self._sessions.pop(session_id, None)
+        if session is None:
+            return False
+        session.cancel()
+        if session.history:
+            try:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(
+                    None, lambda: self._memory.save(session_id, session.get_messages())
+                )
+            except Exception:
+                logger.exception("释放会话时保存历史失败 session={}", session_id)
+        logger.info("会话已释放 session={}", session_id)
+        return True
+
     async def _evict_expired_sessions(self) -> None:
         """惰性淘汰所有过期会话"""
         async with self._pool_lock:

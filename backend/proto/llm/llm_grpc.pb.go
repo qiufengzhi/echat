@@ -21,7 +21,6 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	LLMService_Generate_FullMethodName     = "/llm.LLMService/Generate"
 	LLMService_CloseSession_FullMethodName = "/llm.LLMService/CloseSession"
-	LLMService_ChatStream_FullMethodName   = "/llm.LLMService/ChatStream"
 	LLMService_HealthCheck_FullMethodName  = "/llm.LLMService/HealthCheck"
 )
 
@@ -37,8 +36,6 @@ type LLMServiceClient interface {
 	Generate(ctx context.Context, in *TurnRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TurnResponse], error)
 	// CloseSession 通知 Agent 释放会话，房间解散、客户端离开、Agent 关闭时调用
 	CloseSession(ctx context.Context, in *CloseSessionRequest, opts ...grpc.CallOption) (*CloseSessionResponse, error)
-	// ChatStream 整进程单流接口，一个进程共用一条双向流承载所有会话
-	ChatStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[LLMRequest, LLMResponse], error)
 	// HealthCheck 健康检查
 	HealthCheck(ctx context.Context, in *HealthCheckRequest, opts ...grpc.CallOption) (*HealthCheckResponse, error)
 }
@@ -80,19 +77,6 @@ func (c *lLMServiceClient) CloseSession(ctx context.Context, in *CloseSessionReq
 	return out, nil
 }
 
-func (c *lLMServiceClient) ChatStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[LLMRequest, LLMResponse], error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &LLMService_ServiceDesc.Streams[1], LLMService_ChatStream_FullMethodName, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &grpc.GenericClientStream[LLMRequest, LLMResponse]{ClientStream: stream}
-	return x, nil
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type LLMService_ChatStreamClient = grpc.BidiStreamingClient[LLMRequest, LLMResponse]
-
 func (c *lLMServiceClient) HealthCheck(ctx context.Context, in *HealthCheckRequest, opts ...grpc.CallOption) (*HealthCheckResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HealthCheckResponse)
@@ -115,8 +99,6 @@ type LLMServiceServer interface {
 	Generate(*TurnRequest, grpc.ServerStreamingServer[TurnResponse]) error
 	// CloseSession 通知 Agent 释放会话，房间解散、客户端离开、Agent 关闭时调用
 	CloseSession(context.Context, *CloseSessionRequest) (*CloseSessionResponse, error)
-	// ChatStream 整进程单流接口，一个进程共用一条双向流承载所有会话
-	ChatStream(grpc.BidiStreamingServer[LLMRequest, LLMResponse]) error
 	// HealthCheck 健康检查
 	HealthCheck(context.Context, *HealthCheckRequest) (*HealthCheckResponse, error)
 	mustEmbedUnimplementedLLMServiceServer()
@@ -134,9 +116,6 @@ func (UnimplementedLLMServiceServer) Generate(*TurnRequest, grpc.ServerStreaming
 }
 func (UnimplementedLLMServiceServer) CloseSession(context.Context, *CloseSessionRequest) (*CloseSessionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CloseSession not implemented")
-}
-func (UnimplementedLLMServiceServer) ChatStream(grpc.BidiStreamingServer[LLMRequest, LLMResponse]) error {
-	return status.Error(codes.Unimplemented, "method ChatStream not implemented")
 }
 func (UnimplementedLLMServiceServer) HealthCheck(context.Context, *HealthCheckRequest) (*HealthCheckResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method HealthCheck not implemented")
@@ -191,13 +170,6 @@ func _LLMService_CloseSession_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _LLMService_ChatStream_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(LLMServiceServer).ChatStream(&grpc.GenericServerStream[LLMRequest, LLMResponse]{ServerStream: stream})
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type LLMService_ChatStreamServer = grpc.BidiStreamingServer[LLMRequest, LLMResponse]
-
 func _LLMService_HealthCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(HealthCheckRequest)
 	if err := dec(in); err != nil {
@@ -237,12 +209,6 @@ var LLMService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "Generate",
 			Handler:       _LLMService_Generate_Handler,
 			ServerStreams: true,
-		},
-		{
-			StreamName:    "ChatStream",
-			Handler:       _LLMService_ChatStream_Handler,
-			ServerStreams: true,
-			ClientStreams: true,
 		},
 	},
 	Metadata: "llm.proto",

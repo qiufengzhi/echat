@@ -9,15 +9,16 @@ import (
 	"net/http"
 	"time"
 
+	"echat-backend/agentcli"
 	"echat-backend/app"
 	"echat-backend/asr_cli"
 	"echat-backend/authz"
 	"echat-backend/config"
 	"echat-backend/global"
-	"echat-backend/llm_cli"
 	"echat-backend/logging"
 	"echat-backend/outbox"
 	"echat-backend/projection"
+	llmpb "echat-backend/proto/llm"
 	"echat-backend/room/signaling"
 	"echat-backend/sfu"
 	"echat-backend/tts_cli"
@@ -40,11 +41,11 @@ func main() {
 	})
 	defer logging.Sync() // 确保退出前日志落盘
 
-	// 媒体侧初始化：ASR / SFU-ASR 日志线 / LLM / TTS
+	// 媒体侧初始化：ASR / SFU-ASR 日志线 / TTS / Agent 客户端
 	asr_cli.Init()
 	sfu.StartASRLogger()
-	llm_cli.Init()
 	tts_cli.Init()
+	initAgentClient(cfg)
 
 	// 装配根：打开 DB、校验迁移、构造认证服务、Redis 与统一路由树
 	root, err := app.New(cfg)
@@ -90,6 +91,27 @@ func main() {
 	}
 
 	serve(cfg, root.Handler())
+}
+
+// initAgentClient 初始化每轮一次 RPC 的 Agent 客户端
+//
+// cfg: 全局配置，取 LLM 段的服务地址、分片数与单轮超时
+func initAgentClient(cfg *config.Config) {
+	err := agentcli.Init(agentcli.Options{
+		Addr:        cfg.LLM.GrpcAddr,
+		Shards:      cfg.LLM.Shards,
+		TurnTimeout: time.Duration(cfg.LLM.TurnTimeoutSec) * time.Second,
+		Dispatch: func(resp *llmpb.TurnResponse) {
+			// 该房间 AI 已离线时不播放回复，待机/在线则正常播放
+			if global.AIStates.Get(resp.RoomId) == global.AIOffline {
+				return
+			}
+			tts_cli.GlobalTTSService.ProcessText(resp)
+		},
+	})
+	if err != nil {
+		logging.L().Fatalw("初始化 Agent 客户端失败", "error", err)
+	}
 }
 
 // ensureAuthzSchema 幂等写入 SpiceDB schema，成功即证明连接与 schema 均就绪

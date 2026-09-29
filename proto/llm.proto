@@ -12,8 +12,6 @@ service LLMService {
   rpc Generate(TurnRequest) returns (stream TurnResponse);
   // CloseSession 通知 Agent 释放会话，房间解散、客户端离开、Agent 关闭时调用
   rpc CloseSession(CloseSessionRequest) returns (CloseSessionResponse);
-  // ChatStream 整进程单流接口，一个进程共用一条双向流承载所有会话
-  rpc ChatStream(stream LLMRequest) returns (stream LLMResponse);
   // HealthCheck 健康检查
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
 }
@@ -55,34 +53,6 @@ message CloseSessionRequest {
 // CloseSessionResponse 会话释放结果
 message CloseSessionResponse {
   bool closed = 1; // 会话是否存在并被释放
-}
-
-// LLMRequest 单流接口的请求
-message LLMRequest {
-  string session_id = 1; // 会话 ID，用于关联同一对话的多次请求
-  string room_id = 2;    // 房间 ID
-  string client_id = 3;  // 客户端 ID
-  string user_text = 4;  // 用户输入文本，来自 ASR 识别
-  bool is_last = 5;      // 是否为本次请求的最后一个文本块
-  int64 seq = 6;         // 请求序号，用于保持消息顺序
-  bool cancel = 7;       // 取消当前正在生成的回复
-  string user_id = 8;    // 说话用户的业务 ID，预留做个性化
-}
-
-// LLMResponse 单流接口的响应事件
-message LLMResponse {
-  string session_id = 1;      // 对应请求的会话 ID
-  string room_id = 2;         // 对应请求的房间 ID
-  string client_id = 3;       // 对应请求的客户端 ID
-  string response_text = 4;   // 生成的文本片段，流式返回
-  bool is_final = 5;          // 是否为本次回复的最后一个片段
-  int64 seq = 6;              // 对应请求的序号
-  string error_code = 7;      // 错误码，空表示正常
-  string event_type = 8;      // 事件类型，取值 token、tool_call、tool_result
-  string tool_call_id = 9;    // 工具调用 ID
-  string tool_name = 10;      // 工具名称
-  string tool_arguments = 11; // 工具参数 JSON
-  string tool_result = 12;    // 工具结果文本
 }
 
 // HealthCheckRequest 健康检查请求

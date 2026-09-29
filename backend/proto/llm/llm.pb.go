@@ -71,7 +71,7 @@ func (x HealthCheckResponse_ServingStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use HealthCheckResponse_ServingStatus.Descriptor instead.
 func (HealthCheckResponse_ServingStatus) EnumDescriptor() ([]byte, []int) {
-	return file_llm_proto_rawDescGZIP(), []int{7, 0}
+	return file_llm_proto_rawDescGZIP(), []int{5, 0}
 }
 
 // TurnRequest 一轮对话的请求
@@ -406,240 +406,6 @@ func (x *CloseSessionResponse) GetClosed() bool {
 	return false
 }
 
-// LLMRequest 单流接口的请求
-type LLMRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"` // 会话 ID，用于关联同一对话的多次请求
-	RoomId        string                 `protobuf:"bytes,2,opt,name=room_id,json=roomId,proto3" json:"room_id,omitempty"`          // 房间 ID
-	ClientId      string                 `protobuf:"bytes,3,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`    // 客户端 ID
-	UserText      string                 `protobuf:"bytes,4,opt,name=user_text,json=userText,proto3" json:"user_text,omitempty"`    // 用户输入文本，来自 ASR 识别
-	IsLast        bool                   `protobuf:"varint,5,opt,name=is_last,json=isLast,proto3" json:"is_last,omitempty"`         // 是否为本次请求的最后一个文本块
-	Seq           int64                  `protobuf:"varint,6,opt,name=seq,proto3" json:"seq,omitempty"`                             // 请求序号，用于保持消息顺序
-	Cancel        bool                   `protobuf:"varint,7,opt,name=cancel,proto3" json:"cancel,omitempty"`                       // 取消当前正在生成的回复
-	UserId        string                 `protobuf:"bytes,8,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`          // 说话用户的业务 ID，预留做个性化
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *LLMRequest) Reset() {
-	*x = LLMRequest{}
-	mi := &file_llm_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *LLMRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*LLMRequest) ProtoMessage() {}
-
-func (x *LLMRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_llm_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use LLMRequest.ProtoReflect.Descriptor instead.
-func (*LLMRequest) Descriptor() ([]byte, []int) {
-	return file_llm_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *LLMRequest) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-func (x *LLMRequest) GetRoomId() string {
-	if x != nil {
-		return x.RoomId
-	}
-	return ""
-}
-
-func (x *LLMRequest) GetClientId() string {
-	if x != nil {
-		return x.ClientId
-	}
-	return ""
-}
-
-func (x *LLMRequest) GetUserText() string {
-	if x != nil {
-		return x.UserText
-	}
-	return ""
-}
-
-func (x *LLMRequest) GetIsLast() bool {
-	if x != nil {
-		return x.IsLast
-	}
-	return false
-}
-
-func (x *LLMRequest) GetSeq() int64 {
-	if x != nil {
-		return x.Seq
-	}
-	return 0
-}
-
-func (x *LLMRequest) GetCancel() bool {
-	if x != nil {
-		return x.Cancel
-	}
-	return false
-}
-
-func (x *LLMRequest) GetUserId() string {
-	if x != nil {
-		return x.UserId
-	}
-	return ""
-}
-
-// LLMResponse 单流接口的响应事件
-type LLMResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`              // 对应请求的会话 ID
-	RoomId        string                 `protobuf:"bytes,2,opt,name=room_id,json=roomId,proto3" json:"room_id,omitempty"`                       // 对应请求的房间 ID
-	ClientId      string                 `protobuf:"bytes,3,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`                 // 对应请求的客户端 ID
-	ResponseText  string                 `protobuf:"bytes,4,opt,name=response_text,json=responseText,proto3" json:"response_text,omitempty"`     // 生成的文本片段，流式返回
-	IsFinal       bool                   `protobuf:"varint,5,opt,name=is_final,json=isFinal,proto3" json:"is_final,omitempty"`                   // 是否为本次回复的最后一个片段
-	Seq           int64                  `protobuf:"varint,6,opt,name=seq,proto3" json:"seq,omitempty"`                                          // 对应请求的序号
-	ErrorCode     string                 `protobuf:"bytes,7,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`              // 错误码，空表示正常
-	EventType     string                 `protobuf:"bytes,8,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"`              // 事件类型，取值 token、tool_call、tool_result
-	ToolCallId    string                 `protobuf:"bytes,9,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`         // 工具调用 ID
-	ToolName      string                 `protobuf:"bytes,10,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`                // 工具名称
-	ToolArguments string                 `protobuf:"bytes,11,opt,name=tool_arguments,json=toolArguments,proto3" json:"tool_arguments,omitempty"` // 工具参数 JSON
-	ToolResult    string                 `protobuf:"bytes,12,opt,name=tool_result,json=toolResult,proto3" json:"tool_result,omitempty"`          // 工具结果文本
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *LLMResponse) Reset() {
-	*x = LLMResponse{}
-	mi := &file_llm_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *LLMResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*LLMResponse) ProtoMessage() {}
-
-func (x *LLMResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_llm_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use LLMResponse.ProtoReflect.Descriptor instead.
-func (*LLMResponse) Descriptor() ([]byte, []int) {
-	return file_llm_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *LLMResponse) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-func (x *LLMResponse) GetRoomId() string {
-	if x != nil {
-		return x.RoomId
-	}
-	return ""
-}
-
-func (x *LLMResponse) GetClientId() string {
-	if x != nil {
-		return x.ClientId
-	}
-	return ""
-}
-
-func (x *LLMResponse) GetResponseText() string {
-	if x != nil {
-		return x.ResponseText
-	}
-	return ""
-}
-
-func (x *LLMResponse) GetIsFinal() bool {
-	if x != nil {
-		return x.IsFinal
-	}
-	return false
-}
-
-func (x *LLMResponse) GetSeq() int64 {
-	if x != nil {
-		return x.Seq
-	}
-	return 0
-}
-
-func (x *LLMResponse) GetErrorCode() string {
-	if x != nil {
-		return x.ErrorCode
-	}
-	return ""
-}
-
-func (x *LLMResponse) GetEventType() string {
-	if x != nil {
-		return x.EventType
-	}
-	return ""
-}
-
-func (x *LLMResponse) GetToolCallId() string {
-	if x != nil {
-		return x.ToolCallId
-	}
-	return ""
-}
-
-func (x *LLMResponse) GetToolName() string {
-	if x != nil {
-		return x.ToolName
-	}
-	return ""
-}
-
-func (x *LLMResponse) GetToolArguments() string {
-	if x != nil {
-		return x.ToolArguments
-	}
-	return ""
-}
-
-func (x *LLMResponse) GetToolResult() string {
-	if x != nil {
-		return x.ToolResult
-	}
-	return ""
-}
-
 // HealthCheckRequest 健康检查请求
 type HealthCheckRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -650,7 +416,7 @@ type HealthCheckRequest struct {
 
 func (x *HealthCheckRequest) Reset() {
 	*x = HealthCheckRequest{}
-	mi := &file_llm_proto_msgTypes[6]
+	mi := &file_llm_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -662,7 +428,7 @@ func (x *HealthCheckRequest) String() string {
 func (*HealthCheckRequest) ProtoMessage() {}
 
 func (x *HealthCheckRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_llm_proto_msgTypes[6]
+	mi := &file_llm_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -675,7 +441,7 @@ func (x *HealthCheckRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthCheckRequest.ProtoReflect.Descriptor instead.
 func (*HealthCheckRequest) Descriptor() ([]byte, []int) {
-	return file_llm_proto_rawDescGZIP(), []int{6}
+	return file_llm_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *HealthCheckRequest) GetService() string {
@@ -698,7 +464,7 @@ type HealthCheckResponse struct {
 
 func (x *HealthCheckResponse) Reset() {
 	*x = HealthCheckResponse{}
-	mi := &file_llm_proto_msgTypes[7]
+	mi := &file_llm_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -710,7 +476,7 @@ func (x *HealthCheckResponse) String() string {
 func (*HealthCheckResponse) ProtoMessage() {}
 
 func (x *HealthCheckResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_llm_proto_msgTypes[7]
+	mi := &file_llm_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -723,7 +489,7 @@ func (x *HealthCheckResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthCheckResponse.ProtoReflect.Descriptor instead.
 func (*HealthCheckResponse) Descriptor() ([]byte, []int) {
-	return file_llm_proto_rawDescGZIP(), []int{7}
+	return file_llm_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *HealthCheckResponse) GetStatus() HealthCheckResponse_ServingStatus {
@@ -793,37 +559,7 @@ const file_llm_proto_rawDesc = "" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\".\n" +
 	"\x14CloseSessionResponse\x12\x16\n" +
-	"\x06closed\x18\x01 \x01(\bR\x06closed\"\xda\x01\n" +
-	"\n" +
-	"LLMRequest\x12\x1d\n" +
-	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +
-	"\aroom_id\x18\x02 \x01(\tR\x06roomId\x12\x1b\n" +
-	"\tclient_id\x18\x03 \x01(\tR\bclientId\x12\x1b\n" +
-	"\tuser_text\x18\x04 \x01(\tR\buserText\x12\x17\n" +
-	"\ais_last\x18\x05 \x01(\bR\x06isLast\x12\x10\n" +
-	"\x03seq\x18\x06 \x01(\x03R\x03seq\x12\x16\n" +
-	"\x06cancel\x18\a \x01(\bR\x06cancel\x12\x17\n" +
-	"\auser_id\x18\b \x01(\tR\x06userId\"\xf9\x02\n" +
-	"\vLLMResponse\x12\x1d\n" +
-	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +
-	"\aroom_id\x18\x02 \x01(\tR\x06roomId\x12\x1b\n" +
-	"\tclient_id\x18\x03 \x01(\tR\bclientId\x12#\n" +
-	"\rresponse_text\x18\x04 \x01(\tR\fresponseText\x12\x19\n" +
-	"\bis_final\x18\x05 \x01(\bR\aisFinal\x12\x10\n" +
-	"\x03seq\x18\x06 \x01(\x03R\x03seq\x12\x1d\n" +
-	"\n" +
-	"error_code\x18\a \x01(\tR\terrorCode\x12\x1d\n" +
-	"\n" +
-	"event_type\x18\b \x01(\tR\teventType\x12 \n" +
-	"\ftool_call_id\x18\t \x01(\tR\n" +
-	"toolCallId\x12\x1b\n" +
-	"\ttool_name\x18\n" +
-	" \x01(\tR\btoolName\x12%\n" +
-	"\x0etool_arguments\x18\v \x01(\tR\rtoolArguments\x12\x1f\n" +
-	"\vtool_result\x18\f \x01(\tR\n" +
-	"toolResult\".\n" +
+	"\x06closed\x18\x01 \x01(\bR\x06closed\".\n" +
 	"\x12HealthCheckRequest\x12\x18\n" +
 	"\aservice\x18\x01 \x01(\tR\aservice\"\x94\x02\n" +
 	"\x13HealthCheckResponse\x12>\n" +
@@ -835,13 +571,11 @@ const file_llm_proto_rawDesc = "" +
 	"\aUNKNOWN\x10\x00\x12\v\n" +
 	"\aSERVING\x10\x01\x12\x0f\n" +
 	"\vNOT_SERVING\x10\x02\x12\f\n" +
-	"\bDEGRADED\x10\x032\xfb\x01\n" +
+	"\bDEGRADED\x10\x032\xc6\x01\n" +
 	"\n" +
 	"LLMService\x121\n" +
 	"\bGenerate\x12\x10.llm.TurnRequest\x1a\x11.llm.TurnResponse0\x01\x12C\n" +
-	"\fCloseSession\x12\x18.llm.CloseSessionRequest\x1a\x19.llm.CloseSessionResponse\x123\n" +
-	"\n" +
-	"ChatStream\x12\x0f.llm.LLMRequest\x1a\x10.llm.LLMResponse(\x010\x01\x12@\n" +
+	"\fCloseSession\x12\x18.llm.CloseSessionRequest\x1a\x19.llm.CloseSessionResponse\x12@\n" +
 	"\vHealthCheck\x12\x17.llm.HealthCheckRequest\x1a\x18.llm.HealthCheckResponseB\x13Z\x11backend/proto/llmb\x06proto3"
 
 var (
@@ -857,30 +591,26 @@ func file_llm_proto_rawDescGZIP() []byte {
 }
 
 var file_llm_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_llm_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_llm_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_llm_proto_goTypes = []any{
 	(HealthCheckResponse_ServingStatus)(0), // 0: llm.HealthCheckResponse.ServingStatus
 	(*TurnRequest)(nil),                    // 1: llm.TurnRequest
 	(*TurnResponse)(nil),                   // 2: llm.TurnResponse
 	(*CloseSessionRequest)(nil),            // 3: llm.CloseSessionRequest
 	(*CloseSessionResponse)(nil),           // 4: llm.CloseSessionResponse
-	(*LLMRequest)(nil),                     // 5: llm.LLMRequest
-	(*LLMResponse)(nil),                    // 6: llm.LLMResponse
-	(*HealthCheckRequest)(nil),             // 7: llm.HealthCheckRequest
-	(*HealthCheckResponse)(nil),            // 8: llm.HealthCheckResponse
+	(*HealthCheckRequest)(nil),             // 5: llm.HealthCheckRequest
+	(*HealthCheckResponse)(nil),            // 6: llm.HealthCheckResponse
 }
 var file_llm_proto_depIdxs = []int32{
 	0, // 0: llm.HealthCheckResponse.status:type_name -> llm.HealthCheckResponse.ServingStatus
 	1, // 1: llm.LLMService.Generate:input_type -> llm.TurnRequest
 	3, // 2: llm.LLMService.CloseSession:input_type -> llm.CloseSessionRequest
-	5, // 3: llm.LLMService.ChatStream:input_type -> llm.LLMRequest
-	7, // 4: llm.LLMService.HealthCheck:input_type -> llm.HealthCheckRequest
-	2, // 5: llm.LLMService.Generate:output_type -> llm.TurnResponse
-	4, // 6: llm.LLMService.CloseSession:output_type -> llm.CloseSessionResponse
-	6, // 7: llm.LLMService.ChatStream:output_type -> llm.LLMResponse
-	8, // 8: llm.LLMService.HealthCheck:output_type -> llm.HealthCheckResponse
-	5, // [5:9] is the sub-list for method output_type
-	1, // [1:5] is the sub-list for method input_type
+	5, // 3: llm.LLMService.HealthCheck:input_type -> llm.HealthCheckRequest
+	2, // 4: llm.LLMService.Generate:output_type -> llm.TurnResponse
+	4, // 5: llm.LLMService.CloseSession:output_type -> llm.CloseSessionResponse
+	6, // 6: llm.LLMService.HealthCheck:output_type -> llm.HealthCheckResponse
+	4, // [4:7] is the sub-list for method output_type
+	1, // [1:4] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
 	1, // [1:1] is the sub-list for extension extendee
 	0, // [0:1] is the sub-list for field type_name
@@ -897,7 +627,7 @@ func file_llm_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_llm_proto_rawDesc), len(file_llm_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   8,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

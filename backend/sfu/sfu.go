@@ -25,10 +25,10 @@ package sfu
 
 import (
 	"bytes"
+	"echat-backend/agentcli"
 	"echat-backend/asr_cli"
 	"echat-backend/config"
 	"echat-backend/global"
-	"echat-backend/llm_cli"
 	"echat-backend/logging"
 	asrpb "echat-backend/proto/asr"
 	llmpb "echat-backend/proto/llm"
@@ -573,6 +573,9 @@ func StartASRLogger() {
 }
 
 // getAsrRes 读取阿里云 ASR 返回的识别结果，按房间 AI 状态做唤醒词/休眠词网关后送 LLM
+// turnSeq 轮次序号发生器，保证同一进程内每轮 ID 唯一
+var turnSeq atomic.Int64
+
 func getAsrRes() {
 	for res := range asr_cli.GlobalRecognizer.AudioOut {
 		switch global.AIStates.Get(res.RoomId) {
@@ -603,15 +606,24 @@ func getAsrRes() {
 			global.AIStates.Touch(res.RoomId)
 		}
 
+		// 中间结果只用于唤醒与状态刷新，不进 LLM：半句喂给模型会污染上下文
+		if !res.IsFinal {
+			continue
+		}
+
 		logger.Infow("收到识别结果", "userID", res.ClientId, "text", res.Text, "isFinal", res.IsFinal, "seq", res.Seq)
-		// 将识别结果送 LLM
-		llm_cli.LLMServiceClient.In <- &llmpb.LLMRequest{
+		// 每个句末结果发起一轮对话：一轮一次 RPC，响应由 agentcli 的分发回调送 TTS
+		// 只投句末结果，中间结果留在本侧做唤醒与打断触发，避免占用可靠方向的队列
+		turnID := fmt.Sprintf("%s-%d", res.SessionId, turnSeq.Add(1))
+		if err := agentcli.Global.SendTurn(&llmpb.TurnRequest{
 			SessionId: res.SessionId,
 			RoomId:    res.RoomId,
 			ClientId:  res.ClientId,
 			UserText:  res.Text,
-			IsLast:    res.IsFinal,
+			TurnId:    turnID,
 			Seq:       res.Seq,
+		}); err != nil {
+			logger.Warnw("发起对话轮次失败", "roomID", res.RoomId, "clientID", res.ClientId, "turnID", turnID, "error", err)
 		}
 	}
 }
@@ -700,7 +712,7 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 	var totalPCM int      // 累计收到的 TTS PCM 字节数（16kHz 原始）
 	var framesEncoded int // 累计编码发送的 Opus 帧数
 
-	lrs := llmpb.LLMResponse{
+	lrs := llmpb.TurnResponse{
 		SessionId: acr.sessionID, // 使用 forwardRtp 的一致 sessionID，保证和 LLM 返回的 SessionId 一致
 		RoomId:    acr.roomId,
 		ClientId:  acr.clientId,
