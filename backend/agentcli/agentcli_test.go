@@ -201,9 +201,9 @@ func TestSendTurnDispatchesAllResponses(t *testing.T) {
 	}
 }
 
-// TestSendTurnRejectsSecondTurnSameSession 会话内已有在途轮次时拒绝新轮次并计数
-func TestSendTurnRejectsSecondTurnSameSession(t *testing.T) {
-	fake := &fakeAgent{events: 50, interval: 20 * time.Millisecond, started: make(chan string, 4)}
+// TestSendTurnPreemptsInflightTurn 同会话新轮次应抢占在途轮次：旧轮被取消、新轮跑完
+func TestSendTurnPreemptsInflightTurn(t *testing.T) {
+	fake := &fakeAgent{events: 50, interval: 20 * time.Millisecond, started: make(chan string, 8)}
 	addr := startFakeAgent(t, fake)
 	c := newTestClient(t, addr, nil)
 
@@ -215,14 +215,18 @@ func TestSendTurnRejectsSecondTurnSameSession(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("服务端未收到首轮")
 	}
-	if err := c.SendTurn(&llmpb.TurnRequest{SessionId: "s1", TurnId: "t2"}); !errors.Is(err, ErrTurnInFlight) {
-		t.Fatalf("同会话第二轮应被拒绝，实际: %v", err)
+	if err := c.SendTurn(&llmpb.TurnRequest{SessionId: "s1", TurnId: "t2"}); err != nil {
+		t.Fatalf("发起第二轮失败: %v", err)
 	}
-	if got := c.Stats().Rejected; got != 1 {
-		t.Fatalf("拒绝计数应为 1，实际 %d", got)
+	waitFor(t, 3*time.Second, func() bool { return atomic.LoadInt32(&fake.cancelled) == 1 })
+	waitFor(t, 5*time.Second, func() bool { return c.Inflight() == 0 })
+	st := c.Stats()
+	if st.Preempted != 1 {
+		t.Fatalf("抢占计数应为 1，实际 %d", st.Preempted)
 	}
-	c.CancelTurn("s1")
-	waitFor(t, 2*time.Second, func() bool { return c.Inflight() == 0 })
+	if st.Sent != 2 || st.Rejected != 0 {
+		t.Fatalf("计数不符: %+v", st)
+	}
 }
 
 // TestCancelTurnStopsStream 取消应让服务端立即结束本轮，并计入取消统计

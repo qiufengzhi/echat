@@ -612,8 +612,15 @@ func getAsrRes() {
 		}
 
 		logger.Infow("收到识别结果", "userID", res.ClientId, "text", res.Text, "isFinal", res.IsFinal, "seq", res.Seq)
+		// 用户再次开口即打断在途轮次：取消该轮 RPC 并清空 TTS 缓冲，避免两轮音频叠着播
+		// 完整的确认打断状态机（最小打断时长、误打断恢复）属 D1 范围，这里只做「新语音即打断」
+		if runningTurn, inFlight := agentcli.Global.TurnID(res.SessionId); inFlight {
+			logger.Infow("用户插话，打断在途轮次",
+				"roomID", res.RoomId, "clientID", res.ClientId, "runningTurn", runningTurn)
+			agentcli.Global.CancelTurn(res.SessionId)
+			tts_cli.GlobalTTSService.BargeIn(res.SessionId)
+		}
 		// 每个句末结果发起一轮对话：一轮一次 RPC，响应由 agentcli 的分发回调送 TTS
-		// 只投句末结果，中间结果留在本侧做唤醒与打断触发，避免占用可靠方向的队列
 		turnID := fmt.Sprintf("%s-%d", res.SessionId, turnSeq.Add(1))
 		if err := agentcli.Global.SendTurn(&llmpb.TurnRequest{
 			SessionId: res.SessionId,

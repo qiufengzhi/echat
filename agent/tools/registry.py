@@ -113,6 +113,7 @@ class ToolRegistry:
         loop = asyncio.get_running_loop()
         try:
             # 工具可能是 CPU/IO 密集，丢到线程池执行，不阻塞事件循环
+            # 注意：外部取消只能打断这里等待的 await，线程池里已开跑的函数会跑到自然结束
             result = await asyncio.wait_for(
                 loop.run_in_executor(None, lambda: tool.execute(**arguments)),
                 timeout=timeout,

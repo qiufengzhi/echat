@@ -1,27 +1,30 @@
-// 跨语言冒烟：用生产用的 agentcli 连接真实 Python Agent，验证「发起一轮 → 收事件 → 取消」
+// 跨语言冒烟：用生产用的 agentcli 连接真实 Python Agent，验证「发起一轮 → 收事件 → 取消/抢占」
 //
 // 用法（先在另一个终端起 agent/test/turn_server_smoke.py）：
-//   go run ./probe/turn -addr 127.0.0.1:50099
+//
+//	go run ./probe/turn -addr 127.0.0.1:50099            # 单轮 + 取消
+//	go run ./probe/turn -addr 127.0.0.1:50099 -preempt   # 同会话两轮，验证新轮抢占旧轮
 package main
 
 import (
 	"flag"
 	"fmt"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"echat-backend/agentcli"
 	llmpb "echat-backend/proto/llm"
 )
 
-// main 发起一轮对话，收到首个事件后取消，打印两侧可对照的时延与计数
+// main 按模式发起轮次并打印两侧可对照的时延与计数
 func main() {
 	addr := flag.String("addr", "127.0.0.1:50099", "Python Agent 地址")
 	shards := flag.Int("shards", 2, "连接分片数")
+	preempt := flag.Bool("preempt", false, "发两轮验证抢占：第一轮收到事件后再发第二轮")
 	flag.Parse()
 
-	var firstEventAt int64
-	var events int64
+	var mu sync.Mutex
+	perTurn := map[string]int{} // turnID -> 已收事件数
 	start := time.Now()
 
 	c, err := agentcli.New(agentcli.Options{
@@ -29,13 +32,14 @@ func main() {
 		Shards:      *shards,
 		TurnTimeout: 30 * time.Second,
 		Dispatch: func(resp *llmpb.TurnResponse) {
-			n := atomic.AddInt64(&events, 1)
-			if n == 1 {
-				atomic.StoreInt64(&firstEventAt, time.Since(start).Milliseconds())
-				fmt.Printf("首个事件到达 %.0fms text=%q\n", time.Since(start).Seconds()*1000, resp.ResponseText)
-			}
-			if resp.IsFinal {
-				fmt.Printf("本轮结束 is_final text=%q\n", resp.ResponseText)
+			mu.Lock()
+			perTurn[resp.TurnId]++
+			first := perTurn[resp.TurnId] == 1
+			mu.Unlock()
+			if first {
+				fmt.Printf("[%.2fs] 轮 %s 首个事件 text=%q\n", time.Since(start).Seconds(), resp.TurnId, resp.ResponseText)
+			} else if resp.IsFinal {
+				fmt.Printf("[%.2fs] 轮 %s 结束 text=%q\n", time.Since(start).Seconds(), resp.TurnId, resp.ResponseText)
 			}
 		},
 	})
@@ -44,41 +48,64 @@ func main() {
 	}
 	defer c.Close()
 
-	req := &llmpb.TurnRequest{
-		SessionId: "smoke-room1-client1",
-		RoomId:    "room1",
-		ClientId:  "client1",
-		TurnId:    "smoke-turn-1",
-		UserText:  "你好，请说长一点",
-		Seq:       1,
+	sessionID := "smoke-room1-client1"
+	first := &llmpb.TurnRequest{
+		SessionId: sessionID, RoomId: "room1", ClientId: "client1",
+		TurnId: "smoke-turn-1", UserText: "你好，请说长一点", Seq: 1,
 	}
-	if err := c.SendTurn(req); err != nil {
+	if err := c.SendTurn(first); err != nil {
 		panic(err)
 	}
-	fmt.Printf("已发起轮次 %s\n", req.TurnId)
+	fmt.Printf("已发起轮次 %s\n", first.TurnId)
+	waitEvents(&mu, perTurn, first.TurnId, 1)
 
-	// 等到首个事件后再取消，观察取消是否立即生效
-	for i := 0; i < 100; i++ {
-		if atomic.LoadInt64(&events) > 0 {
-			break
+	if *preempt {
+		// 同会话再发一轮：agentcli 会先取消在途轮次再接手
+		second := &llmpb.TurnRequest{
+			SessionId: sessionID, RoomId: "room1", ClientId: "client1",
+			TurnId: "smoke-turn-2", UserText: "换个话题，短一点", Seq: 2,
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	cancelAt := time.Now()
-	fmt.Println("发起取消 CancelTurn")
-	if !c.CancelTurn(req.SessionId) {
-		fmt.Println("取消返回 false：该会话没有在途轮次")
+		fmt.Printf("[%.2fs] 发起第二轮 %s（应抢占第一轮）\n", time.Since(start).Seconds(), second.TurnId)
+		if err := c.SendTurn(second); err != nil {
+			panic(err)
+		}
+		waitEvents(&mu, perTurn, second.TurnId, 3)
+		mu.Lock()
+		fmt.Printf("事件分布: turn-1=%d turn-2=%d\n", perTurn["smoke-turn-1"], perTurn["smoke-turn-2"])
+		mu.Unlock()
+	} else {
+		cancelAt := time.Now()
+		fmt.Println("发起取消 CancelTurn")
+		if !c.CancelTurn(sessionID) {
+			fmt.Println("取消返回 false：该会话没有在途轮次")
+		}
+		for i := 0; i < 200; i++ {
+			if c.Inflight() == 0 {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		fmt.Printf("取消后 %.0fms 在途轮次归零\n", time.Since(cancelAt).Seconds()*1000)
 	}
 
-	// 等 Python 侧收尾并回收在途登记
-	for i := 0; i < 200; i++ {
-		if c.Inflight() == 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	fmt.Printf("取消后 %.0fms 在途轮次归零\n", time.Since(cancelAt).Seconds()*1000)
-	fmt.Printf("收到事件数=%d 首个事件时延=%dms\n", atomic.LoadInt64(&events), atomic.LoadInt64(&firstEventAt))
 	fmt.Printf("统计: %+v\n", c.Stats())
-	fmt.Println("（对照 Python 侧日志：应出现「轮次已取消」与该轮生成被取消）")
+	fmt.Println("（对照 Python 侧日志：应出现「本轮生成被取消」与「轮次已取消」）")
+}
+
+// waitEvents 轮询等待某轮累计收到指定数量的事件
+//
+// mu: 保护计数表的锁
+// perTurn: 轮次 ID 到事件数的映射
+// turnID: 目标轮次 ID
+// want: 期望的事件数
+func waitEvents(mu *sync.Mutex, perTurn map[string]int, turnID string, want int) {
+	for i := 0; i < 300; i++ {
+		mu.Lock()
+		got := perTurn[turnID]
+		mu.Unlock()
+		if got >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

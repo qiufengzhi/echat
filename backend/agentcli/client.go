@@ -19,6 +19,7 @@ var logger = logging.New("agentcli")
 const (
 	defaultTurnTimeout  = 30 * time.Second // 未配置时的单轮 RPC 总超时
 	closeSessionTimeout = 3 * time.Second  // 会话释放 RPC 的超时
+	supersedeWait       = time.Second      // 抢占时等待旧轮释放在途登记的上限
 )
 
 // Options 客户端可调参数
@@ -34,7 +35,8 @@ type Stats struct {
 	Sent      int64 // 已发起的轮次数
 	Responses int64 // 已分发的响应事件数
 	Cancelled int64 // 被主动取消的轮次数
-	Rejected  int64 // 因同会话已有在途轮次被拒绝的次数
+	Preempted int64 // 因同会话新轮次抢占而被取消的轮次数
+	Rejected  int64 // 在途轮次未及时释放而被放弃的轮次数
 	TimedOut  int64 // 因超时结束的轮次数
 	Failed    int64 // 其他错误结束的轮次数
 	Retried   int64 // 改投相邻分片重试的次数
@@ -50,7 +52,8 @@ type Client struct {
 	sent      int64 // 计数：已发起轮次
 	responses int64 // 计数：已分发响应
 	cancelled int64 // 计数：主动取消
-	rejected  int64 // 计数：同会话并发被拒
+	preempted int64 // 计数：被新轮次抢占
+	rejected  int64 // 计数：在途未释放被放弃
 	timedOut  int64 // 计数：超时
 	failed    int64 // 计数：其他错误
 	retried   int64 // 计数：改投分片
@@ -83,23 +86,49 @@ func New(opts Options) (*Client, error) {
 
 // SendTurn 发起一轮对话，立即返回，响应经 Dispatch 回调异步送达
 //
-// 同一会话已有在途轮次时返回 ErrTurnInFlight，由调用方决定是否先取消在途轮次
+// 同一会话已有在途轮次时先取消它再接手：用户再次开口即打断上一轮
+// 取消后旧轮需要一点时间释放在途登记，所以接手在新协程内异步完成，不阻塞调用方
 // req: 轮次请求，SessionId 与 TurnId 必填
-// return: 发起失败时返回错误，正常发起返回 nil
+// return: 入参非法时返回错误
 func (c *Client) SendTurn(req *llmpb.TurnRequest) error {
 	if req.SessionId == "" || req.TurnId == "" {
 		return errors.New("agentcli: session_id 与 turn_id 均不能为空")
+	}
+	go c.startTurn(req)
+	return nil
+}
+
+// startTurn 抢占同会话在途轮次后发起本轮
+//
+// req: 轮次请求
+func (c *Client) startTurn(req *llmpb.TurnRequest) {
+	if c.reg.Cancel(req.SessionId) {
+		atomic.AddInt64(&c.preempted, 1)
+		logger.Infow("同会话已有在途轮次，先取消再发起新轮", "sessionID", req.SessionId, "turnID", req.TurnId)
+		c.waitSlot(req.SessionId)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), c.turnTimeout)
 	if err := c.reg.Begin(req.SessionId, req.TurnId, cancel); err != nil {
 		cancel()
 		atomic.AddInt64(&c.rejected, 1)
-		logger.Warnw("同会话已有在途轮次，拒绝新轮次", "sessionID", req.SessionId, "turnID", req.TurnId)
-		return err
+		logger.Warnw("在途轮次未及时释放，放弃本轮", "sessionID", req.SessionId, "turnID", req.TurnId)
+		return
 	}
 	atomic.AddInt64(&c.sent, 1)
-	go c.runTurn(ctx, cancel, req)
-	return nil
+	c.runTurn(ctx, cancel, req)
+}
+
+// waitSlot 等待会话的在途轮次登记释放，上限 supersedeWait
+//
+// sessionID: 会话 ID
+func (c *Client) waitSlot(sessionID string) {
+	deadline := time.Now().Add(supersedeWait)
+	for time.Now().Before(deadline) {
+		if _, running := c.reg.TurnID(sessionID); !running {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 }
 
 // CancelTurn 取消某会话的在途轮次
@@ -157,6 +186,7 @@ func (c *Client) Stats() Stats {
 		Sent:      atomic.LoadInt64(&c.sent),
 		Responses: atomic.LoadInt64(&c.responses),
 		Cancelled: atomic.LoadInt64(&c.cancelled),
+		Preempted: atomic.LoadInt64(&c.preempted),
 		Rejected:  atomic.LoadInt64(&c.rejected),
 		TimedOut:  atomic.LoadInt64(&c.timedOut),
 		Failed:    atomic.LoadInt64(&c.failed),

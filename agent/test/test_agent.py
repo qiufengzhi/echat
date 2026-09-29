@@ -698,9 +698,12 @@ def test_turn_cancel_stops_generation_and_releases_lock():
             assert prov.cancelled == 1, "服务端应停止本轮生成"
             assert prov.active == 0, "取消后不应有仍在生成的调用"
 
-            # 会话锁已释放：同一会话再跑一轮能正常结束
+            # 会话锁已释放、取消信号已复位：同一会话再跑一轮能正常产出文本
             responses = await collect_turn(stub, "s-cancel", "turn-d", user_text="再来一句")
             assert any(r.is_final for r in responses)
+            assert any(
+                r.response_text for r in responses
+            ), "取消信号应在每轮开始时复位，否则新一轮会被立刻当作已取消"
         finally:
             await close_turn_server(channel, server)
 

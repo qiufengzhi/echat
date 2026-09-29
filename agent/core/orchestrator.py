@@ -195,6 +195,8 @@ class ChatOrchestrator:
         assistant_reasoning = ""  # 最后一轮 LLM 的思考内容，随历史一起写回
         cancelled = False
 
+        # 每轮开始前重置取消信号：会话被取消过之后该事件会一直为真，不复位则本轮开局即被当作已取消
+        session.cancel_event.clear()
         session.mark_generating()
         try:
             async for event in strategy.execute(
