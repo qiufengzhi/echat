@@ -77,7 +77,9 @@ type VADConfig struct {
 
 // LLMConfig LLM 服务配置
 type LLMConfig struct {
-	GrpcAddr string `yaml:"grpc_addr"` // LLM gRPC 服务地址
+	GrpcAddr       string `yaml:"grpc_addr"`        // LLM gRPC 服务地址
+	Shards         int    `yaml:"shards"`           // ClientConn 分片数，按 session_id 取模，默认 4
+	TurnTimeoutSec int    `yaml:"turn_timeout_sec"` // 单轮 RPC 总超时秒数，默认 30
 }
 
 // TTSConfig 语音合成配置
@@ -267,7 +269,9 @@ func DefaultConfig() *Config {
 			GrpcAddr: "127.0.0.1:50052",
 		},
 		LLM: LLMConfig{
-			GrpcAddr: "127.0.0.1:50053",
+			GrpcAddr:       "127.0.0.1:50053",
+			Shards:         4,
+			TurnTimeoutSec: 30,
 		},
 		TTS: TTSConfig{
 			Provider:   "aliyun",
