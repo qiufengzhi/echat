@@ -59,6 +59,8 @@ class LLMConfig(BaseModel):
     max_tokens: int  # 单次回复最大 token 数
     temperature: float  # 采样温度
     request_timeout: float  # 单次请求超时秒数
+    max_concurrency: int = 8  # 同时打到上游的最大请求数，超出的轮次在本地排队
+    first_token_timeout: float = 5.0  # 首包超时秒数，超时按可重试错误结束本轮
 
 
 class SessionConfig(BaseModel):

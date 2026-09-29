@@ -1,7 +1,7 @@
 """
 HTTP 调试接口：通过 POST /api/v1/chat 测试大模型的完整对话链路
 
-与 gRPC ChatStream 共用同一个 orchestrator 实例，走完全相同的链路：
+与 gRPC 的每轮一次 RPC 共用同一个 orchestrator 实例，走完全相同的链路：
 session + 历史 + 工具 + 策略。支持两种响应方式：
   - stream=true  → SSE（text/event-stream）逐事件推送
   - stream=false → 一次性 JSON，聚合完整回复和事件列表

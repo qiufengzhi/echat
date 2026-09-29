@@ -30,6 +30,7 @@ from agent.providers.base import (
     LLMAuthError,
     LLMRateLimitError,
     LLMTimeoutError,
+    ProviderError,
 )
 
 
@@ -80,6 +81,8 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         max_tokens: int = 1024,
         temperature: float = 0.7,
         request_timeout: float = 30.0,
+        max_concurrency: int = 8,
+        first_token_timeout: float = 5.0,
     ) -> None:
         """初始化 OpenAI 兼容 provider
 
@@ -89,11 +92,15 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         max_tokens: 单次回复最大 token 数，默认 1024
         temperature: 采样温度，越高越随机，默认 0.7
         request_timeout: 单次请求超时秒数，默认 30
+        max_concurrency: 同时打到上游的最大请求数，默认 8，超出的轮次在本地排队
+        first_token_timeout: 首包超时秒数，默认 5，超时按可重试错误结束本轮
         """
         self._model = model  # 模型名
         self._max_tokens = max_tokens  # 单次回复最大 token 数
         self._temperature = temperature  # 采样温度
         self._request_timeout = request_timeout  # 请求超时秒数
+        self._first_token_timeout = first_token_timeout  # 首包超时秒数
+        self._semaphore = asyncio.Semaphore(max(1, max_concurrency))  # 上游并发闸门
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=request_timeout)  # 异步客户端
         self._logger = logger.bind(module="provider")  # 模块级日志器
 
@@ -121,11 +128,31 @@ class OpenAICompatibleProvider(BaseLLMProvider):
     ) -> AsyncIterator[StreamEvent]:
         """流式调用 OpenAI 兼容端点，产出 TokenEvent / ToolCallEvent / DoneEvent
 
+        并发闸门在此生效：同时打到上游的请求数不超过 max_concurrency，超出的轮次在信号量上排队
         messages: 对话上下文，内部转成 OpenAI 消息格式
         tools: OpenAI function calling schema 列表，None 表示本轮不提供工具
         cancel_event: 取消信号，一旦 set 立即终止流并产出 cancelled 结束事件
         return: StreamEvent 事件流，含文本、聚合后的工具调用与用量统计
         调用失败时抛出 ProviderError 子类异常
+        """
+        if self._semaphore.locked():
+            self._logger.info("上游并发已打满，本轮排队等待")
+        async with self._semaphore:
+            async for event in self._stream_once(messages, tools, cancel_event):
+                yield event
+
+    async def _stream_once(
+        self,
+        messages: List[ChatMessage],
+        tools: Optional[List[dict]] = None,
+        cancel_event: Optional[asyncio.Event] = None,
+    ) -> AsyncIterator[StreamEvent]:
+        """单次流式调用：建流、逐分片产出、首包超时、退出时释放上游连接
+
+        messages: 对话上下文
+        tools: 工具 schema 列表，None 表示不提供工具
+        cancel_event: 取消信号，一旦 set 立即终止流
+        return: StreamEvent 事件流
         """
         kwargs: dict = {
             "model": self._model,
@@ -150,8 +177,25 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         completion_tokens = 0  # 输出 token 数
         finish_reason = "stop"  # 结束原因
 
+        iterator = stream.__aiter__()  # 显式取迭代器：首个分片要单独套首包超时
+        first_chunk = True
         try:
-            async for chunk in stream:
+            while True:
+                try:
+                    if first_chunk:
+                        chunk = await asyncio.wait_for(
+                            iterator.__anext__(), timeout=self._first_token_timeout
+                        )
+                        first_chunk = False
+                    else:
+                        chunk = await iterator.__anext__()
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    self._logger.warning("上游首包超时({}s)", self._first_token_timeout)
+                    raise LLMTimeoutError(
+                        f"上游超过 {self._first_token_timeout:.0f} 秒没有响应，等会儿再问我一次吧"
+                    )
                 if cancel_event is not None and cancel_event.is_set():
                     self._logger.debug("收到 cancel 信号，终止 LLM 流")
                     finish_reason = "cancelled"
@@ -213,10 +257,19 @@ class OpenAICompatibleProvider(BaseLLMProvider):
                 ),
             )
 
+        except ProviderError:
+            # 首包超时等本层已结构化的错误，不再二次映射，保留原始错误码
+            raise
         except Exception as exc:
             mapped = self._map_error(exc)
             self._logger.warning("LLM 流式调用失败: {}", mapped.message)
             raise mapped
+        finally:
+            # 上游连接必须显式关闭：取消、超时、正常结束都不该让连接与计费继续
+            try:
+                await stream.close()
+            except Exception:
+                self._logger.debug("关闭上游流失败")
 
     def _map_error(self, exc: Exception) -> Exception:
         """把 openai SDK 异常映射成 ProviderError 子类

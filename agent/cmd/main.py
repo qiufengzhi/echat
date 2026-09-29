@@ -107,6 +107,8 @@ def build_orchestrator(cfg: Config) -> tuple[ChatOrchestrator, ToolRegistry]:
         max_tokens=cfg.llm.max_tokens,
         temperature=cfg.llm.temperature,
         request_timeout=cfg.llm.request_timeout,
+        max_concurrency=cfg.llm.max_concurrency,
+        first_token_timeout=cfg.llm.first_token_timeout,
     )
 
     tool_registry = ToolRegistry(default_timeout=cfg.tools.tool_timeout)

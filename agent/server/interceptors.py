@@ -161,7 +161,7 @@ class ErrorHandlingInterceptor(grpc.aio.ServerInterceptor):
 class TimeoutInterceptor(grpc.aio.ServerInterceptor):
     """单次 RPC 超过 timeout_seconds 返回 DEADLINE_EXCEEDED
 
-    ChatStream 是长连接双向流，硬性超时会中断对话，因此本拦截器
+    单轮 RPC 的总超时由调用方的 RPC deadline 表达，本拦截器是服务端的第二道闸门，
     在 cmd/main.py 中默认不启用（传 timeout_seconds=None），需要时显式开启
     """
 
