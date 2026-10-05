@@ -390,6 +390,9 @@ func (r *SFURoom) Leave(clientID string) {
 		IsLast:     true,
 	}
 
+	// 会话结束：释放该会话的 TTS 端点与合成执行器，不调用会泄漏合成协程
+	tts_cli.GlobalTTSService.Close(sessionID)
+
 	// 从其他所有客户端的中继表中移除当前客户端的音轨
 	r.lock.Lock()
 	for _, otherPeer := range r.peers {
@@ -618,7 +621,7 @@ func getAsrRes() {
 			logger.Infow("用户插话，打断在途轮次",
 				"roomID", res.RoomId, "clientID", res.ClientId, "runningTurn", runningTurn)
 			agentcli.Global.CancelTurn(res.SessionId)
-			tts_cli.GlobalTTSService.BargeIn(res.SessionId)
+			tts_cli.GlobalTTSService.Interrupt(res.SessionId)
 		}
 		// 每个句末结果发起一轮对话：一轮一次 RPC，响应由 agentcli 的分发回调送 TTS
 		turnID := fmt.Sprintf("%s-%d", res.SessionId, turnSeq.Add(1))
