@@ -244,35 +244,35 @@ func TestProcessTextDropsTokenOfFinishedTurn(t *testing.T) {
 	}
 }
 
-// TestGetAudioBridgesEndpointAudio 过渡视图仍能取到端点上的音频
-func TestGetAudioBridgesEndpointAudio(t *testing.T) {
+// TestEndpointCloseWakesConsumer 端点关闭后消费循环应能自行退出，不留死等
+func TestEndpointCloseWakesConsumer(t *testing.T) {
 	svc := newTestService(t)
-	const session = "s-bridge"
+	const session = "s-close"
 
-	ch := svc.GetAudio(&llmpb.TurnResponse{SessionId: session})
 	ep := svc.AudioEndpoint(session)
 
-	sp := &SessionPipeline{}
-	ep.beginTurn("t1")
-	ep.attach(sp)
-	ep.publishFrom(sp, []byte{1, 2, 3})
-
-	select {
-	case got := <-ch:
-		if !bytes.Equal(got, []byte{1, 2, 3}) {
-			t.Fatalf("期望拿到音频片段，得到 %v", got)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			if _, ok := ep.Next(); ok {
+				continue
+			}
+			if ep.Closed() {
+				return
+			}
+			select {
+			case <-ep.Wait():
+			case <-time.After(2 * time.Second):
+				return
+			}
 		}
-	case <-time.After(time.Second):
-		t.Fatal("GetAudio 视图未收到音频")
-	}
+	}()
 
 	svc.Close(session)
 	select {
-	case _, ok := <-ch:
-		if ok {
-			t.Fatal("端点关闭后音频通道应被关闭")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("端点关闭后音频通道未关闭")
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("端点关闭后消费循环未退出")
 	}
 }

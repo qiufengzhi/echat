@@ -266,34 +266,6 @@ func (ss *Service) AudioEndpoint(sessionID string) *endpoint {
 	return ep
 }
 
-// GetAudio 获取该会话合成音频的字节流视图
-//
-// 过渡形态，播放侧改为直接订阅 AudioEndpoint 后删除：字节视图表达不了打断，
-// 因此打断事件在这条视图上不可见，由播放侧改订阅端点后自行处理
-// resp: 本轮响应，只取其会话 ID
-// return: 合成音频 PCM16 小端字节的只读通道，端点关闭后被关闭
-func (ss *Service) GetAudio(resp *llm.TurnResponse) <-chan []byte {
-	ep := ss.AudioEndpoint(resp.SessionId)
-
-	out := make(chan []byte, defaultAudioBufSize)
-	go func() {
-		defer close(out)
-		for {
-			if ev, ok := ep.Next(); ok {
-				if ev.Kind == AudioData {
-					out <- ev.PCM
-				}
-				continue
-			}
-			if ep.Closed() {
-				return
-			}
-			<-ep.Wait()
-		}
-	}()
-	return out
-}
-
 // splitAtSentenceEnd 在文本中查找第一个句结束符，将文本分割为句子和剩余部分
 func splitAtSentenceEnd(text string) (sentence, remainder string, found bool) {
 	minIdx := -1
