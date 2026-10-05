@@ -396,14 +396,15 @@ func (r *SFURoom) Leave(clientID string) {
 	peer.stopForwarding()
 
 	// 发送 ASR 结束标记，通知阿里云该客户端音频流已结束
+	// 尽力投递：队列满时丢弃，云端会话由空闲超时兜底释放
 	sessionID := peer.SessionID
-	asr_cli.GlobalRecognizer.AudioIn <- asrpb.AudioChunk{
+	asr_cli.Push(asrpb.AudioChunk{
 		SessionId:  sessionID,
 		RoomId:     r.ID,
 		ClientId:   clientID,
 		SampleRate: 16000,
 		IsLast:     true,
-	}
+	})
 
 	// 会话结束：释放该会话的 TTS 端点与合成执行器，不调用会泄漏合成协程
 	tts_cli.GlobalTTSService.Close(sessionID)
@@ -590,8 +591,9 @@ func (r *SFURoom) getAITtsTrack(clientID string) (*webrtc.TrackLocalStaticSample
 	return track, nil
 }
 
-// StartASRLogger 启动后台协程，持续从 ASR 识别器读取识别结果并打印日志
-// 必须在 asr_cli.Init() 之后调用
+// StartASRLogger 启动后台协程，持续从 ASR 识别器读取识别结果并按房间 AI 状态分发
+//
+// 必须在 asr_cli.Init() 之后调用；识别器未启用时结果通道永不产出，该协程静默等待
 func StartASRLogger() {
 	go getAsrRes()
 }
@@ -601,7 +603,7 @@ func StartASRLogger() {
 var turnSeq atomic.Int64
 
 func getAsrRes() {
-	for res := range asr_cli.GlobalRecognizer.AudioOut {
+	for res := range asr_cli.Results() {
 		switch global.AIStates.Get(res.RoomId) {
 		case global.AIOffline:
 			// 离线：不监听、不唤醒，结果直接丢弃
@@ -704,12 +706,8 @@ func (r *SFURoom) forwardRtp(sourceID string, sessionID string, remoteTrack *web
 				Pcm:        int16ToLEBytes(pcm),
 				SampleRate: 16000,
 			}
-			// 非阻塞发送：ASR 消费端繁忙时 AudioIn 会满，直接按背压丢弃，不阻塞音频转发
-			select {
-			case asr_cli.GlobalRecognizer.AudioIn <- chunk:
-			default:
-				logger.Debugw("ASR 输入队列满，丢弃音频块", "source", sourceID[:8])
-			}
+			// 非阻塞投递：识别消费端繁忙时按背压丢弃，不阻塞音频转发；丢弃由 asr_cli 计数
+			asr_cli.Push(chunk)
 		}
 
 		// TTS 音频处理循环只启动一次，避免每个 RTP 包都泄漏一个 goroutine
