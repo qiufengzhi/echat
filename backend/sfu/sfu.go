@@ -41,6 +41,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gunter-q12/resample"
 	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
@@ -82,6 +83,11 @@ type SFUPeer struct {
 	ClientID string                 // 对应 room.Client.ID
 	PC       *webrtc.PeerConnection // 到客户端的 WebRTC 连接
 
+	// SessionID 本对端的会话标识，由 SFU 在建立对端时生成一次
+	// 不透明、不接受反向解析：房间 ID 与客户端 ID 在 proto 里本来就是独立字段，
+	// 标识只做身份；拼接式标识会把编码格式变成跨包的隐式契约
+	SessionID string
+
 	// 该客户端发布的音频远端音轨（由 SFU 的 OnTrack 收到）
 	publishedAudioTrack *webrtc.TrackRemote
 
@@ -98,6 +104,14 @@ type SFUPeer struct {
 	stopRelay chan struct{}
 
 	connectedAt time.Time
+}
+
+// newSessionID 生成一个新的会话标识
+//
+// 不透明且服务端权威：调用方只当作字符串透传，不解析、不参与构造
+// return: 形如 s_<32 位十六进制> 的标识
+func newSessionID() string {
+	return "s_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 }
 
 // resolveNAT1To1IPs 解析配置中的 NAT 1:1 映射地址（支持 IP 或域名，逗号分隔）
@@ -241,6 +255,7 @@ func (r *SFURoom) Join(clientID string) error {
 
 	peer := &SFUPeer{
 		ClientID:       clientID,
+		SessionID:      newSessionID(),
 		PC:             pc,
 		outgoingRelays: make(map[string]*webrtc.TrackLocalStaticRTP),
 		stopRelay:      make(chan struct{}),
@@ -381,7 +396,7 @@ func (r *SFURoom) Leave(clientID string) {
 	peer.stopForwarding()
 
 	// 发送 ASR 结束标记，通知阿里云该客户端音频流已结束
-	sessionID := fmt.Sprintf("%s-%s", clientID, r.ID)
+	sessionID := peer.SessionID
 	asr_cli.GlobalRecognizer.AudioIn <- asrpb.AudioChunk{
 		SessionId:  sessionID,
 		RoomId:     r.ID,
@@ -474,6 +489,12 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 
 	// 获取发布音频的客户端，用于后续设置 outgoingRelays
 	sourcePeer := r.peers[sourceID]
+	if sourcePeer == nil {
+		r.lock.Unlock()
+		logger.Warnw("启动转发时对端已离开", "source", sourceID[:8])
+		return
+	}
+	sessionID := sourcePeer.SessionID
 
 	// 为房间内每个其他客户端创建中继音轨，让其他人能听到 source 的音频
 	for subscriberID, subscriber := range r.peers {
@@ -530,7 +551,7 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 	r.lock.Unlock()
 
 	// 启动 RTP 转发协程：从 remoteTrack 读取 RTP 包，写入所有中继音轨。将本人的音频转发给房间内其他客户端
-	go r.forwardRtp(sourceID, remoteTrack)
+	go r.forwardRtp(sourceID, sessionID, remoteTrack)
 }
 
 // getAITtsTrack 懒初始化 AI TTS 输出轨，返回该客户端的 AI 语音播放通道
@@ -639,12 +660,10 @@ func getAsrRes() {
 }
 
 // forwardRtp 接收到客户端的语音包，从 remoteTrack 读取 RTP 包，转发给房间其他客户端，同时送阿里云 ASR 做语音识别
-func (r *SFURoom) forwardRtp(sourceID string, remoteTrack *webrtc.TrackRemote) {
+// sessionID 由调用方从对端读取，保证同一会话在 ASR、LLM、TTS 三段用同一个标识
+func (r *SFURoom) forwardRtp(sourceID string, sessionID string, remoteTrack *webrtc.TrackRemote) {
 	logger.Infow("中继协程已启动", "source", sourceID[:8])
 	defer logger.Infow("中继协程已停止", "source", sourceID[:8])
-	// sessionID 使用 clientID-roomID 格式，保持与 ASR → LLM → TTS 管道一致
-	// 确保 GetAudio 和 ProcessText 使用同一 session，避免音频数据写入错误会话
-	sessionID := fmt.Sprintf("%s-%s", sourceID, r.ID)
 	var ttsStarted atomic.Bool
 
 	for {
