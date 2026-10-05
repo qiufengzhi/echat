@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"echat-backend/dataplane"
 	asrpb "echat-backend/proto/asr"
 
 	nls "github.com/aliyun/alibabacloud-nls-go-sdk"
@@ -46,12 +47,19 @@ type asrSession struct {
 	id        string                   // session_id
 	roomID    string                   // 所属房间 ID
 	clientID  string                   // 说话客户端 ID
-	trans     *nls.SpeechTranscription // 阿里云实时语音识别实例
+	trans     *nls.SpeechTranscription // 阿里云实时语音识别实例，由本会话的发送协程在建连后写入
 	sdkLogger *nls.NlsLogger           // SDK 内部日志器（静默），传给 nls.NewSpeechTranscription 使用
 	out       chan sessionResult       // SDK 回调收到的识别文本写入此 channel，由 Recognizer 的 outputFan 转发到 AudioOut
 	lastAudio time.Time                // 最后一次收到音频的时间，用于空闲超时清理
 	closeFunc func()                   // 关闭此 session 的回调函数
-	mu        sync.Mutex               // 保护 lastAudio 的并发访问
+	mu        sync.Mutex               // 保护 lastAudio 与 trans 的并发访问
+	closeOnce sync.Once                // 保证云端连接的收尾只执行一次
+
+	// queue 本会话的待发送音频队列，由接收协程投递、本会话发送协程消费
+	//
+	// 建连期间音频也进这里排队：建连可能耗时数秒，排队让本会话自己的首句不至于被丢掉
+	// 丢最老：语音是「最新最有价值」的流，陈旧音频晚到只会让识别文本错位
+	queue *dataplane.Ring[*asrpb.AudioChunk]
 }
 
 // ---------- 识别器 ----------
@@ -62,7 +70,8 @@ type Recognizer struct {
 	cfg AliyunASRConfig // ASR 连接配置
 
 	// 输入通道：发送 AudioChunk 给阿里云 ASR，关闭此 channel 会停止所有 session
-	AudioIn chan asrpb.AudioChunk
+	// 只传指针：protobuf 消息按值传递会被 vet 判为拷贝锁
+	AudioIn chan *asrpb.AudioChunk
 
 	// 输出通道：读取 TranscriptAudioChunk 识别结果，所有 session 清理完毕后关闭
 	AudioOut chan *asrpb.TranscriptAudioChunk

@@ -34,10 +34,11 @@ func Enabled() bool {
 
 // Push 投递一个音频块给云端识别，永不阻塞
 //
+// 只投递指针：protobuf 消息内含 MessageState（带互斥量），按值传递会被 vet 判为拷贝锁
 // 拒绝投递的两种情况都计入丢弃计数：识别器未启用、输入队列已满
 // chunk: 待识别的音频块，SessionId 为空时会被识别器跳过
 // return: 已投递返回 true
-func Push(chunk asrpb.AudioChunk) bool {
+func Push(chunk *asrpb.AudioChunk) bool {
 	if GlobalRecognizer == nil {
 		inputDropped.Drop("reason", "recognizer_disabled", "sessionID", chunk.SessionId)
 		return false

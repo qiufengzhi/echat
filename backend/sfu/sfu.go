@@ -398,7 +398,7 @@ func (r *SFURoom) Leave(clientID string) {
 	// 发送 ASR 结束标记，通知阿里云该客户端音频流已结束
 	// 尽力投递：队列满时丢弃，云端会话由空闲超时兜底释放
 	sessionID := peer.SessionID
-	asr_cli.Push(asrpb.AudioChunk{
+	asr_cli.Push(&asrpb.AudioChunk{
 		SessionId:  sessionID,
 		RoomId:     r.ID,
 		ClientId:   clientID,
@@ -699,15 +699,14 @@ func (r *SFURoom) forwardRtp(sourceID string, sessionID string, remoteTrack *web
 			logger.Warnw("解码失败", "source", sourceID[:8], "error", decErr)
 		} else if len(pcm) > 0 {
 			// 仅有实际音频数据才送 ASR，DTX 静音包解码后 pcm 为空，直接跳过
-			chunk := asrpb.AudioChunk{
+			// 非阻塞投递：识别消费端繁忙时按背压丢弃，不阻塞音频转发；丢弃由 asr_cli 计数
+			asr_cli.Push(&asrpb.AudioChunk{
 				SessionId:  sessionID,
 				RoomId:     r.ID,
 				ClientId:   sourceID,
 				Pcm:        int16ToLEBytes(pcm),
 				SampleRate: 16000,
-			}
-			// 非阻塞投递：识别消费端繁忙时按背压丢弃，不阻塞音频转发；丢弃由 asr_cli 计数
-			asr_cli.Push(chunk)
+			})
 		}
 
 		// TTS 音频处理循环只启动一次，避免每个 RTP 包都泄漏一个 goroutine

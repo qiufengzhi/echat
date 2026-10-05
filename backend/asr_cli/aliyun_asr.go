@@ -20,14 +20,21 @@ package asr_cli
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"time"
 
 	"echat-backend/config"
+	"echat-backend/dataplane"
 	asrpb "echat-backend/proto/asr"
 
 	nls "github.com/aliyun/alibabacloud-nls-go-sdk"
 )
+
+// resultDropped 累计丢弃的识别结果
+//
+// 输出汇总通道满时丢弃：消费端繁忙不应把云端 SDK 的回调协程堵住
+var resultDropped = dataplane.NewCounter("asr.result", 0)
 
 // DefaultConfig 返回一套推荐默认值，调用方可在此基础上修改。
 // 三个 boolean 开关（中间结果 / 标点 / ITN）默认全部开启，符合语音房实时字幕场景。
@@ -111,7 +118,11 @@ func (s *asrSession) start(cfg *AliyunASRConfig) error {
 
 // stop 正常结束识别（会等待服务端返回最终结果）。
 func (s *asrSession) stop() {
-	ready, err := s.trans.Stop()
+	trans := s.transcription()
+	if trans == nil {
+		return // 建连尚未完成，没有可停止的连接
+	}
+	ready, err := trans.Stop()
 	if err != nil {
 		logger.Warnw("Stop 错误", "sessionID", s.id, "error", err)
 		return
@@ -125,7 +136,20 @@ func (s *asrSession) stop() {
 
 // shutdown 强制断开连接。
 func (s *asrSession) shutdown() {
-	s.trans.Shutdown()
+	trans := s.transcription()
+	if trans == nil {
+		return // 建连尚未完成，没有可断开的连接
+	}
+	trans.Shutdown()
+}
+
+// transcription 取本会话的云端识别实例，未建连完成时返回 nil
+//
+// return: 识别实例，可能为 nil
+func (s *asrSession) transcription() *nls.SpeechTranscription {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.trans
 }
 
 // GlobalRecognizer 全局 ASR 识别器实例，由 Init() 初始化
@@ -183,7 +207,7 @@ func NewRecognizer(cfg AliyunASRConfig) (*Recognizer, error) {
 
 	r := &Recognizer{
 		cfg:       cfg,
-		AudioIn:   make(chan asrpb.AudioChunk, 64),
+		AudioIn:   make(chan *asrpb.AudioChunk, 64),
 		AudioOut:  make(chan *asrpb.TranscriptAudioChunk, 64),
 		sessions:  make(map[string]*asrSession),
 		sdkLogger: sdkLogger,
@@ -196,9 +220,10 @@ func NewRecognizer(cfg AliyunASRConfig) (*Recognizer, error) {
 // 通常放在一个 goroutine 里运行。
 func (r *Recognizer) Start() {
 	defer func() {
-		// 清理所有剩余 session
+		// 清理所有剩余 session：先关队列让各自发送协程退出，再断开云端连接
 		r.mu.Lock()
 		for _, s := range r.sessions {
+			s.queue.Close()
 			s.shutdown()
 		}
 		r.sessions = make(map[string]*asrSession)
@@ -213,6 +238,10 @@ func (r *Recognizer) Start() {
 	// 后台清理协程：定期扫描空闲超时的 session
 	go r.idleCleaner()
 
+	// 接收协程：只做按会话分派，不做任何阻塞 IO
+	//
+	// 建连与写云端都在各自的会话发送协程里，因此某个会话的云端变慢或握手耗时
+	// 不会拖住其他会话；此前建连就发生在这个循环体内，一次握手会阻塞全站音频识别
 	for chunk := range r.AudioIn {
 		// session_id 为空时跳过
 		if chunk.SessionId == "" {
@@ -220,29 +249,12 @@ func (r *Recognizer) Start() {
 			continue
 		}
 
-		// 获取或创建 session
 		s := r.getOrCreateSession(chunk.SessionId, chunk.RoomId, chunk.ClientId)
 		if s == nil {
 			continue
 		}
-
-		// 发送 PCM 数据
-		if len(chunk.Pcm) > 0 {
-			if err := s.trans.SendAudioData(chunk.Pcm); err != nil {
-				logger.Warnw("发送音频失败", "sessionID", chunk.SessionId, "error", err)
-			}
-		}
-
-		// 更新最后活跃时间
-		s.mu.Lock()
-		s.lastAudio = time.Now()
-		s.mu.Unlock()
-
-		// is_last 时关闭该 session
-		if chunk.IsLast {
-			logger.Infow("收到 is_last，关闭 session", "sessionID", chunk.SessionId)
-			r.closeSession(chunk.SessionId, false) // false = 正常 stop，等待最终结果
-		}
+		// IsLast 与音频一样入队：让它排在已到达的音频之后，云端收到的顺序与采集顺序一致
+		s.queue.Push(chunk)
 	}
 
 	// AudioIn 关闭 → 通知外部主循环退出
@@ -293,37 +305,92 @@ func (r *Recognizer) idleCleaner() {
 	}
 }
 
-// getOrCreateSession 获取或创建指定 session_id 的 asrSession。
+// sessionQueueCapacity 每个会话的待发送音频队列容量，50 块 × 20ms = 1 秒音频
+const sessionQueueCapacity = 50
+
+// getOrCreateSession 获取或创建指定 session_id 的 asrSession
+//
+// 只登记会话与其队列，不做任何阻塞 IO：建连由本会话的发送协程负责
 func (r *Recognizer) getOrCreateSession(sessionID, roomID, clientID string) *asrSession {
 	r.mu.Lock()
-	s, ok := r.sessions[sessionID]
-	if ok {
+	if s, ok := r.sessions[sessionID]; ok {
 		r.mu.Unlock()
 		return s
 	}
-	r.mu.Unlock()
 
-	// 创建 SD 内部日志：静默
-	sdkSessLogger := nls.NewNlsLogger(os.Stderr, "", 0)
-	sdkSessLogger.SetLogSil(true)
-	sdkSessLogger.SetDebug(false)
-
-	// 创建新 session
-	s = &asrSession{
+	s := &asrSession{
 		id:        sessionID,
 		roomID:    roomID,
 		clientID:  clientID,
 		out:       r.outputFan,
 		lastAudio: time.Now(),
-		sdkLogger: sdkSessLogger,
+		queue:     dataplane.NewRing[*asrpb.AudioChunk]("asr.session."+sessionID, sessionQueueCapacity),
 	}
+	r.sessions[sessionID] = s
+	r.mu.Unlock()
 
-	// 创建 SDK SpeechTranscription 实例
+	go r.runSession(s)
+	return s
+}
+
+// runSession 单个会话的发送协程：先建连，再按序把队列里的音频送给云端
+//
+// 建连（含握手，上限 20 秒）在本协程内完成，不阻塞其他会话；
+// 建连期间到达的音频在本会话队列里排队，握手完成后按序补送，首句不再出现空洞
+// s: 目标会话
+func (r *Recognizer) runSession(s *asrSession) {
+	trans, err := r.connect(s)
+	if err != nil {
+		logger.Warnw("建连失败，放弃该会话", "sessionID", s.id, "error", err)
+		r.closeSession(s.id, true)
+		return
+	}
+	logger.Infow("已创建并启动 session", "sessionID", s.id)
+
+	for {
+		chunk, ok := s.queue.Pop()
+		if !ok {
+			if s.queue.Closed() {
+				return
+			}
+			<-s.queue.Wait()
+			continue
+		}
+
+		if len(chunk.Pcm) > 0 {
+			if sendErr := trans.SendAudioData(chunk.Pcm); sendErr != nil {
+				logger.Warnw("发送音频失败", "sessionID", s.id, "error", sendErr)
+			}
+		}
+
+		s.mu.Lock()
+		s.lastAudio = time.Now()
+		s.mu.Unlock()
+
+		if chunk.IsLast {
+			logger.Infow("收到 is_last，关闭 session", "sessionID", s.id)
+			r.closeSession(s.id, false)
+			return
+		}
+	}
+}
+
+// connect 建立与云端的识别连接并启动识别
+//
+// 返回的实例交给本会话的发送协程使用，同时写入 s.trans 供关闭路径取用
+// s: 目标会话
+// return: 识别实例，失败时返回错误
+func (r *Recognizer) connect(s *asrSession) (*nls.SpeechTranscription, error) {
+	// SDK 内部日志：静默，不输出到 stderr
+	sdkSessLogger := nls.NewNlsLogger(os.Stderr, "", 0)
+	sdkSessLogger.SetLogSil(true)
+	sdkSessLogger.SetDebug(false)
+	s.sdkLogger = sdkSessLogger
+
 	cg, err := nls.NewConnectionConfigWithAKInfoDefault(r.cfg.URL, r.cfg.AppKey,
 		r.cfg.AccessKeyID, r.cfg.AccessKeySecret)
 	if err != nil {
-		logger.Warnw("创建连接配置失败", "sessionID", sessionID, "error", err)
-		return nil
+		return nil, fmt.Errorf("创建连接配置失败: %w", err)
 	}
 
 	trans, err := nls.NewSpeechTranscription(
@@ -338,36 +405,20 @@ func (r *Recognizer) getOrCreateSession(sessionID, roomID, clientID string) *asr
 		nil,
 	)
 	if err != nil {
-		logger.Warnw("创建 SpeechTranscription 失败", "sessionID", sessionID, "error", err)
-		return nil
+		return nil, fmt.Errorf("创建 SpeechTranscription 失败: %w", err)
 	}
+
+	s.mu.Lock()
 	s.trans = trans
+	s.mu.Unlock()
 
-	// 关闭 session 的回调函数
-	s.closeFunc = func() {
-		r.closeSession(sessionID, true)
-	}
+	// 连接断开时触发的收尾
+	s.closeFunc = func() { r.closeSession(s.id, true) }
 
-	// 启动识别
 	if err = s.start(&r.cfg); err != nil {
-		logger.Warnw("启动识别失败", "sessionID", sessionID, "error", err)
-		return nil
+		return nil, fmt.Errorf("启动识别失败: %w", err)
 	}
-
-	logger.Infow("已创建并启动 session", "sessionID", sessionID)
-
-	// 注册到 map
-	r.mu.Lock()
-	// 双重检查：可能另一个 goroutine 同时创建了
-	if existing, ok := r.sessions[sessionID]; ok {
-		r.mu.Unlock()
-		s.shutdown()
-		return existing
-	}
-	r.sessions[sessionID] = s
-	r.mu.Unlock()
-
-	return s
+	return trans, nil
 }
 
 // closeSession 关闭指定 session。
@@ -382,28 +433,46 @@ func (r *Recognizer) closeSession(sessionID string, force bool) {
 	delete(r.sessions, sessionID)
 	r.mu.Unlock()
 
-	if force {
-		s.shutdown()
-	} else {
-		s.stop()
-	}
+	// 收尾只做一次：正常结束与连接断开回调可能同时到达，重复调用会并发操作同一个云端连接
+	s.closeOnce.Do(func() {
+		// 先关队列，让本会话的发送协程退出，避免它在会话已清理后继续投递
+		s.queue.Close()
+		if force {
+			s.shutdown()
+		} else {
+			s.stop()
+		}
+	})
 	logger.Infow("session 已关闭", "sessionID", sessionID, "force", force)
 }
 
 // ---------- 回调函数 ----------
 
+// emit 把一条识别结果交给输出汇总通道，永不阻塞
+//
+// 汇总通道满时丢弃并计数：消费端繁忙不应把云端 SDK 的回调协程堵住，
+// 那会连带拖慢整个连接的收发
+// result: 待投递的识别结果
+func (s *asrSession) emit(result sessionResult) {
+	select {
+	case s.out <- result:
+	default:
+		resultDropped.Drop("sessionID", s.id, "text", result.Text)
+	}
+}
+
 // onTaskFailed 识别过程中的错误回调，JSON 字符串包含错误信息。
 func (s *asrSession) onTaskFailed(text string) {
 	logger.Warnw("TaskFailed", "sessionID", s.id, "text", text)
 	// 将错误信息也作为结果输出，方便前端感知
-	s.out <- sessionResult{
+	s.emit(sessionResult{
 		SessionID: s.id,
 		RoomID:    s.roomID,
 		ClientID:  s.clientID,
 		Text:      text,
 		IsFinal:   false,
 		Seq:       -1,
-	}
+	})
 }
 
 // onStarted 建连完成回调。
@@ -419,14 +488,14 @@ func (s *asrSession) onSentenceBegin(text string) {
 // onSentenceEnd 一句话结束回调，text 是该句话的最终文本。
 func (s *asrSession) onSentenceEnd(text string) {
 	logger.Infow("SentenceEnd", "sessionID", s.id, "text", text)
-	s.out <- sessionResult{
+	s.emit(sessionResult{
 		SessionID: s.id,
 		RoomID:    s.roomID,
 		ClientID:  s.clientID,
 		Text:      text,
 		IsFinal:   true,
 		Seq:       0, // sentence end 不区分 seq，由前端拼接
-	}
+	})
 }
 
 // onResultChanged 中间结果变化回调，text 是当前识别到的部分文本。

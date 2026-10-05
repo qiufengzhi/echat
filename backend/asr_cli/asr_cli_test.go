@@ -17,7 +17,7 @@ func TestDisabledRecognizerIsSafe(t *testing.T) {
 	if Enabled() {
 		t.Fatal("未构造识别器时应为未启用")
 	}
-	if Push(asrpb.AudioChunk{SessionId: "s-disabled"}) {
+	if Push(&asrpb.AudioChunk{SessionId: "s-disabled"}) {
 		t.Fatal("未启用时投递应返回 false")
 	}
 
@@ -32,13 +32,13 @@ func TestDisabledRecognizerIsSafe(t *testing.T) {
 // TestPushDropsWhenInputFull 输入队列满时投递返回 false 且不阻塞
 func TestPushDropsWhenInputFull(t *testing.T) {
 	previous := GlobalRecognizer
-	GlobalRecognizer = &Recognizer{AudioIn: make(chan asrpb.AudioChunk, 1)}
+	GlobalRecognizer = &Recognizer{AudioIn: make(chan *asrpb.AudioChunk, 1)}
 	t.Cleanup(func() { GlobalRecognizer = previous })
 
-	if !Push(asrpb.AudioChunk{SessionId: "s-1"}) {
+	if !Push(&asrpb.AudioChunk{SessionId: "s-1"}) {
 		t.Fatal("队列未满时应投递成功")
 	}
-	if Push(asrpb.AudioChunk{SessionId: "s-2"}) {
+	if Push(&asrpb.AudioChunk{SessionId: "s-2"}) {
 		t.Fatal("队列已满时应返回 false 而不是阻塞")
 	}
 }
