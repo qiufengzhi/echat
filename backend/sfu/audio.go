@@ -70,28 +70,41 @@ const opusEncoderFrameSamples = 960
 // upsample16kTo48k 已废弃 — 替换为 gunter-q12/resample polyphase FIR 重采样库
 // 重采样逻辑在 sfu.go 的 aiCall 协程中通过 resample.New + Write 实现
 
-// decodeOpusToInt16 将 Opus 编码的 RTP payload 解码为 PCM16 采样
-// 解码器为单声道，sampleRate 通常为 16000
-// 如果 payload 过短（DTX 静音包等），返回空切片而非错误，避免日志噪声
-func decodeOpusToInt16(opusData []byte, sampleRate int) ([]int16, error) {
-	// DTX / 舒适噪声包：payload 太短无法包含 TOC，直接返回空 PCM
-	if len(opusData) < 1 {
-		return []int16{}, nil
-	}
+// asrSampleRate 送云端识别的采样率，与 opus 解码输出一致
+const asrSampleRate = 16000
 
+// opusMaxFrameSamples 一帧 Opus 解码后的最大采样数：120ms @16kHz = 1920
+const opusMaxFrameSamples = 320 * 6
+
+// newOpusDecoder 创建送识别用的 Opus 解码器
+//
+// sampleRate: 解码输出采样率，取 asrSampleRate
+// return: 解码器指针，创建失败时返回错误
+func newOpusDecoder(sampleRate int) (*opus.Decoder, error) {
 	dec, err := opus.NewDecoderWithOutput(sampleRate, 1)
 	if err != nil {
 		return nil, fmt.Errorf("创建解码器失败: %w", err)
 	}
+	return &dec, nil
+}
 
-	// 一帧最大 120ms @16kHz = 1920 samples，320*6 兜住大帧
-	pcm := make([]int16, 320*6)
-	n, err := dec.DecodeToInt16(opusData, pcm)
-	if err != nil {
-		return nil, fmt.Errorf("解码失败: %w", err)
+// decodeOpusInto 用已有解码器把 Opus 数据解码进调用方提供的缓冲
+//
+// 解码器与输出缓冲都由调用方复用：每包新建解码器、每包分配输出切片，
+// 是本路径上最容易忽略的两笔开销
+// dec: 复用解码器，必须只被一个协程使用
+// opusData: RTP payload；长度不足 1 字节时视为 DTX 静音包
+// out: 输出缓冲，容量需不小于 opusMaxFrameSamples
+// return: 解出的采样数与错误，DTX 静音包返回 0
+func decodeOpusInto(dec *opus.Decoder, opusData []byte, out []int16) (int, error) {
+	if len(opusData) < 1 {
+		return 0, nil
 	}
-
-	return pcm[:n], nil
+	n, err := dec.DecodeToInt16(opusData, out)
+	if err != nil {
+		return 0, fmt.Errorf("解码失败: %w", err)
+	}
+	return n, nil
 }
 
 // int16ToLEBytes 将 []int16 转为小端序字节切片，供 ASR 服务使用

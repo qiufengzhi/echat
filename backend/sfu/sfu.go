@@ -28,6 +28,7 @@ import (
 	"echat-backend/agentcli"
 	"echat-backend/asr_cli"
 	"echat-backend/config"
+	"echat-backend/dataplane"
 	"echat-backend/global"
 	"echat-backend/logging"
 	asrpb "echat-backend/proto/asr"
@@ -49,6 +50,11 @@ import (
 )
 
 var logger = logging.New("sfu")
+
+// asrQueueCapacity 每个发布者的待识别 RTP 队列容量，50 包 × 20ms = 1 秒音频
+//
+// 队列只吸收解码与投递的瞬时抖动，不承担积压：满了丢最老，语音以最新内容为准
+const asrQueueCapacity = 50
 
 // ICECandidateCallback 是 SFU -> 信令层 的 ICE Candidate 回调
 // 信令层收到后通过 WebSocket 转发给对应客户端
@@ -668,6 +674,12 @@ func (r *SFURoom) forwardRtp(sourceID string, sessionID string, remoteTrack *web
 	defer logger.Infow("中继协程已停止", "source", sourceID[:8])
 	var ttsStarted atomic.Bool
 
+	// 待识别队列与投递协程：解码与送识别都在本发布者自己的协程里做
+	// 放在本协程里做的话，每包一次的解码耗时直接叠加到用户之间的转发延迟上
+	asrQueue := dataplane.NewRing[[]byte]("sfu.asr."+sessionID, asrQueueCapacity)
+	defer asrQueue.Close()
+	go r.deliverToASR(sourceID, sessionID, asrQueue)
+
 	for {
 		rtpPacket, _, err := remoteTrack.ReadRTP()
 		if err != nil {
@@ -691,23 +703,10 @@ func (r *SFURoom) forwardRtp(sourceID string, sessionID string, remoteTrack *web
 			}
 		}
 
-		// 就地解码 Opus → PCM 并送 ASR（每个 RTP 包一次）
-		// 不能每包起 goroutine 阻塞发送：ASR 消费端一旦被慢/失败的云端建连卡住，
-		// AudioIn 通道（缓冲 64）会满，阻塞的 goroutine 持续堆积，最终拖垮进程
-		pcm, decErr := decodeOpusToInt16(rtpPacket.Payload, 16000)
-		if decErr != nil {
-			logger.Warnw("解码失败", "source", sourceID[:8], "error", decErr)
-		} else if len(pcm) > 0 {
-			// 仅有实际音频数据才送 ASR，DTX 静音包解码后 pcm 为空，直接跳过
-			// 非阻塞投递：识别消费端繁忙时按背压丢弃，不阻塞音频转发；丢弃由 asr_cli 计数
-			asr_cli.Push(&asrpb.AudioChunk{
-				SessionId:  sessionID,
-				RoomId:     r.ID,
-				ClientId:   sourceID,
-				Pcm:        int16ToLEBytes(pcm),
-				SampleRate: 16000,
-			})
-		}
+		// 交给识别协程解码。payload 的底层缓冲会被下一次 ReadRTP 复用，必须拷贝后再入队
+		payload := make([]byte, len(rtpPacket.Payload))
+		copy(payload, rtpPacket.Payload)
+		asrQueue.Push(payload)
 
 		// TTS 音频处理循环只启动一次，避免每个 RTP 包都泄漏一个 goroutine
 		if !ttsStarted.Swap(true) {
@@ -718,6 +717,49 @@ func (r *SFURoom) forwardRtp(sourceID string, sessionID string, remoteTrack *web
 			}
 			go r.runAITTSLoop(acr)
 		}
+	}
+}
+
+// deliverToASR 每个发布者的识别投递协程：取 RTP payload，用复用解码器解成 PCM 后送识别
+//
+// 与转发协程分离，使解码耗时不再进入用户间的转发路径；解码器与输出缓冲在本协程内复用，
+// 构造次数从每包一次降到每个发布者一次
+// sourceID: 说话客户端；sessionID: 会话标识；queue: 待解码的 RTP payload 队列
+func (r *SFURoom) deliverToASR(sourceID string, sessionID string, queue *dataplane.Ring[[]byte]) {
+	dec, err := newOpusDecoder(asrSampleRate)
+	if err != nil {
+		logger.Warnw("创建 Opus 解码器失败，该发布者不再送识别", "source", sourceID[:8], "error", err)
+		return
+	}
+	pcm := make([]int16, opusMaxFrameSamples)
+
+	for {
+		payload, ok := queue.Pop()
+		if !ok {
+			if queue.Closed() {
+				return
+			}
+			<-queue.Wait()
+			continue
+		}
+
+		n, decErr := decodeOpusInto(dec, payload, pcm)
+		if decErr != nil {
+			logger.Warnw("解码失败", "source", sourceID[:8], "error", decErr)
+			continue
+		}
+		if n == 0 {
+			continue // DTX 静音包，解码后没有有效采样
+		}
+
+		// 非阻塞投递：识别消费端繁忙时按背压丢弃，丢弃由 asr_cli 计数
+		asr_cli.Push(&asrpb.AudioChunk{
+			SessionId:  sessionID,
+			RoomId:     r.ID,
+			ClientId:   sourceID,
+			Pcm:        int16ToLEBytes(pcm[:n]),
+			SampleRate: asrSampleRate,
+		})
 	}
 }
 
