@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"echat-backend/dataplane"
 	"echat-backend/logging"
 )
 
@@ -54,8 +55,107 @@ type AIStateChange struct {
 	State  AIState // 迁移后的状态
 }
 
-// AIStateChangeCh 全局 AI 状态变更事件通道，迁移发生后写入，订阅方负责消费
-var AIStateChangeCh = make(chan AIStateChange, 128)
+// coalescedTotal 累计被合并掉的迁移次数
+//
+// 合并不是丢弃，但需要可见：合并率高说明订阅方处理不过来，值得被看见
+var coalescedTotal = dataplane.NewCounter("ai.state.coalesced", 0)
+
+// AIStateSub 单个房间的 AI 状态订阅
+//
+// 合并式：只保留最新状态，尚未取走的中间迁移被覆盖。状态是幂等的，订阅方只需要最终值，
+// 因此「来不及取」的语义是合并而不是丢弃——丢弃会让前端停在错误状态且无人知道
+type AIStateSub struct {
+	mu        sync.Mutex // 保护 latest、coalesced 与 closed
+	latest    *AIStateChange
+	notify    chan struct{} // 容量 1 的通知信号，Close 时关闭
+	coalesced int64         // 累计被覆盖掉的迁移次数
+	closed    bool          // 订阅是否已关闭
+}
+
+// newAIStateSub 构造一个空订阅
+//
+// return: 订阅实例
+func newAIStateSub() *AIStateSub {
+	return &AIStateSub{notify: make(chan struct{}, 1)}
+}
+
+// Next 取出最新状态，永不阻塞
+//
+// 取走后槽位清空，直到下一次迁移才会再有新值
+// return: 状态事件与是否取到，没有未取走的状态时返回零值与 false
+func (s *AIStateSub) Next() (AIStateChange, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.latest == nil {
+		return AIStateChange{}, false
+	}
+	evt := *s.latest
+	s.latest = nil
+	return evt, true
+}
+
+// Wait 返回等待通知的通道，有新状态或订阅被关闭时被唤醒
+//
+// return: 只读通知通道，订阅关闭后被关闭
+func (s *AIStateSub) Wait() <-chan struct{} {
+	return s.notify
+}
+
+// Closed 返回订阅是否已关闭
+//
+// return: 已关闭返回 true，此时 Next 取空后不再有新值
+func (s *AIStateSub) Closed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+// Coalesced 返回被覆盖掉的迁移次数
+//
+// return: 累计合并次数，0 表示每次迁移都被订阅方及时取走
+func (s *AIStateSub) Coalesced() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.coalesced
+}
+
+// publish 投递一次状态迁移，永不阻塞
+//
+// evt: 待投递的状态事件
+// return: 覆盖掉了尚未取走的旧状态时返回 true
+func (s *AIStateSub) publish(evt AIStateChange) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+
+	overwrote := s.latest != nil
+	if overwrote {
+		s.coalesced++
+	}
+	s.latest = &evt
+
+	select {
+	case s.notify <- struct{}{}:
+	default:
+	}
+	return overwrote
+}
+
+// Close 关闭订阅并唤醒等待者，幂等
+//
+// 关闭后不再接收新状态；房间销毁时调用，不调用会留下永不消费的订阅
+func (s *AIStateSub) Close() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.closed = true
+	close(s.notify)
+	s.mu.Unlock()
+}
 
 // roomAI 记录单个房间的 AI 状态与最近活动时间
 type roomAI struct {
@@ -65,13 +165,31 @@ type roomAI struct {
 
 // aiStore 维护所有房间的 AI 状态，替代原先的全局开关
 type aiStore struct {
-	mu    sync.RWMutex       // 保护 rooms 的并发读写
-	rooms map[string]*roomAI // roomID 到房间 AI 状态的映射
+	mu    sync.RWMutex           // 保护 rooms 与 subs 的并发读写
+	rooms map[string]*roomAI     // roomID 到房间 AI 状态的映射
+	subs  map[string]*AIStateSub // roomID 到该房间状态订阅者的映射
 }
 
 // AIStates 全局 AI 状态存储实例，供 room 与 sfu 两个包共同使用
 var AIStates = &aiStore{
 	rooms: make(map[string]*roomAI),
+	subs:  make(map[string]*AIStateSub),
+}
+
+// Subscribe 订阅指定房间的 AI 状态迁移
+//
+// 同一房间多次订阅返回同一个订阅者：状态是房间级的，多条消费循环只会互相抢事件
+// roomID: 房间 ID
+// return: 该房间的订阅，房间销毁时由 Remove 关闭
+func (s *aiStore) Subscribe(roomID string) *AIStateSub {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sub, ok := s.subs[roomID]; ok {
+		return sub
+	}
+	sub := newAIStateSub()
+	s.subs[roomID] = sub
+	return sub
 }
 
 // Get 返回房间当前 AI 状态，房间不存在时按离线处理
@@ -138,11 +256,21 @@ func (s *aiStore) Touch(roomID string) {
 	s.mu.Unlock()
 }
 
-// Remove 删除房间的 AI 状态，房间销毁时调用，避免状态泄漏
+// Remove 删除房间的 AI 状态与订阅，房间销毁时调用，避免状态与订阅泄漏
+//
+// roomID: 房间 ID
 func (s *aiStore) Remove(roomID string) {
 	s.mu.Lock()
 	delete(s.rooms, roomID)
+	sub, hasSub := s.subs[roomID]
+	if hasSub {
+		delete(s.subs, roomID)
+	}
 	s.mu.Unlock()
+
+	if hasSub {
+		sub.Close()
+	}
 }
 
 // StartStandbyCleanup 启动后台协程，定时把静默超时的在线房间转待机
@@ -169,12 +297,24 @@ func (s *aiStore) StartStandbyCleanup(interval time.Duration, timeout time.Durat
 	}()
 }
 
-// emit 记录状态迁移日志并把事件写入通道，通道满时丢弃事件，避免阻塞业务协程
+// emit 记录状态迁移日志，并把事件投递给该房间的订阅者
+//
 // 静默超时、唤醒、休眠、按钮开关等所有迁移都经过这里，统一留痕
+// 房间无订阅者时不投递也不排队：状态是幂等的，订阅方新建后读到的就是当前值
+// roomID: 发生迁移的房间；state: 迁移后的状态
 func (s *aiStore) emit(roomID string, state AIState) {
 	logger.Infow("AI 进入"+state.Readable(), "roomID", roomID, "state", state.String())
-	select {
-	case AIStateChangeCh <- AIStateChange{RoomID: roomID, State: state}:
-	default:
+
+	s.mu.RLock()
+	sub := s.subs[roomID]
+	s.mu.RUnlock()
+	if sub == nil {
+		return
+	}
+
+	if sub.publish(AIStateChange{RoomID: roomID, State: state}) {
+		if total, report := coalescedTotal.Inc(); report {
+			logger.Infow("AI 状态迁移被合并", "roomID", roomID, "coalescedTotal", total)
+		}
 	}
 }

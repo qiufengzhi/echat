@@ -76,10 +76,9 @@ func main() {
 	relayer := outbox.NewRelayer(root.Store().Pool(), outboxConfig(cfg))
 	go relayer.Run(context.Background())
 
-	// 后台协程：空房间清理 / 吊销踢连接 / AI 状态广播 / 在线待机收敛
+	// 后台协程：空房间清理 / 吊销踢连接 / 在线待机收敛（AI 状态广播随房间创建启动）
 	signaling.StartCleanupLoop()
 	signaling.StartRevokedKick()
-	signaling.StartAIStateBroadcaster()
 	startAIStandbyCleanup(cfg)
 
 	// 房间事件投影：durable consumer 消费 room.* 事件，重建读模型并对账 SpiceDB 授权

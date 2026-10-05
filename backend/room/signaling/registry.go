@@ -76,6 +76,8 @@ func createRoom(roomID string) *aggregate.Room {
 	r := aggregate.NewRoom(roomID)
 	r.AggID = uuid.NewString() // 内部聚合根 id，事件骨干排列坐标；对外只暴露 roomID 短码
 	rooms.Put(roomID, r)
+	// AI 状态迁移按房间分发：订阅随房间创建建立，随 aiState.Remove 关闭
+	startAIStateBroadcast(roomID, global.AIStates.Subscribe(roomID))
 	logger.Infow("房间已创建", "roomID", roomID)
 	return r
 }
@@ -125,6 +127,8 @@ func cleanupIdleRooms() {
 			r.Lock.RUnlock()
 			if empty {
 				rooms.Delete(id)
+				// 一并清掉 AI 状态与其订阅：只删房间会让两者随房间数累积
+				aiState.Remove(id)
 				logger.Infow("清理空闲房间", "roomID", id)
 			}
 		}
