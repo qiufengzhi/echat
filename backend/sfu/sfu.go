@@ -25,16 +25,12 @@ package sfu
 
 import (
 	"bytes"
-	"echat-backend/agentcli"
 	"echat-backend/asr_cli"
 	"echat-backend/config"
 	"echat-backend/dataplane"
-	"echat-backend/global"
 	"echat-backend/logging"
 	asrpb "echat-backend/proto/asr"
-	llmpb "echat-backend/proto/llm"
 	"echat-backend/tts_cli"
-	"echat-backend/wakeword"
 	"fmt"
 	"net"
 	"strings"
@@ -173,6 +169,8 @@ func (s *SFUServer) GetOrCreateRoom(roomID string) *SFURoom {
 		peers: make(map[string]*SFUPeer),
 	}
 	s.rooms[roomID] = room
+	// 识别结果按房间分发：订阅随 SFU 房间创建建立，随房间移除关闭
+	GlobalASRDispatcher.subscribe(roomID)
 	logger.Infow("房间已创建", "roomID", roomID)
 	return room
 }
@@ -184,6 +182,8 @@ func (s *SFUServer) RemoveRoom(roomID string) {
 
 	if _, ok := s.rooms[roomID]; ok {
 		delete(s.rooms, roomID)
+		// 一并移除识别结果订阅，否则订阅者与其队列会随房间数累积
+		GlobalASRDispatcher.unsubscribe(roomID)
 		logger.Infow("房间已删除", "roomID", roomID)
 	}
 }
@@ -595,76 +595,6 @@ func (r *SFURoom) getAITtsTrack(clientID string) (*webrtc.TrackLocalStaticSample
 	// 该回调内完成 CreateOffer + SetLocalDescription + 信令通知，此处无需重复处理
 
 	return track, nil
-}
-
-// StartASRLogger 启动后台协程，持续从 ASR 识别器读取识别结果并按房间 AI 状态分发
-//
-// 必须在 asr_cli.Init() 之后调用；识别器未启用时结果通道永不产出，该协程静默等待
-func StartASRLogger() {
-	go getAsrRes()
-}
-
-// getAsrRes 读取阿里云 ASR 返回的识别结果，按房间 AI 状态做唤醒词/休眠词网关后送 LLM
-// turnSeq 轮次序号发生器，保证同一进程内每轮 ID 唯一
-var turnSeq atomic.Int64
-
-func getAsrRes() {
-	for res := range asr_cli.Results() {
-		switch global.AIStates.Get(res.RoomId) {
-		case global.AIOffline:
-			// 离线：不监听、不唤醒，结果直接丢弃
-			continue
-
-		case global.AIStandby:
-			// 待机：只在句末匹配唤醒词，命中转在线；中间结果与未命中结果一律丢弃
-			if !res.IsFinal {
-				continue
-			}
-			if wakeword.IsWake(res.Text) {
-				global.AIStates.TryWake(res.RoomId)
-				logger.Infow("命中唤醒词", "roomID", res.RoomId, "clientID", res.ClientId, "text", res.Text)
-			}
-			// 唤醒词本身不送 LLM，等下一句才是真正的输入
-			continue
-
-		case global.AIOnline:
-			// 在线：句末匹配休眠词，命中转待机且不送 LLM
-			if res.IsFinal && wakeword.IsSleep(res.Text) {
-				global.AIStates.TrySleep(res.RoomId)
-				logger.Infow("命中休眠词", "roomID", res.RoomId, "clientID", res.ClientId, "text", res.Text)
-				continue
-			}
-			// 刷新活动时间，推迟静默超时
-			global.AIStates.Touch(res.RoomId)
-		}
-
-		// 中间结果只用于唤醒与状态刷新，不进 LLM：半句喂给模型会污染上下文
-		if !res.IsFinal {
-			continue
-		}
-
-		logger.Infow("收到识别结果", "userID", res.ClientId, "text", res.Text, "isFinal", res.IsFinal, "seq", res.Seq)
-		// 用户再次开口即打断在途轮次：取消该轮 RPC 并清空 TTS 缓冲，避免两轮音频叠着播
-		// 完整的确认打断状态机（最小打断时长、误打断恢复）属 D1 范围，这里只做「新语音即打断」
-		if runningTurn, inFlight := agentcli.Global.TurnID(res.SessionId); inFlight {
-			logger.Infow("用户插话，打断在途轮次",
-				"roomID", res.RoomId, "clientID", res.ClientId, "runningTurn", runningTurn)
-			agentcli.Global.CancelTurn(res.SessionId)
-			tts_cli.GlobalTTSService.Interrupt(res.SessionId)
-		}
-		// 每个句末结果发起一轮对话：一轮一次 RPC，响应由 agentcli 的分发回调送 TTS
-		turnID := fmt.Sprintf("%s-%d", res.SessionId, turnSeq.Add(1))
-		if err := agentcli.Global.SendTurn(&llmpb.TurnRequest{
-			SessionId: res.SessionId,
-			RoomId:    res.RoomId,
-			ClientId:  res.ClientId,
-			UserText:  res.Text,
-			TurnId:    turnID,
-			Seq:       res.Seq,
-		}); err != nil {
-			logger.Warnw("发起对话轮次失败", "roomID", res.RoomId, "clientID", res.ClientId, "turnID", turnID, "error", err)
-		}
-	}
 }
 
 // forwardRtp 接收到客户端的语音包，从 remoteTrack 读取 RTP 包，转发给房间其他客户端，同时送阿里云 ASR 做语音识别

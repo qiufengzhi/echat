@@ -41,9 +41,9 @@ func main() {
 	})
 	defer logging.Sync() // 确保退出前日志落盘
 
-	// 媒体侧初始化：ASR / SFU-ASR 日志线 / TTS / Agent 客户端
+	// 媒体侧初始化：ASR / ASR 结果分发 / TTS / Agent 客户端
 	asr_cli.Init()
-	sfu.StartASRLogger()
+	sfu.StartASRDispatcher()
 	tts_cli.Init()
 	initAgentClient(cfg)
 
