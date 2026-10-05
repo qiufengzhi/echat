@@ -101,6 +101,7 @@ func (a *App) Mount() {
 	api.NewHandler(a.store.Pool(), a.rdb, a.auth).Register(a.mux)
 	a.profile.Register(a.mux)
 	a.mountTransportEntry()
+	a.mountDataflowSnapshot()
 }
 
 // Handler 返回套好通用中间件链的根 http.Handler，供 main 交给 http.ListenAndServe
@@ -128,4 +129,11 @@ func (a *App) Redis() *redis.Client {
 func (a *App) mountTransportEntry() {
 	a.mux.HandleFunc("/", handlers.IndexHandler)
 	a.mux.HandleFunc("/ws", handlers.WebSocketHandler(a.authSvc))
+}
+
+// mountDataflowSnapshot 注册数据面运行快照的只读路由
+//
+// 暴露的是进程内部队列名与丢弃计数，不对外公开，走与业务接口同一套 access 鉴权
+func (a *App) mountDataflowSnapshot() {
+	a.mux.HandleFunc("GET /api/v1/debug/dataflow", transport.Adapt(a.auth.AccessRequired(handlers.DataflowSnapshotHandler())))
 }
