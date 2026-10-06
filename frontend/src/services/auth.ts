@@ -68,9 +68,74 @@ export async function login(identifier: string, password: string): Promise<AuthU
   return data.user as AuthUser
 }
 
-// refresh 用 httpOnly cookie 里的 refresh 换新 access；失败说明会话已失效
-// 任何失败（含网络异常、网关 5xx、响应非 JSON）都静默返回 false，绝不抛原始异常污染调用方
-export async function refresh(): Promise<boolean> {
+// RefreshOutcome 刷新结果的三种语义：renewed 换到新 access，unauthorized 会话已失效需重新登录，
+// retry 服务侧或网络暂时不可用可稍后重试
+// 区分 unauthorized 与 retry 是关键：前者再重试也不会成功（前端应停止重连并跳登录），后者值得继续重试
+export type RefreshOutcome = 'renewed' | 'unauthorized' | 'retry'
+
+// inflightRefresh 进行中的刷新请求，用于同页并发去重
+// 轮换制刷新下，同一 cookie 并发调用会用到刚被轮换吊销的旧 refresh，被服务端判为重放而清算全部会话；
+// 单飞让同一页面同一时刻只发一次请求
+let inflightRefresh: Promise<RefreshOutcome> | null = null
+
+// REFRESH_LOCK_NAME Web Locks 锁名：同名锁把刷新跨同源标签页串行化
+const REFRESH_LOCK_NAME = 'echat:auth:refresh'
+// REFRESH_LOCK_TIMEOUT_MS 等待刷新锁的上限：某标签页卡在刷新里时不让其他标签页的重连一直干等
+const REFRESH_LOCK_TIMEOUT_MS = 10_000
+// REFRESH_AT_KEY 跨标签页共享的最近一次成功刷新时间戳键（localStorage 同源共享）
+const REFRESH_AT_KEY = 'echat_refresh_at'
+// REFRESH_SKEW_MS 复用窗口：最近该时长内已成功刷新过，其他标签页直接复用共享的新 access，不再重复轮换
+const REFRESH_SKEW_MS = 5_000
+
+// refresh 用 httpOnly cookie 里的 refresh 换新 access
+// 同页并发共享一个 in-flight 请求；跨标签页用 Web Locks 串行化，保证同一 cookie 同一时刻只有一次轮换
+// 返回值：本次刷新的归类结果（renewed / unauthorized / retry），绝不抛原始异常污染调用方
+export function refresh(): Promise<RefreshOutcome> {
+  if (inflightRefresh) return inflightRefresh
+  inflightRefresh = coordinatedRefresh().finally(() => {
+    inflightRefresh = null
+  })
+  return inflightRefresh
+}
+
+// coordinatedRefresh 跨标签页协调刷新：抢到锁后再检查是否已被其他标签页刷新过
+// 未抢到锁超时按 retry 处理，不阻塞上层重连
+// 返回值：本次刷新的归类结果
+async function coordinatedRefresh(): Promise<RefreshOutcome> {
+  const locks = navigator.locks
+  if (!locks) return doRefresh() // 环境无 Web Locks：退回仅同页单飞
+  try {
+    return await locks.request(
+      REFRESH_LOCK_NAME,
+      { signal: AbortSignal.timeout(REFRESH_LOCK_TIMEOUT_MS) },
+      async () => {
+        // 临界区内先看共享时间戳：刚被别的标签页刷新过就直接复用，跳过本次轮换
+        if (recentlyRefreshed()) return getAccessToken() ? 'renewed' : 'retry'
+        const outcome = await doRefresh()
+        if (outcome === 'renewed') markRefreshed()
+        return outcome
+      },
+    )
+  } catch {
+    return 'retry'
+  }
+}
+
+// recentlyRefreshed 判断共享时间戳是否落在复用窗口内
+// 返回值：true 表示最近已有标签页刷新成功，可直接复用共享的新 access
+function recentlyRefreshed(): boolean {
+  const at = Number(window.localStorage.getItem(REFRESH_AT_KEY))
+  return at > 0 && Date.now() - at < REFRESH_SKEW_MS
+}
+
+// markRefreshed 记录本次刷新成功的时间戳，供其他标签页判断是否可复用
+function markRefreshed(): void {
+  window.localStorage.setItem(REFRESH_AT_KEY, String(Date.now()))
+}
+
+// doRefresh 真正执行一次刷新请求并归类结果
+// 返回值：renewed 换到新 access 并已落本地，unauthorized 会话失效，retry 暂时不可用
+async function doRefresh(): Promise<RefreshOutcome> {
   let res: Response
   try {
     res = await apiFetch('/api/v1/auth/refresh', {
@@ -78,13 +143,16 @@ export async function refresh(): Promise<boolean> {
       credentials: 'include',
     })
   } catch {
-    return false
+    return 'retry' // 网络层失败（断网、后端不可达）：可能只是暂时，交给上层继续重试
   }
-  if (!res.ok) return false
+  // 400/401/403：refresh 已被吊销、无效或缺失，重试不会成功，判定为会话失效
+  // 注意后端把「令牌无效」映射为 400 TOKEN_INVALID（而非 401），故 400 也归入终态
+  if (res.status === 400 || res.status === 401 || res.status === 403) return 'unauthorized'
+  if (!res.ok) return 'retry' // 5xx/429 等：服务侧问题，可重试
   const data = await safeJson<SessionResponse>(res)
-  if (!data?.accessToken) return false
+  if (!data?.accessToken) return 'retry'
   saveSession(data.accessToken, data.user)
-  return true
+  return 'renewed'
 }
 
 // authedFetch 带 Bearer 的 REST 请求：遇 401 先用 refresh 换新 access 重试一次
@@ -103,8 +171,8 @@ export async function authedFetch(input: string, init: RequestInit = {}): Promis
   const res = await send(getAccessToken())
   if (res.status !== 401) return res
 
-  const renewed = await refresh()
-  if (!renewed) return res
+  const outcome = await refresh()
+  if (outcome !== 'renewed') return res
   return send(getAccessToken())
 }
 
@@ -116,11 +184,18 @@ function saveSession(accessToken: string, user?: AuthUser): void {
   }
 }
 
-// logout 清除本地令牌并通知后端吊销当前会话（best-effort，不阻塞 UI）
-export function logout(): void {
+// clearSession 仅清除本地令牌与用户概要缓存，不通知后端
+// 用于会话已确认失效（refresh 返回 unauthorized）时，让路由守卫立刻把用户送回登录页
+export function clearSession(): void {
   window.localStorage.removeItem(ACCESS_KEY)
   window.localStorage.removeItem(USER_KEY)
+  window.localStorage.removeItem(REFRESH_AT_KEY)
   clearRoomJoinDefaultsCache()
+}
+
+// logout 清除本地令牌并通知后端吊销当前会话（best-effort，不阻塞 UI）
+export function logout(): void {
+  clearSession()
   void fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {})
 }
 

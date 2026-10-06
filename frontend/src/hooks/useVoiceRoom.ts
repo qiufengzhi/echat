@@ -199,7 +199,8 @@ function upsertRoomUser(users: User[], nextUser: User): User[] {
 //   2. 通过 WebSocket 交换 SFU 信令（sfu_offer / sfu_answer / sfu_ice）
 //   3. 与 SFU 服务端建立单条 PeerConnection，接收多路远端音频流
 // options.onKicked 在连接被服务端踢下线（会话吊销/封禁）时回调，由页面决定如何提示与跳转
-export function useVoiceRoom(options?: { onKicked?: () => void }): UseVoiceRoomReturn {
+// options.onAuthExpired 在重连前刷新判定会话已失效时回调，由页面清除本地会话并跳登录
+export function useVoiceRoom(options?: { onKicked?: () => void; onAuthExpired?: () => void }): UseVoiceRoomReturn {
   // state 会驱动 React 页面刷新，例如成员席位、房主标记、远程音频和连接状态
   const [state, setState] = useState<VoiceRoomState>(createEmptyVoiceRoomState)
 
@@ -207,6 +208,12 @@ export function useVoiceRoom(options?: { onKicked?: () => void }): UseVoiceRoomR
   const onKickedRef = useRef<(() => void) | undefined>(undefined)
   useEffect(() => {
     onKickedRef.current = options?.onKicked
+  }, [options])
+
+  // onAuthExpiredRef 与 onKickedRef 同理，避免事件回调捕获过期的 options 闭包
+  const onAuthExpiredRef = useRef<(() => void) | undefined>(undefined)
+  useEffect(() => {
+    onAuthExpiredRef.current = options?.onAuthExpired
   }, [options])
 
   // 这些 ref 保存不会直接触发页面刷新的底层连接对象，避免事件回调拿到过期值
@@ -712,6 +719,16 @@ export function useVoiceRoom(options?: { onKicked?: () => void }): UseVoiceRoomR
             }))
             // 交由页面处理跳转与提示；连接与媒体资源随后由组件卸载时的清理逻辑释放
             onKickedRef.current?.()
+          },
+          onAuthExpired: () => {
+            // 会话已失效且刷新救不回：撤掉重连态，交页面清会话并跳登录
+            setState(prev => ({
+              ...prev,
+              isReconnecting: false,
+              isConnected: false,
+              error: '登录已失效，请重新登录',
+            }))
+            onAuthExpiredRef.current?.()
           },
         },
       })

@@ -32,6 +32,7 @@ export interface SignalingClientHandlers {
   onClose?: (event: CloseEvent) => void // 信令最终关闭且不再重连时的回调
   onReconnecting?: (attempt: number, maxAttempts: number) => void // 开始一次重连尝试前的回调
   onKicked?: () => void // 被服务端强制踢下线（会话吊销/封禁）时的回调
+  onAuthExpired?: () => void // 重连前刷新判定会话已失效时回调，上层应停止重连并引导重新登录
 }
 
 // SignalingClientReconnectOptions 配置断线后的自动重连行为
@@ -407,7 +408,16 @@ export class SignalingClient {
     this.reconnectTimerId = window.setTimeout(() => {
       this.reconnectTimerId = null
       // access 短命：重连前先刷新一次，避免握手 401 形成的重连死循环
-      void refresh().finally(() => this.connect())
+      // 刷新判定会话失效（unauthorized）时再重连也会被握手 401 拒绝，停止重连并通知上层去登录
+      void refresh().then(outcome => {
+        if (outcome === 'unauthorized') {
+          this.intentionallyClosed = true
+          console.warn('[signaling] 会话已失效，停止重连', { roomId: this.roomId })
+          this.handlers.onAuthExpired?.()
+          return
+        }
+        this.connect()
+      })
     }, delay)
   }
 

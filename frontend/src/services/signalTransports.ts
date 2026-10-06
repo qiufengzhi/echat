@@ -56,11 +56,12 @@ class WebSocketSignalTransport implements SignalTransport {
   readonly kind = 'ws' as const // 传输通道类型固定为 ws
   private ws: WebSocket | null = null // 当前 WebSocket 实例，未连接或已关闭时为 null
 
+  // url 为不含 token 的基础地址；token 在每次 connect 时现取，保证重连用刷新后的新 access
   constructor(private readonly url: string, private readonly handlers: TransportHandlers) {}
 
   // connect 建立 WebSocket 连接并绑定事件，连接生命周期由 SignalingClient 统一调度
   connect(): void {
-    const ws = new WebSocket(this.url)
+    const ws = new WebSocket(withAccessToken(this.url))
     this.ws = ws
     ws.onopen = () => this.handlers.onOpen()
     ws.onmessage = event => this.handlers.onMessage(String(event.data))
@@ -127,10 +128,15 @@ class WebTransportSignalTransport implements SignalTransport {
   private decoder = new FrameDecoder() // 下行帧解码器
   private settled = false // 会话是否已确定为成功（打开流），此后关闭事件不再触发降级
 
+  // url 为不含 token 的基础地址；token 在每次 connect 时现取，保证重连用刷新后的新 access
   constructor(private readonly url: string, private readonly handlers: TransportHandlers) {}
 
   // connect 建立 WebTransport 会话：优先尝试 QUIC，失败走 onFallback 由上层切 WebSocket
+  // 重连复用同一 transport 实例，必须先复位会话就绪标志；否则 ready 决议后因 settled 仍为 true 直接返回，不建流也不触发 onOpen，前端永久卡在重连中
   connect(): void {
+    this.settled = false
+    this.streamWriter = null
+    this.decoder = new FrameDecoder()
     const Ctor = getWebTransportCtor()
     if (!Ctor) {
       this.handlers.onFallback()
@@ -138,7 +144,7 @@ class WebTransportSignalTransport implements SignalTransport {
     }
     let wt: BrowserWebTransport
     try {
-      wt = new Ctor(this.url)
+      wt = new Ctor(withAccessToken(this.url))
     } catch (err) {
       this.handlers.onFallback()
       return
@@ -229,15 +235,16 @@ class WebTransportSignalTransport implements SignalTransport {
 
 // createPreferredTransport 按环境选择主要通道：浏览器支持且未被禁用时优先 WebTransport
 // preferWebTransport 为 false 或浏览器不支持时直接返回 WebSocket 实现
+// 传入不含 token 的基础地址：具体 token 由各通道在 connect 时现取，重连才能带上刷新后的新 access
 export function createPreferredTransport(
   url: string,
   handlers: TransportHandlers,
   preferWebTransport = true,
 ): SignalTransport {
   if (preferWebTransport) {
-    return new WebTransportSignalTransport(withAccessToken(url), handlers)
+    return new WebTransportSignalTransport(url, handlers)
   }
-  return new WebSocketSignalTransport(withAccessToken(url), handlers)
+  return new WebSocketSignalTransport(url, handlers)
 }
 
 // encodeFrame 把一帧消息编码为 4 字节大端长度前缀 + JSON 字节，供双向流写出

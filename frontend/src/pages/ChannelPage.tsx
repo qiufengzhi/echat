@@ -10,7 +10,7 @@ import RaiseSheet from '../components/room/RaiseSheet'
 import RemoteAudio from '../components/room/RemoteAudio'
 import type { User } from '../hooks/useVoiceRoom'
 import { useVoiceRoom } from '../hooks/useVoiceRoom'
-import { getAuthUser } from '../services/auth'
+import { clearSession, getAuthUser } from '../services/auth'
 import { recordRoomVisit } from '../services/history'
 import type { AIAssistantState } from '../types/signaling'
 import type { RoomParticipantRole, RoomStatusCopy, VoiceRoomMember } from '../types/voiceRoomUi'
@@ -147,9 +147,17 @@ export default function ChannelPage() {
 
   const voiceRoom = useVoiceRoom({
     onKicked: () => {
-      // 被服务端踢下线：关掉悬浮面板回主界面，避免停留在失效房间
+      // 被服务端踢下线意味着会话已死（吊销/改密/封禁）：清本地会话并回登录页
+      // 原实现只跳 /，会停在"看似已登录"的首页（默认频道 Tab），与本意不符
       setIsHostTransferOpen(false)
-      navigate('/', { replace: true })
+      clearSession()
+      navigate('/login', { replace: true })
+    },
+    onAuthExpired: () => {
+      // 会话已失效且刷新救不回：清本地会话并直接回登录页
+      // 直接跳 /login 而非 /，不依赖路由守卫二次判定，避免清态与守卫时序不一致时停留在房间页
+      clearSession()
+      navigate('/login', { replace: true })
     },
   })
 
