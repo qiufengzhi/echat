@@ -6,27 +6,27 @@ import { authedFetch } from './auth'
 
 const ROOM_DEFAULTS_KEY = 'echat:room-defaults'
 
-// RoomJoinDefaults 进房时的默认行为，开关默认都关闭（静音进房）
+// RoomJoinDefaults 进房时的默认行为，麦克风默认关闭（静音进房），扬声器默认开启（进房即可听到声音）
 export interface RoomJoinDefaults {
   micOnByDefault: boolean // 进房时是否默认开启麦克风，false=静音进房
-  speakerOnByDefault: boolean // 进房时是否默认开启扬声器，false=静音播放远端声音
+  speakerOnByDefault: boolean // 进房时是否默认开启扬声器，true=进房即播放远端声音
 }
 
 const DEFAULT_ROOM_JOIN_DEFAULTS: RoomJoinDefaults = {
   micOnByDefault: false,
-  speakerOnByDefault: false,
+  speakerOnByDefault: true,
 }
 
-// normalizeDefaults 逐项校验服务端/本地字段类型，非法值回退假值
+// normalizeDefaults 逐项校验服务端/本地字段类型，非法值回退默认：麦克风关、扬声器开
 function normalizeDefaults(data: Partial<RoomJoinDefaults> | null | undefined): RoomJoinDefaults {
   return {
     micOnByDefault: typeof data?.micOnByDefault === 'boolean' ? data.micOnByDefault : false,
     speakerOnByDefault:
-      typeof data?.speakerOnByDefault === 'boolean' ? data.speakerOnByDefault : false,
+      typeof data?.speakerOnByDefault === 'boolean' ? data.speakerOnByDefault : true,
   }
 }
 
-// readRoomJoinDefaults 读镜像；数据缺失或字段类型非法时逐项回退假值
+// readRoomJoinDefaults 读镜像；数据缺失或字段类型非法时逐项回退默认值（麦克风关、扬声器开）
 function readRoomJoinDefaults(): RoomJoinDefaults {
   const raw = localStorage.getItem(ROOM_DEFAULTS_KEY)
   if (!raw) return DEFAULT_ROOM_JOIN_DEFAULTS

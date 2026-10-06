@@ -66,7 +66,7 @@ export interface User {
 
 // Hook 内部统一维护页面要展示的语音房状态，组件只读取这些状态并渲染 UI
 interface VoiceRoomState {
-  localStream: MediaStream | null // 本地麦克风采集到的音频流，null 表示尚未接入
+  localStream: MediaStream | null // 本地麦克风采集到的音频流，null 表示尚未接入或无可用麦克风
   remoteStreams: Map<string, MediaStream> // SFU 架构下多个远端用户的音频流，key 为用户 ID
   users: User[] // 房间成员列表，由信令消息同步，供多人席位和成员列表展示
   hostId: string | null // 当前房主 ID，来自服务端权威状态
@@ -82,11 +82,12 @@ interface VoiceRoomState {
   availableMicrophones: AudioDevice[] // 可用的麦克风设备列表
   availableSpeakers: AudioDevice[] // 可用的扬声器设备列表
   currentMicrophoneId: string | null // 当前选中的麦克风设备 ID
+  hasMicrophone: boolean // 是否采集到可用麦克风，false 时麦克风开关点按只提示不可开启
 }
 
 // 对外暴露给页面组件的状态和操作方法，隐藏 WebSocket 与 WebRTC 的底层细节
 interface UseVoiceRoomReturn extends VoiceRoomState {
-  joinRoom: (roomId: string, username: string) => Promise<boolean> // 加入指定房间并初始化语音连接
+  joinRoom: (roomId: string, username: string) => Promise<void> // 加入指定房间并初始化语音连接，麦克风可选
   leaveRoom: (nextHostId?: string) => void // 离开房间并释放资源，房主可传下一任房主 ID
   toggleMute: () => void // 切换本地麦克风静音状态
   toggleSpeaker: () => void // 切换扬声器播放开关状态
@@ -125,6 +126,7 @@ function createEmptyVoiceRoomState(): VoiceRoomState {
     availableMicrophones: [],
     availableSpeakers: [],
     currentMicrophoneId: null,
+    hasMicrophone: false,
   }
 }
 
@@ -266,6 +268,7 @@ export function useVoiceRoom(options?: { onKicked?: () => void }): UseVoiceRoomR
         localStream: stream,
         error: null,
         currentMicrophoneId: deviceId || null,
+        hasMicrophone: true,
       }))
       return stream
     } catch (err) {
@@ -276,6 +279,7 @@ export function useVoiceRoom(options?: { onKicked?: () => void }): UseVoiceRoomR
         ...prev,
         localStream: null,
         error: getMicrophoneErrorMessage(error),
+        hasMicrophone: false,
       }))
       return null
     }
@@ -625,7 +629,8 @@ export function useVoiceRoom(options?: { onKicked?: () => void }): UseVoiceRoomR
     [syncUsersFromSignaling],
   )
 
-  // 加入房间的完整流程：先拿麦克风，再连 WebSocket
+  // 加入房间的完整流程：先尝试拿麦克风，再连 WebSocket
+  // 麦克风可选：采集失败（无设备/被拒/被占用）不阻断进房，以听众身份接入，麦克风开关点按只提示
   // PeerConnection 在每次 WebSocket 连接成功（含重连）后重新创建，避免旧 SFU 会话残留
   // 客户端加入后收到 waiting/room_ready，触发客户端创建 SDP Offer 并发起协商
   const joinRoom = useCallback(
@@ -633,14 +638,13 @@ export function useVoiceRoom(options?: { onKicked?: () => void }): UseVoiceRoomR
       currentUsernameRef.current = username
 
       const stream = await initLocalStream()
-      if (!stream) return false
 
-      // 加入房间时刷新设备列表，供 SettingsModal 展示下拉选项
+      // 加入房间时刷新设备列表，供设置页设备下拉选项使用
       await refreshAudioDevices()
 
       // 按设置里的默认行为初始化：默认不开麦克风时禁用本地音轨（静音进房，点按钮即恢复）
       const micOnByDefault = getRoomJoinDefaults().micOnByDefault
-      if (!micOnByDefault) {
+      if (stream && !micOnByDefault) {
         const audioTrack = stream.getAudioTracks()[0]
         if (audioTrack) audioTrack.enabled = false
       }
@@ -650,10 +654,12 @@ export function useVoiceRoom(options?: { onKicked?: () => void }): UseVoiceRoomR
         users: [],
         hostId: null,
         isHost: false,
+        // 清掉 initLocalStream 写入的采集失败提示：无麦克风是可进房的常规态，不常驻红条
         error: null,
         isReconnecting: false,
         remoteStreams: new Map(),
-        isMuted: !micOnByDefault,
+        // 无麦克风时恒为静音态，麦克风开关保持关闭
+        isMuted: !stream || !micOnByDefault,
       }))
 
       // SignalingClient 只负责连接信令服务器，收到的信令再交回 hook 驱动 WebRTC 协商
@@ -668,10 +674,13 @@ export function useVoiceRoom(options?: { onKicked?: () => void }): UseVoiceRoomR
               pcRef.current = null
             }
             // 清理旧 SFU 会话留下的远端流，避免重连期间播放已失效的 MediaStream
+            // 同时复位重连态：重连成功后必须撤掉「重连中」提示，否则 banner 会一直挂着
             setState(prev => ({
               ...prev,
               remoteStreams: new Map(),
               isConnected: false,
+              isReconnecting: false,
+              error: null,
             }))
             createPeerConnection()
             signalingClient.sendJoin()
@@ -708,8 +717,6 @@ export function useVoiceRoom(options?: { onKicked?: () => void }): UseVoiceRoomR
       })
       signalingClientRef.current = signalingClient
       signalingClient.connect()
-
-      return true
     },
     [initLocalStream, handleSignaling, createPeerConnection, refreshAudioDevices],
   )

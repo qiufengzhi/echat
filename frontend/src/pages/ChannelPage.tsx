@@ -143,7 +143,7 @@ export default function ChannelPage() {
 
   const [activeSheet, setActiveSheet] = useState<'raise' | 'members' | null>(null) // 当前展开的底部面板
   const [isHostTransferOpen, setIsHostTransferOpen] = useState(false) // 房主交接弹窗开关
-  const [joinError, setJoinError] = useState<string | null>(null) // 进房失败提示
+  const [micToast, setMicToast] = useState<string | null>(null) // 无麦克风等操作提示，短暂展示后自动消失
 
   const voiceRoom = useVoiceRoom({
     onKicked: () => {
@@ -154,20 +154,24 @@ export default function ChannelPage() {
   })
 
   // 进入页面即加入频道：房间号来自路由参数，昵称取登录用户展示名
+  // 无可用麦克风也照常进房，只是麦克风开关点按会提示未检测到设备
   const joinedRef = useRef(false)
   useEffect(() => {
     if (!normalizedRoomId || joinedRef.current) return
     joinedRef.current = true
     void (async () => {
-      const ok = await voiceRoom.joinRoom(normalizedRoomId, username)
-      if (!ok) {
-        setJoinError('无法连接频道，请确认服务可用后重试')
-        return
-      }
+      await voiceRoom.joinRoom(normalizedRoomId, username)
       // 进房成功即落本地历史，供「我的-历史记录」子页展示与深链直达
       recordRoomVisit(normalizedRoomId)
     })()
   }, [normalizedRoomId, username, voiceRoom])
+
+  // 无麦克风提示短暂展示后自动消失，避免常驻遮挡控制栏
+  useEffect(() => {
+    if (!micToast) return
+    const timer = window.setTimeout(() => setMicToast(null), 2200)
+    return () => window.clearTimeout(timer)
+  }, [micToast])
 
   const selfId = voiceRoom.selfId
   // 自己是否在等待上麦，驱动上麦按钮的禁用置灰
@@ -202,7 +206,7 @@ export default function ChannelPage() {
   )
 
   const onlineCount = members.filter(member => member.isOnline).length
-  const status = getRoomStatus(voiceRoom.isConnected, voiceRoom.isReconnecting, voiceRoom.error || joinError)
+  const status = getRoomStatus(voiceRoom.isConnected, voiceRoom.isReconnecting, voiceRoom.error)
 
   // 房主离开交接的候选 = 除自己外的在线成员
   const hostTransferCandidates = useMemo(
@@ -235,6 +239,15 @@ export default function ChannelPage() {
     const link = `${window.location.origin}/channel/${normalizedRoomId}`
     navigator.clipboard.writeText(link).catch(() => {})
   }, [normalizedRoomId])
+
+  // 麦克风开关：无可用麦克风时不开麦，只弹提示；有麦克风才真正切换静音
+  const handleToggleMute = useCallback(() => {
+    if (!voiceRoom.hasMicrophone) {
+      setMicToast('未检测到可用麦克风')
+      return
+    }
+    voiceRoom.toggleMute()
+  }, [voiceRoom.hasMicrophone, voiceRoom.toggleMute])
 
   return (
     <main className="voice-room-page">
@@ -269,7 +282,9 @@ export default function ChannelPage() {
 
       <MemberSeatGrid members={members} onInvite={handleInvite} />
 
-      {(voiceRoom.error || joinError) && <div className="room-error">{voiceRoom.error || joinError}</div>}
+      {voiceRoom.error && <div className="room-error">{voiceRoom.error}</div>}
+
+      {micToast && <div className="room-toast" role="status">{micToast}</div>}
 
       <ControlDock
         isMuted={voiceRoom.isMuted}
@@ -279,7 +294,7 @@ export default function ChannelPage() {
         selfRole={voiceRoom.selfRole}
         isWaiting={isWaiting}
         activeSheet={activeSheet}
-        onToggleMute={voiceRoom.toggleMute}
+        onToggleMute={handleToggleMute}
         onToggleSpeaker={voiceRoom.toggleSpeaker}
         onToggleAI={voiceRoom.toggleAI}
         onRaiseHand={voiceRoom.raiseHand}
