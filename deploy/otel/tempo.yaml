@@ -1,4 +1,5 @@
-# Tempo：单机 local-blocks + metrics_generator（span→metric 产 RED 指标）
+# Tempo：单机 local-blocks，收 OTLP 存 trace
+# （metrics_generator 的 span→metric 因当前 tempo 版本 schema 差异暂关，RED 由 Collector→Prometheus 指标承担）
 server:
   http_listen_port: 3200
 
@@ -18,21 +19,3 @@ storage:
       path: /var/tempo/blocks
     wal:
       path: /var/tempo/wal
-
-metrics_generator:
-  registry:
-    external_labels:
-      source: tempo
-      cluster: docker-compose
-  storage:
-    path: /var/tempo/metrics
-  processor:
-    service_graphs:
-      histograms: true
-  global:
-    remote_write:
-      - url: http://prometheus:9090/api/v1/write
-        send_exemplars: true
-
-overrides:
-  metrics_generator_processors: [service-graphs, span-metrics]

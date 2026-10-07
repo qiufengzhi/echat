@@ -10,13 +10,11 @@ receivers:
 
 processors:
   batch:
-  pii:
+  attributes/pii:
     actions:
       - key: echat.pii.*
         action: delete
       - key: lk.pii.*
-        action: delete
-      - key: gen_ai.prompt
         action: delete
   tail_sampling:
     policies:
@@ -41,18 +39,16 @@ exporters:
   prometheus:
     endpoint: 0.0.0.0:8889
     add_metric_suffixes: false
-  loki:
-    endpoint: http://loki:3100/loki/api/v1/push
+  otlphttp/loki-logs:
+    endpoint: http://loki:3100/otlp/v1/logs
     tls:
       insecure: true
-    default_labels_enabled:
-      exporter: true
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [batch, pii, tail_sampling]
+      processors: [batch, attributes/pii, tail_sampling]
       exporters: [otlp/tempo]
     metrics:
       receivers: [otlp]
@@ -60,5 +56,5 @@ service:
       exporters: [prometheus]
     logs:
       receivers: [otlp]
-      processors: [pii, batch]
-      exporters: [loki]
+      processors: [attributes/pii, batch]
+      exporters: [otlphttp/loki-logs]

@@ -107,7 +107,8 @@ def setup_logging(cfg: Config) -> None:
 
     # OTLP Logs 腿：loguru → Collector → Loki（可观测性未启用时 sink 空操作）
     if cfg.observability and cfg.observability.logs_enabled:
-        logger.add(log_sink, level=cfg.observability.logs_min_level or "INFO")
+        log_level = (cfg.observability.logs_min_level or "INFO").upper()
+        logger.add(log_sink, level=log_level)
 
 
 # ---------------------------------------------------------------------------
