@@ -20,6 +20,8 @@ from pathlib import Path
 
 import grpc
 from loguru import logger
+from opentelemetry import trace
+from opentelemetry.instrumentation.grpc import aio_server_interceptor
 from pydantic import ValidationError
 
 # 确保项目根目录在 sys.path 中，方便 agent.* 包导入
@@ -33,6 +35,7 @@ from agent.config.loader import Config, build_parser
 from agent.core.orchestrator import ChatOrchestrator
 from agent.memory.in_memory import InMemoryMemory
 from agent.memory.sqlite_memory import SQLiteMemory
+from agent.observability import setup as setup_observability
 from agent.pb import llm_pb2_grpc
 from agent.providers.openai_compatible import OpenAICompatibleProvider
 from agent.server.turn_service import TurnServiceServicer
@@ -140,8 +143,10 @@ async def serve(cfg: Config, orchestrator: ChatOrchestrator, tool_registry: Tool
             await tool_registry.register(tool)
         logger.info("已启用工具: {}", tool_registry.list_names())
 
-    # 拦截器：日志 + 错误处理（Timeout 默认不启用，单轮超时由调用方的 RPC deadline 控制）
+    # 拦截器：otelgrpc（跨语言 trace 传播，必须最外层）+ 日志 + 错误处理
+    # （Timeout 默认不启用，单轮超时由调用方的 RPC deadline 控制）
     interceptors = [
+        aio_server_interceptor(),
         LoggingInterceptor(),
         ErrorHandlingInterceptor(),
     ]
@@ -206,9 +211,13 @@ def main() -> None:
     cfg.apply_cli(args)
 
     setup_logging(cfg)
+    setup_observability(cfg.observability)
+    # 启动留痕 span：boot 段 = 装配耗时，进入 serve 前收尾
+    boot_span = trace.get_tracer("echat-agent").start_span("main.boot")
 
     # 组装依赖（tools 在 serve 里异步注册，避免启动前需要事件循环）
     orchestrator, tool_registry = build_orchestrator(cfg)
+    boot_span.end()
     asyncio.run(serve(cfg, orchestrator, tool_registry))
 
 

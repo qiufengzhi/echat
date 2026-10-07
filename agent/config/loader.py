@@ -113,6 +113,22 @@ class LoggingConfig(BaseModel):
     retention_days: int  # 日志保留天数
 
 
+class ObservabilityConfig(BaseModel):
+    """可观测性配置，控制 OTel 三信号（trace/metrics/logs）的上报"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool  # 是否启动 OTel 上报，false 时进程零 OTel 开销
+    service_name: str  # 上报的 service.name，如 echat-agent
+    otlp_endpoint: str  # OTLP gRPC 端点，形如 localhost:4317
+    trace_sample_rate: float  # 应用侧头部采样率 0.0-1.0，0 或超出按全采处理
+    capture_content: bool  # 是否把对话内容写入 span/log，仅允许本机 dev 开 true
+    metrics_export_interval: str  # 指标批量导出间隔，形如 15s
+    logs_enabled: bool  # 是否把日志推 OTLP Logs → Loki，落盘始终保留
+    logs_min_level: str  # 推 Loki 的日志级别下限：debug|info|warn|error
+    logs_export_interval: str  # 日志批量导出间隔，形如 5s
+
+
 # ---------------------------------------------------------------------------
 # 环境变量 → 配置字段 的映射表（viper 风格：环境变量优先于配置文件）
 # ---------------------------------------------------------------------------
@@ -145,6 +161,15 @@ _ENV_MAP: List[Tuple[str, Tuple[str, ...]]] = [
     ("LOGGING_LEVEL", ("logging", "level")),
     ("LOGGING_DIR", ("logging", "dir")),
     ("LOGGING_RETENTION_DAYS", ("logging", "retention_days")),
+    ("OTEL_ENABLED", ("observability", "enabled")),
+    ("OBSERVABILITY_SERVICE_NAME", ("observability", "service_name")),
+    ("OTEL_EXPORTER_OTLP_ENDPOINT", ("observability", "otlp_endpoint")),
+    ("OTEL_TRACES_SAMPLER_ARG", ("observability", "trace_sample_rate")),
+    ("OBSERVABILITY_CAPTURE_CONTENT", ("observability", "capture_content")),
+    ("OBSERVABILITY_METRICS_INTERVAL", ("observability", "metrics_export_interval")),
+    ("OBSERVABILITY_LOGS_ENABLED", ("observability", "logs_enabled")),
+    ("OBSERVABILITY_LOGS_MIN_LEVEL", ("observability", "logs_min_level")),
+    ("OBSERVABILITY_LOGS_INTERVAL", ("observability", "logs_export_interval")),
 ]
 
 
@@ -162,6 +187,7 @@ class Config(BaseModel):
     search: SearchConfig  # 联网搜索配置
     memory: MemoryConfig  # 记忆持久化配置
     logging: LoggingConfig  # 日志配置
+    observability: Optional[ObservabilityConfig] = None  # 可观测性配置，缺省时禁用（兼容不含该段的旧配置与测试）
 
     # ------------------------------------------------------------------
     # 加载
