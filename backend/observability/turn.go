@@ -72,7 +72,11 @@ type turnEntry struct {
 	sentAt   time.Time  // 首句送入 TTS provider 时刻，ttfb 起点
 	firstA   bool       // 是否已记过本轮首个音频（只记一次）
 	firstTok bool       // 是否已记过本轮首个 LLM token（只记一次）
+	ended    bool       // 本轮是否已结束：结束但尚无音频时保留条目，等迟到音频补记 e2e/ttfb
 }
+
+// turnGrace 已结束但仍等音频的条目保留时长，超过则被惰性清掉
+const turnGrace = 60 * time.Second
 
 // turnEtc 全局轮次表，键是进程内唯一的 turnID（turnSeq 全局递增保证）
 var turnEtc = struct {
@@ -103,8 +107,15 @@ func StartTurn(ctx context.Context, turnID, sessionID, roomID string) context.Co
 		opts = append(opts, trace.WithLinks(trace.Link{SpanContext: sc}))
 	}
 	spanCtx, span := tracer.Start(ctx, "turn", opts...)
+	now := time.Now()
 	turnEtc.Lock()
-	turnEtc.m[turnID] = &turnEntry{span: span, start: time.Now()}
+	// 惰性清理：已结束但仍等音频、超过 grace 的条目
+	for id, e := range turnEtc.m {
+		if e.ended && now.Sub(e.start) > turnGrace {
+			delete(turnEtc.m, id)
+		}
+	}
+	turnEtc.m[turnID] = &turnEntry{span: span, start: now}
 	turnEtc.Unlock()
 	return spanCtx
 }
@@ -154,6 +165,10 @@ func MarkFirstAudio(turnID string) {
 	now := time.Now()
 	e2e := now.Sub(e.start).Milliseconds()
 	sent := e.sentAt
+	// 本轮已结束（音频迟到）：补记完后即可注销条目
+	if e.ended {
+		delete(turnEtc.m, turnID)
+	}
 	turnEtc.Unlock()
 
 	TurnE2ELatency.Record(recordContext, e2e)
@@ -169,11 +184,15 @@ func MarkFirstAudio(turnID string) {
 func EndTurn(turnID, end string) {
 	turnEtc.Lock()
 	e, ok := turnEtc.m[turnID]
-	if ok {
-		delete(turnEtc.m, turnID)
-	} else {
+	if !ok {
 		turnEtc.Unlock()
 		return
+	}
+	// 尚无音频时保留条目（标 ended），等迟到音频补记 e2e/ttfb；已有音频可直接注销
+	if e.firstA {
+		delete(turnEtc.m, turnID)
+	} else {
+		e.ended = true
 	}
 	span := e.span
 	turnEtc.Unlock()

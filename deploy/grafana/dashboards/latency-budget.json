@@ -16,9 +16,9 @@
         "overrides": []
       },
       "targets": [
-        { "refId": "p50", "expr": "histogram_quantile(0.5, sum(rate(echat_turn_e2e_latency_bucket[5m])) by (le))", "legendFormat": "p50" },
-        { "refId": "p95", "expr": "histogram_quantile(0.95, sum(rate(echat_turn_e2e_latency_bucket[5m])) by (le))", "legendFormat": "p95" },
-        { "refId": "p99", "expr": "histogram_quantile(0.99, sum(rate(echat_turn_e2e_latency_bucket[5m])) by (le))", "legendFormat": "p99" }
+        { "refId": "p50", "expr": "histogram_quantile(0.5, sum(rate(echat_turn_e2e_latency_milliseconds_bucket[5m])) by (le))", "legendFormat": "p50" },
+        { "refId": "p95", "expr": "histogram_quantile(0.95, sum(rate(echat_turn_e2e_latency_milliseconds_bucket[5m])) by (le))", "legendFormat": "p95" },
+        { "refId": "p99", "expr": "histogram_quantile(0.99, sum(rate(echat_turn_e2e_latency_milliseconds_bucket[5m])) by (le))", "legendFormat": "p99" }
       ],
       "options": { "legend": { "showLegend": true }, "tooltip": { "mode": "multi" } }
     },
@@ -33,8 +33,8 @@
         "overrides": []
       },
       "targets": [
-        { "refId": "p50", "expr": "histogram_quantile(0.5, sum(rate(echat_turn_llm_ttft_bucket[5m])) by (le))", "legendFormat": "p50" },
-        { "refId": "p95", "expr": "histogram_quantile(0.95, sum(rate(echat_turn_llm_ttft_bucket[5m])) by (le))", "legendFormat": "p95" }
+        { "refId": "p50", "expr": "histogram_quantile(0.5, sum(rate(echat_turn_llm_ttft_milliseconds_bucket[5m])) by (le))", "legendFormat": "p50" },
+        { "refId": "p95", "expr": "histogram_quantile(0.95, sum(rate(echat_turn_llm_ttft_milliseconds_bucket[5m])) by (le))", "legendFormat": "p95" }
       ],
       "options": { "legend": { "showLegend": true } }
     },
@@ -49,8 +49,8 @@
         "overrides": []
       },
       "targets": [
-        { "refId": "p50", "expr": "histogram_quantile(0.5, sum(rate(echat_turn_tts_ttfb_bucket[5m])) by (le))", "legendFormat": "p50" },
-        { "refId": "p95", "expr": "histogram_quantile(0.95, sum(rate(echat_turn_tts_ttfb_bucket[5m])) by (le))", "legendFormat": "p95" }
+        { "refId": "p50", "expr": "histogram_quantile(0.5, sum(rate(echat_turn_tts_ttfb_milliseconds_bucket[5m])) by (le))", "legendFormat": "p50" },
+        { "refId": "p95", "expr": "histogram_quantile(0.95, sum(rate(echat_turn_tts_ttfb_milliseconds_bucket[5m])) by (le))", "legendFormat": "p95" }
       ],
       "options": { "legend": { "showLegend": true } }
     },
@@ -65,8 +65,8 @@
         "overrides": []
       },
       "targets": [
-        { "refId": "p50", "expr": "histogram_quantile(0.5, sum(rate(echat_turn_interrupt_delay_bucket[5m])) by (le))", "legendFormat": "p50" },
-        { "refId": "p95", "expr": "histogram_quantile(0.95, sum(rate(echat_turn_interrupt_delay_bucket[5m])) by (le))", "legendFormat": "p95" }
+        { "refId": "p50", "expr": "histogram_quantile(0.5, sum(rate(echat_turn_interrupt_delay_milliseconds_bucket[5m])) by (le))", "legendFormat": "p50" },
+        { "refId": "p95", "expr": "histogram_quantile(0.95, sum(rate(echat_turn_interrupt_delay_milliseconds_bucket[5m])) by (le))", "legendFormat": "p95" }
       ],
       "options": { "legend": { "showLegend": true } }
     },
