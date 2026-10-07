@@ -102,6 +102,14 @@ func Init(cfg config.ObservabilityConfig) (func(), error) {
 	// 真实 MeterProvider 就位后重绑指标表（此前绑定的 noop 全部丢弃）
 	initInstruments()
 
+	// OTLP Logs 链路：zap 桥接到 Collector → Loki（落盘始终保留）
+	logsShutdown, err := initLogs(cfg, res)
+	if err != nil {
+		logger.Warnw("OTLP Logs 初始化失败，日志只落盘", "error", err)
+	} else {
+		cleanup.add(logsShutdown)
+	}
+
 	// dataplane 运行快照 → OTLP 桥（周期协程，队列名按族聚合）
 	bridgeCtx, bridgeCancel := context.WithCancel(context.Background())
 	startBridge(bridgeCtx)

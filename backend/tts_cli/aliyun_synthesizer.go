@@ -169,6 +169,7 @@ func (s *AliyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence str
 	if sentence == "" {
 		return
 	}
+	delaySynthetic()
 
 	logger.Debugw("阿里云合成开始", "sessionID", sessionID, "seq", sentenceSeq, "sentence", sentence)
 

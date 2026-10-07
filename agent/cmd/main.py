@@ -35,6 +35,7 @@ from agent.config.loader import Config, build_parser
 from agent.core.orchestrator import ChatOrchestrator
 from agent.memory.in_memory import InMemoryMemory
 from agent.memory.sqlite_memory import SQLiteMemory
+from agent.observability import log_sink
 from agent.observability import setup as setup_observability
 from agent.pb import llm_pb2_grpc
 from agent.providers.openai_compatible import OpenAICompatibleProvider
@@ -44,6 +45,17 @@ from agent.server.http_api import build_http_app
 from agent.server.interceptors import ErrorHandlingInterceptor, LoggingInterceptor
 from agent.tools.builtin import make_tools
 from agent.tools.registry import ToolRegistry
+
+
+def _trace_patcher(record) -> None:
+    """给每条 loguru record 注入当前 span 的 trace_id/span_id（供 Loki 跳转与排查）"""
+    sc = trace.get_current_span().get_span_context()
+    if sc.is_valid:
+        record["extra"]["trace_id"] = format(sc.trace_id, "032x")
+        record["extra"]["span_id"] = format(sc.span_id, "016x")
+    else:
+        record["extra"]["trace_id"] = ""
+        record["extra"]["span_id"] = ""
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +83,7 @@ def setup_logging(cfg: Config) -> None:
     # 主日志文件：所有级别，按天滚动
     logger.add(
         str(log_dir / "agent_{time:YYYY-MM-DD}.log"),
-        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {extra[session]} | {message}",
+        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {extra[session]} | {extra[trace_id]} | {message}",
         level="DEBUG",
         rotation="00:00",
         retention=f"{cfg.logging.retention_days} days",
@@ -83,15 +95,19 @@ def setup_logging(cfg: Config) -> None:
     # 错误日志文件：仅 ERROR 级别
     logger.add(
         str(log_dir / "agent_error_{time:YYYY-MM-DD}.log"),
-        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {extra[session]} | {message}",
+        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {extra[session]} | {extra[trace_id]} | {message}",
         level="ERROR",
         rotation="00:00",
         retention="30 days",
         encoding="utf-8",
     )
 
-    # 为模块级日志设置 session 默认值，避免非 Session 代码写文件时 KeyError
-    logger.configure(extra={"session": ""})
+    # 为日志设置默认 extra 并注入 trace_id（trace 上下文内的记录自动带上全 32 位 id）
+    logger.configure(extra={"session": "", "trace_id": "", "span_id": ""}, patcher=_trace_patcher)
+
+    # OTLP Logs 腿：loguru → Collector → Loki（可观测性未启用时 sink 空操作）
+    if cfg.observability and cfg.observability.logs_enabled:
+        logger.add(log_sink, level=cfg.observability.logs_min_level or "INFO")
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +129,7 @@ def build_orchestrator(cfg: Config) -> tuple[ChatOrchestrator, ToolRegistry]:
         request_timeout=cfg.llm.request_timeout,
         max_concurrency=cfg.llm.max_concurrency,
         first_token_timeout=cfg.llm.first_token_timeout,
+        synthetic_latency_ms=(cfg.observability.synthetic_latency_ms if cfg.observability else 0),
     )
 
     tool_registry = ToolRegistry(default_timeout=cfg.tools.tool_timeout)
@@ -211,8 +228,8 @@ def main() -> None:
         sys.exit(1)
     cfg.apply_cli(args)
 
-    setup_logging(cfg)
     setup_observability(cfg.observability)
+    setup_logging(cfg)
     # 启动留痕 span：boot 段 = 装配耗时，进入 serve 前收尾
     boot_span = trace.get_tracer("echat-agent").start_span("main.boot")
 

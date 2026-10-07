@@ -88,6 +88,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         request_timeout: float = 30.0,
         max_concurrency: int = 8,
         first_token_timeout: float = 5.0,
+        synthetic_latency_ms: int = 0,
     ) -> None:
         """初始化 OpenAI 兼容 provider
 
@@ -100,6 +101,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         request_timeout: 单次请求超时秒数，默认 30
         max_concurrency: 同时打到上游的最大请求数，默认 8，超出的轮次在本地排队
         first_token_timeout: 首包超时秒数，默认 5，超时按可重试错误结束本轮
+        synthetic_latency_ms: 首包前人为延迟毫秒，观测验收用，默认 0
         """
         self._model = model  # 模型名
         self._provider_name = provider_name  # 提供商名
@@ -107,6 +109,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         self._temperature = temperature  # 采样温度
         self._request_timeout = request_timeout  # 请求超时秒数
         self._first_token_timeout = first_token_timeout  # 首包超时秒数
+        self._synthetic_latency_ms = synthetic_latency_ms  # 首包前人为延迟毫秒（验收用）
         self._semaphore = asyncio.Semaphore(max(1, max_concurrency))  # 上游并发闸门
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=request_timeout)  # 异步客户端
         self._logger = logger.bind(module="provider")  # 模块级日志器
@@ -188,6 +191,8 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             attrs.ATTR_GEN_AI_REQUEST_MODEL: self._model,
             attrs.ATTR_GEN_AI_PROVIDER_NAME: self._provider_name,
         }
+        if self._synthetic_latency_ms > 0:
+            await asyncio.sleep(self._synthetic_latency_ms / 1000)
 
         try:
             stream = await self._client.chat.completions.create(**kwargs)

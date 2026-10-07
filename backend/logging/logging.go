@@ -24,12 +24,14 @@
 package logging
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -41,6 +43,8 @@ type Config struct {
 	EnableConsole bool   // 输出到终端 stderr，默认 true
 	EnableFile    bool   // 输出到按天日志文件，默认 true
 	FileDir       string // 日志文件目录，默认 "logs"
+	// ExtraCore 追加的 zap core（如 OTLP Logs 腿），函数返回 nil 或 false 时不追加
+	ExtraCore func() (zapcore.Core, bool)
 }
 
 // ---------- Logger 包装器 ----------
@@ -91,6 +95,42 @@ func (l *Logger) Debugw(msg string, keysAndValues ...interface{}) {
 // Fatalw 结构化 Fatal 级别日志，输出后调用 os.Exit(1)
 func (l *Logger) Fatalw(msg string, keysAndValues ...interface{}) {
 	l.sugared().Fatalw(msg, keysAndValues...)
+}
+
+// InfowCtx 带上下文的结构化 Info 日志，自动附加当前 span 的 trace_id/span_id
+//
+// 供已持有 ctx 的关键路径使用，便于日志行与 trace 关联（Loki 双向跳转的前提）
+// ctx: 携带 span 上下文的 context，无效或 nil 时等价于 Infow
+// msg: 日志正文
+// keysAndValues: 结构化字段，键值成对
+func (l *Logger) InfowCtx(ctx context.Context, msg string, keysAndValues ...interface{}) {
+	l.sugared().Infow(msg, appendTraceFields(ctx, keysAndValues...)...)
+}
+
+// WarnwCtx 带上下文的结构化 Warn 日志，自动附加当前 span 的 trace_id/span_id
+//
+// ctx: 携带 span 上下文的 context
+// msg: 日志正文
+// keysAndValues: 结构化字段，键值成对
+func (l *Logger) WarnwCtx(ctx context.Context, msg string, keysAndValues ...interface{}) {
+	l.sugared().Warnw(msg, appendTraceFields(ctx, keysAndValues...)...)
+}
+
+// appendTraceFields 从 ctx 取当前 span 上下文，附到结构化字段开头
+//
+// 无有效 span 时原样返回，不额外加字段
+// ctx: 携带 span 上下文的 context
+// kv: 原结构化字段
+// return: 头部插入 trace_id/span_id 后的字段，无 span 时原样
+func appendTraceFields(ctx context.Context, kv ...interface{}) []interface{} {
+	sc := trace.SpanContextFromContext(ctx)
+	if !sc.IsValid() {
+		return kv
+	}
+	out := make([]interface{}, 0, len(kv)+4)
+	out = append(out, "trace_id", sc.TraceID().String(), "span_id", sc.SpanID().String())
+	out = append(out, kv...)
+	return out
 }
 
 // ---------- 全局状态 ----------
@@ -169,6 +209,13 @@ func buildLogger(cfg Config) (*zap.SugaredLogger, func()) {
 		encoder := newEncoder(cfg.Format, false)
 		cores = append(cores, zapcore.NewCore(encoder, zapcore.AddSync(os.Stderr), level))
 		closers = append(closers, func() { os.Stderr.Sync() })
+	}
+
+	// 追加业务自带的 zap core（如 OTLP Logs 桥）
+	if cfg.ExtraCore != nil {
+		if extra, ok := cfg.ExtraCore(); ok {
+			cores = append(cores, extra)
+		}
 	}
 
 	var core zapcore.Core

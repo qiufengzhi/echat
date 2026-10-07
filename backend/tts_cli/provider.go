@@ -12,6 +12,7 @@ package tts_cli
 import (
 	"context"
 	"sync"
+	"time"
 
 	"echat-backend/config"
 	"echat-backend/logging"
@@ -133,5 +134,14 @@ func Init() {
 	default:
 		// provider 为空或未知值，禁用 TTS
 		logger.Warnw("TTS 未启用，支持 aliyun / xfyun", "provider", cfg.Provider)
+	}
+}
+
+// delaySynthetic 注入人为合成延迟，供观测验收（observability 段）
+//
+// 设置后 TTS 首字时间在分位图上对应段跳变，不影响其他段
+func delaySynthetic() {
+	if ms := config.Get().Observability.SyntheticLatencyTTSMs; ms > 0 {
+		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 }

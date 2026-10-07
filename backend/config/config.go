@@ -244,6 +244,7 @@ type ObservabilityConfig struct {
 	LogsEnabled           bool    `yaml:"logs_enabled"`            // 是否把日志推 OTLP Logs → Loki，落盘始终保留
 	LogsMinLevel          string  `yaml:"logs_min_level"`          // 推 Loki 的日志级别下限：debug|info|warn|error
 	LogsExportInterval    string  `yaml:"logs_export_interval"`    // 日志批量导出间隔，形如 5s，空取默认
+	SyntheticLatencyTTSMs int     `yaml:"synthetic_latency_tts_ms"` // TTS 合成前人为延迟毫秒，验收用（0=不注入）
 }
 
 // ---------- 全局实例 ----------
@@ -684,6 +685,11 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("OBSERVABILITY_LOGS_INTERVAL"); v != "" {
 		cfg.Observability.LogsExportInterval = v
+	}
+	if v := os.Getenv("OBSERVABILITY_TTS_LATENCY_MS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Observability.SyntheticLatencyTTSMs = n
+		}
 	}
 }
 

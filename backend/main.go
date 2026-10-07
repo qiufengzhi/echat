@@ -35,23 +35,26 @@ func main() {
 	if err != nil {
 		logging.L().Fatalw("加载配置失败", "error", err)
 	}
-	// 初始化日志系统，必须在 config.Load() 之后
-	logging.Init(logging.Config{
-		Level:         cfg.Log.Level,
-		Format:        cfg.Log.Format,
-		EnableConsole: cfg.Log.EnableConsole,
-		EnableFile:    cfg.Log.EnableFile,
-		FileDir:       cfg.Log.FileDir,
-	})
-	defer logging.Sync() // 确保退出前日志落盘
 
-	// 可观测性：OTel 三信号经 OTLP 推向 Collector；失败不阻断启动（观测是增强不是依赖）
+	// 可观测性先于日志系统：日志的 OTLP Logs 链路（ExtraCore）依赖 obs 的 LoggerProvider
 	obsShutdown, err := observability.Init(cfg.Observability)
 	if err != nil {
 		logging.L().Warnw("可观测性初始化失败，继续启动", "error", err)
 	} else {
 		defer obsShutdown()
 	}
+
+	// 初始化日志系统，必须在 config.Load() 之后；日志的 OTLP 链路按需追加
+	logging.Init(logging.Config{
+		Level:         cfg.Log.Level,
+		Format:        cfg.Log.Format,
+		EnableConsole: cfg.Log.EnableConsole,
+		EnableFile:    cfg.Log.EnableFile,
+		FileDir:       cfg.Log.FileDir,
+		ExtraCore:     observability.LogExtraCore,
+	})
+	defer logging.Sync() // 确保退出前日志落盘
+
 	// 启动留痕：一次启动一条 trace，便于把日志/后续轮次追到时间基准上
 	_, bootSpan := otel.Tracer("echat-backend").Start(context.Background(), "main.boot")
 

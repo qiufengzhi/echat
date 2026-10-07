@@ -15,6 +15,16 @@ from typing import Optional
 
 # 用下划线别名避免遮蔽同包子模块名 observability.metrics / observability.attrs
 from opentelemetry import metrics as _otel_metrics, trace as _otel_trace
+from opentelemetry._logs import LogRecord
+try:
+    from opentelemetry.exporter.otlp.proto.grpc.log_exporter import OTLPLogExporter
+except ImportError:  # noqa 旧版 otel 的导出模块带下划线前缀
+    from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (  # type: ignore
+        OTLPLogExporter,
+    )
+from opentelemetry.sdk._logs import LoggerProvider as LogsLoggerProvider
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor as LogBatchProcessor
+from opentelemetry.trace import TraceFlags
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.metrics import MeterProvider
@@ -27,6 +37,9 @@ from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 from agent.config.loader import ObservabilityConfig
 
 logger = logging.getLogger("obs")
+
+# 日志腿：loguru 与 zap 相同，落盘保留、另接一条 OTLP Logs 推 Collector → Loki
+_otel_logger = None  # loguru sink 使用的 OTel Logger
 
 # defaultEndpoint OTLP 端点兜底，与 observability compose 对齐
 DEFAULT_ENDPOINT = "localhost:4317"
@@ -69,6 +82,7 @@ def setup(cfg: Optional[ObservabilityConfig]) -> None:
         export_interval_millis=_interval_ms(cfg.metrics_export_interval),
     )
     _otel_metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=[reader]))
+    setup_logs(cfg)
 
     logger.info(
         "可观测性已启用 service=%s endpoint=%s rate=%s",
@@ -97,3 +111,51 @@ def _interval_ms(raw: str) -> int:
     except ValueError:
         pass
     return DEFAULT_METRICS_INTERVAL_MS
+
+
+def setup_logs(cfg: Optional[ObservabilityConfig]) -> None:
+    """搭 OTLP Logs 腿：LoggerProvider + 批量 processor，供 loguru sink 推送
+
+    cfg: observability 配置段，None 或 logs_enabled 为假时不初始化
+    """
+    global _otel_logger
+    if cfg is None or not cfg.logs_enabled:
+        return
+    endpoint = (cfg.otlp_endpoint or "").strip() or DEFAULT_ENDPOINT
+    exporter = OTLPLogExporter(endpoint=endpoint, insecure=True)
+    provider = LogsLoggerProvider(
+        resource=Resource.create(
+            {
+                "service.name": cfg.service_name or "echat-agent",
+                "service.version": "dev",
+                "host.name": socket.gethostname(),
+            }
+        )
+    )
+    provider.add_log_record_processor(LogBatchProcessor(exporter))
+    _otel_logger = provider.get_logger("echat-agent")
+
+
+def log_sink(message) -> None:
+    """loguru sink：把一条 record 转成 OTel LogRecord，带当前 span 的 trace 上下文
+
+    message: loguru 的 Message 对象，含 .record 字段
+    """
+    if _otel_logger is None:
+        return
+    record = message.record
+    sc = _otel_trace.get_current_span().get_span_context()
+    body = record["message"]
+    if record.get("exception") is not None:
+        body = f"{body} | exception: {record['exception']['value']}"
+    lr = LogRecord(
+        timestamp=int(record["time"].timestamp() * 1_000_000_000),
+        trace_id=sc.trace_id if sc.is_valid else None,
+        span_id=sc.span_id if sc.is_valid else None,
+        trace_flags=TraceFlags.SAMPLED if sc.is_valid else TraceFlags.DEFAULT,
+        severity_text=record["level"].name,
+        severity_number=int(record["level"].no),
+        body=body,
+        attributes={"session": (record.get("extra") or {}).get("session", "")},
+    )
+    _otel_logger.emit(lr)

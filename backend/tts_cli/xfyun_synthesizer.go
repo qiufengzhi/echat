@@ -274,6 +274,7 @@ func (s *XfyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence stri
 	if sentence == "" {
 		return
 	}
+	delaySynthetic()
 
 	logger.Debugw("讯飞合成开始", "sessionID", sessionID, "seq", sentenceSeq, "sentence", sentence)
 

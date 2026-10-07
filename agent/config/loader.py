@@ -127,6 +127,7 @@ class ObservabilityConfig(BaseModel):
     logs_enabled: bool  # 是否把日志推 OTLP Logs → Loki，落盘始终保留
     logs_min_level: str  # 推 Loki 的日志级别下限：debug|info|warn|error
     logs_export_interval: str  # 日志批量导出间隔，形如 5s
+    synthetic_latency_ms: int = 0  # LLM 首包前人为延迟毫秒，观测验收用（0=不注入）
 
 
 # ---------------------------------------------------------------------------
