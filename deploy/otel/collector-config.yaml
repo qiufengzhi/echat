@@ -40,7 +40,8 @@ exporters:
     endpoint: 0.0.0.0:8889
     add_metric_suffixes: false
   otlphttp/loki-logs:
-    endpoint: http://loki:3100/otlp/v1/logs
+    # otlphttp 会自动追加 /v1/logs，故 endpoint 只给基底 /otlp → 实际请求 /otlp/v1/logs
+    endpoint: http://loki:3100/otlp
     tls:
       insecure: true
 
