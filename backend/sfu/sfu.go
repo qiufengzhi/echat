@@ -331,8 +331,6 @@ func (r *SFURoom) Join(clientID string) error {
 		peer.publishedAudioTrack = remoteTrack
 		// 在锁外启动转发，避免持有锁时调用 AddTrack（AddTrack 也可能触发 ICE 回调）
 		go r.startForwarding(clientID, remoteTrack)
-		// 同时读 RTCP，采集下行抖动与丢包
-		go r.readRTCP(clientID, receiver)
 	})
 
 	r.peers[clientID] = peer
@@ -537,10 +535,12 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 			continue
 		}
 
-		if _, err = subscriber.PC.AddTrack(relayTrack); err != nil {
+		snd, err := subscriber.PC.AddTrack(relayTrack)
+		if err != nil {
 			logger.Warnw("添加中继轨失败", "source", sourceID[:8], "subscriber", subscriberID[:8], "error", err)
 			continue
 		}
+		go r.readSenderRTCP(subscriberID, snd)
 
 		// 将房间内其他人的音轨通过中继轨加入 source
 		sourcePeer.outgoingRelays[subscriberID] = relayTrack
@@ -563,10 +563,12 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 			continue
 		}
 
-		if _, err = sourcePeer.PC.AddTrack(relayTrack); err != nil {
+		snd, err := sourcePeer.PC.AddTrack(relayTrack)
+		if err != nil {
 			logger.Warnw("为新对端添加中继轨失败", "source", sourceID[:8], "other", otherID[:8], "error", err)
 			continue
 		}
+		go r.readSenderRTCP(sourceID, snd)
 
 		// 将 other 的音频转发给 source
 		otherPeer.outgoingRelays[sourceID] = relayTrack
@@ -602,9 +604,12 @@ func (r *SFURoom) getAITtsTrack(clientID string) (*webrtc.TrackLocalStaticSample
 	if err != nil {
 		return nil, fmt.Errorf("getAITtsTrack: 创建 AI TTS 音轨失败: %w", err)
 	}
-	if _, err = peer.PC.AddTrack(track); err != nil {
+	snd, err := peer.PC.AddTrack(track)
+	if err != nil {
 		return nil, fmt.Errorf("getAITtsTrack: 添加 AI TTS 音轨到 PC 失败: %w", err)
 	}
+	// 读该出流的 RTCP，采集浏览器侧下行抖动与丢包
+	go r.readSenderRTCP(clientID, snd)
 
 	peer.aiTtsTrack = track
 	logger.Infow("AI TTS 音轨已创建", "clientID", clientID[:8])
