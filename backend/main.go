@@ -16,6 +16,7 @@ import (
 	"echat-backend/config"
 	"echat-backend/global"
 	"echat-backend/logging"
+	"echat-backend/observability"
 	"echat-backend/outbox"
 	"echat-backend/projection"
 	llmpb "echat-backend/proto/llm"
@@ -23,6 +24,8 @@ import (
 	"echat-backend/sfu"
 	"echat-backend/tts_cli"
 	"echat-backend/wt"
+
+	"go.opentelemetry.io/otel"
 )
 
 // main 组装根进程：配置 → 日志 → App → 后台子系统 → 监听
@@ -40,6 +43,16 @@ func main() {
 		FileDir:       cfg.Log.FileDir,
 	})
 	defer logging.Sync() // 确保退出前日志落盘
+
+	// 可观测性：OTel 三信号经 OTLP 推向 Collector；失败不阻断启动（观测是增强不是依赖）
+	obsShutdown, err := observability.Init(cfg.Observability)
+	if err != nil {
+		logging.L().Warnw("可观测性初始化失败，继续启动", "error", err)
+	} else {
+		defer obsShutdown()
+	}
+	// 启动留痕：一次启动一条 trace，便于把日志/后续轮次追到时间基准上
+	_, bootSpan := otel.Tracer("echat-backend").Start(context.Background(), "main.boot")
 
 	// 媒体侧初始化：ASR / ASR 结果分发 / TTS / Agent 客户端
 	asr_cli.Init()
@@ -89,6 +102,8 @@ func main() {
 		startWebTransport(cfg, root)
 	}
 
+	// 启动留痕 span 在进入长生命周期监听前收尾：boot 段 = 准备耗时，监听本身不属于启动
+	bootSpan.End()
 	serve(cfg, root.Handler())
 }
 

@@ -16,23 +16,24 @@ import (
 
 // Config 后端完整配置，各模块通过此 struct 获取各自的配置子项
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`       // HTTP/HTTPS 服务配置
-	SFU      SFUConfig      `yaml:"sfu"`          // WebRTC SFU 媒体引擎配置
-	ASR      ASRConfig      `yaml:"asr"`          // 语音识别配置
-	VAD      VADConfig      `yaml:"vad"`          // 语音活动检测配置
-	LLM      LLMConfig      `yaml:"llm"`          // LLM 服务配置
-	TTS      TTSConfig      `yaml:"tts"`          // 语音合成配置
-	AI       AIConfig       `yaml:"ai"`           // AI 语音助手配置
-	Room     RoomConfig     `yaml:"room"`         // 房间与 WebSocket 配置
-	Database DatabaseConfig `yaml:"database"`     // PostgreSQL 持久层配置
-	Auth     AuthConfig     `yaml:"auth"`         // 用户系统认证与密码哈希配置
-	Uploads  UploadsConfig  `yaml:"uploads"`      // 上传文件本地存储配置
-	Log      LogConfig      `yaml:"log"`          // 日志配置
-	NATS     NATSConfig     `yaml:"nats"`         // NATS JetStream 一致性骨干配置
-	Redis    RedisConfig    `yaml:"redis"`        // 登录限流与在线热状态共享的 Redis 配置
-	SpiceDB  SpiceDBConfig  `yaml:"spicedb"`      // SpiceDB(Zanzibar) 对象级授权服务配置
-	Outbox   OutboxConfig   `yaml:"outbox"`       // 事务性 Outbox relay 参数
-	WT       WTConfig       `yaml:"webtransport"` // WebTransport/QUIC 信令端点配置
+	Server        ServerConfig        `yaml:"server"`        // HTTP/HTTPS 服务配置
+	SFU           SFUConfig           `yaml:"sfu"`           // WebRTC SFU 媒体引擎配置
+	ASR           ASRConfig           `yaml:"asr"`           // 语音识别配置
+	VAD           VADConfig           `yaml:"vad"`           // 语音活动检测配置
+	LLM           LLMConfig           `yaml:"llm"`           // LLM 服务配置
+	TTS           TTSConfig           `yaml:"tts"`           // 语音合成配置
+	AI            AIConfig            `yaml:"ai"`            // AI 语音助手配置
+	Room          RoomConfig          `yaml:"room"`          // 房间与 WebSocket 配置
+	Database      DatabaseConfig      `yaml:"database"`      // PostgreSQL 持久层配置
+	Auth          AuthConfig          `yaml:"auth"`          // 用户系统认证与密码哈希配置
+	Uploads       UploadsConfig       `yaml:"uploads"`       // 上传文件本地存储配置
+	Log           LogConfig           `yaml:"log"`           // 日志配置
+	Observability ObservabilityConfig `yaml:"observability"` // 可观测性（OTel 三信号）配置
+	NATS          NATSConfig          `yaml:"nats"`          // NATS JetStream 一致性骨干配置
+	Redis         RedisConfig         `yaml:"redis"`         // 登录限流与在线热状态共享的 Redis 配置
+	SpiceDB       SpiceDBConfig       `yaml:"spicedb"`       // SpiceDB(Zanzibar) 对象级授权服务配置
+	Outbox        OutboxConfig        `yaml:"outbox"`        // 事务性 Outbox relay 参数
+	WT            WTConfig            `yaml:"webtransport"`  // WebTransport/QUIC 信令端点配置
 }
 
 // ServerConfig HTTP/HTTPS 服务配置
@@ -230,6 +231,19 @@ type LogConfig struct {
 	EnableConsole bool   `yaml:"enable_console"` // 输出到终端 stderr，默认 true
 	EnableFile    bool   `yaml:"enable_file"`    // 输出到按天日志文件，默认 true
 	FileDir       string `yaml:"file_dir"`       // 日志文件目录，默认 "logs"
+}
+
+// ObservabilityConfig 可观测性配置，控制 OTel 三信号（trace/metrics/logs）的上报
+type ObservabilityConfig struct {
+	Enabled               bool    `yaml:"enabled"`                 // 是否启动 OTel 上报，false 时进程零 OTel 开销
+	ServiceName           string  `yaml:"service_name"`            // 上报的 service.name，如 echat-backend
+	OTLPEndpoint          string  `yaml:"otlp_endpoint"`           // OTLP gRPC 端点，形如 localhost:4317
+	TraceSampleRate       float64 `yaml:"trace_sample_rate"`       // 应用侧头部采样率 0.0-1.0，0 或超出按全采处理
+	CaptureContent        bool    `yaml:"capture_content"`         // 是否把对话内容写入 span/log，仅允许本机 dev 开 true
+	MetricsExportInterval string  `yaml:"metrics_export_interval"` // 指标批量导出间隔，形如 15s，空取默认
+	LogsEnabled           bool    `yaml:"logs_enabled"`            // 是否把日志推 OTLP Logs → Loki，落盘始终保留
+	LogsMinLevel          string  `yaml:"logs_min_level"`          // 推 Loki 的日志级别下限：debug|info|warn|error
+	LogsExportInterval    string  `yaml:"logs_export_interval"`    // 日志批量导出间隔，形如 5s，空取默认
 }
 
 // ---------- 全局实例 ----------
@@ -640,6 +654,37 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	// quic-go 要求 host:port 形式，裸端口写法（"4433"）补齐后再交给监听
 	cfg.WT.Addr = normalizeListenAddr(cfg.WT.Addr)
+
+	// --- Observability ---
+	if v := os.Getenv("OTEL_ENABLED"); v != "" {
+		cfg.Observability.Enabled = strings.EqualFold(v, "true")
+	}
+	if v := os.Getenv("OBSERVABILITY_SERVICE_NAME"); v != "" {
+		cfg.Observability.ServiceName = v
+	}
+	if v := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); v != "" {
+		cfg.Observability.OTLPEndpoint = v
+	}
+	if v := os.Getenv("OTEL_TRACES_SAMPLER_ARG"); v != "" {
+		if rate, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Observability.TraceSampleRate = rate
+		}
+	}
+	if v := os.Getenv("OBSERVABILITY_CAPTURE_CONTENT"); v != "" {
+		cfg.Observability.CaptureContent = strings.EqualFold(v, "true")
+	}
+	if v := os.Getenv("OBSERVABILITY_METRICS_INTERVAL"); v != "" {
+		cfg.Observability.MetricsExportInterval = v
+	}
+	if v := os.Getenv("OBSERVABILITY_LOGS_ENABLED"); v != "" {
+		cfg.Observability.LogsEnabled = strings.EqualFold(v, "true")
+	}
+	if v := os.Getenv("OBSERVABILITY_LOGS_MIN_LEVEL"); v != "" {
+		cfg.Observability.LogsMinLevel = v
+	}
+	if v := os.Getenv("OBSERVABILITY_LOGS_INTERVAL"); v != "" {
+		cfg.Observability.LogsExportInterval = v
+	}
 }
 
 // normalizeListenAddr 把监听地址规整成 host:port 形式，兼容两种易写错的写法
