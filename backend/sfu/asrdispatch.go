@@ -6,6 +6,7 @@
 package sfu
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,7 @@ import (
 	"echat-backend/asr_cli"
 	"echat-backend/dataplane"
 	"echat-backend/global"
+	"echat-backend/observability"
 	asrpb "echat-backend/proto/asr"
 	llmpb "echat-backend/proto/llm"
 	"echat-backend/tts_cli"
@@ -178,10 +180,13 @@ func handleASRResult(res *asrpb.TranscriptAudioChunk) {
 			"roomID", res.RoomId, "clientID", res.ClientId, "runningTurn", runningTurn)
 		agentcli.Global.CancelTurn(res.SessionId)
 		tts_cli.GlobalTTSService.Interrupt(res.SessionId)
+		observability.MarkInterruptRequest(res.SessionId)
+		observability.EndTurn(runningTurn, "interrupted")
 	}
-	// 每个句末结果发起一轮对话：一轮一次 RPC，响应由 agentcli 的分发回调送 TTS
+	// 每个句末结果发起一轮对话：建 turn 根 span，随 SendTurn ctx 传播到 Python
 	turnID := fmt.Sprintf("%s-%d", res.SessionId, turnSeq.Add(1))
-	if err := agentcli.Global.SendTurn(&llmpb.TurnRequest{
+	turnCtx := observability.StartTurn(context.Background(), turnID, res.SessionId, res.RoomId)
+	if err := agentcli.Global.SendTurn(turnCtx, &llmpb.TurnRequest{
 		SessionId: res.SessionId,
 		RoomId:    res.RoomId,
 		ClientId:  res.ClientId,

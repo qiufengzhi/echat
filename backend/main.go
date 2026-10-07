@@ -26,6 +26,7 @@ import (
 	"echat-backend/wt"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // main 组装根进程：配置 → 日志 → App → 后台子系统 → 监听
@@ -115,12 +116,20 @@ func initAgentClient(cfg *config.Config) {
 		Addr:        cfg.LLM.GrpcAddr,
 		Shards:      cfg.LLM.Shards,
 		TurnTimeout: time.Duration(cfg.LLM.TurnTimeoutSec) * time.Second,
-		Dispatch: func(resp *llmpb.TurnResponse) {
+		Dispatch: func(ctx context.Context, resp *llmpb.TurnResponse) {
 			// 该房间 AI 已离线时不播放回复，待机/在线则正常播放
 			if global.AIStates.Get(resp.RoomId) == global.AIOffline {
+				observability.EndTurn(resp.TurnId, "completed")
 				return
 			}
+			tracer := otel.Tracer("echat-backend")
+			_, span := tracer.Start(ctx, "tts.process",
+				trace.WithAttributes(observability.TurnID(resp.TurnId)))
 			tts_cli.GlobalTTSService.ProcessText(resp)
+			span.End()
+			if resp.IsFinal {
+				observability.EndTurn(resp.TurnId, "completed")
+			}
 		},
 	})
 	if err != nil {

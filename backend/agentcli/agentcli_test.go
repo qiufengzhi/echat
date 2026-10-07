@@ -104,7 +104,7 @@ func startFakeAgent(t *testing.T, f *fakeAgent) string {
 // addr: 服务端地址
 // dispatch: 响应回调，可为 nil
 // return: 客户端实例
-func newTestClient(t *testing.T, addr string, dispatch func(*llmpb.TurnResponse)) *Client {
+func newTestClient(t *testing.T, addr string, dispatch func(context.Context, *llmpb.TurnResponse)) *Client {
 	t.Helper()
 	c, err := New(Options{Addr: addr, Shards: 2, TurnTimeout: 5 * time.Second, Dispatch: dispatch})
 	if err != nil {
@@ -179,9 +179,9 @@ func TestSendTurnDispatchesAllResponses(t *testing.T) {
 	fake := &fakeAgent{events: 3}
 	addr := startFakeAgent(t, fake)
 	got := make(chan *llmpb.TurnResponse, 16)
-	c := newTestClient(t, addr, func(r *llmpb.TurnResponse) { got <- r })
+	c := newTestClient(t, addr, func(_ context.Context, r *llmpb.TurnResponse) { got <- r })
 
-	if err := c.SendTurn(&llmpb.TurnRequest{SessionId: "s1", RoomId: "r1", TurnId: "t1", UserText: "嗨"}); err != nil {
+	if err := c.SendTurn(context.Background(), &llmpb.TurnRequest{SessionId: "s1", RoomId: "r1", TurnId: "t1", UserText: "嗨"}); err != nil {
 		t.Fatalf("发起轮次失败: %v", err)
 	}
 	for i := 0; i < 4; i++ { // 3 个 token 事件 + 1 个结束事件
@@ -207,7 +207,7 @@ func TestSendTurnPreemptsInflightTurn(t *testing.T) {
 	addr := startFakeAgent(t, fake)
 	c := newTestClient(t, addr, nil)
 
-	if err := c.SendTurn(&llmpb.TurnRequest{SessionId: "s1", TurnId: "t1"}); err != nil {
+	if err := c.SendTurn(context.Background(), &llmpb.TurnRequest{SessionId: "s1", TurnId: "t1"}); err != nil {
 		t.Fatalf("发起首轮失败: %v", err)
 	}
 	select {
@@ -215,7 +215,7 @@ func TestSendTurnPreemptsInflightTurn(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("服务端未收到首轮")
 	}
-	if err := c.SendTurn(&llmpb.TurnRequest{SessionId: "s1", TurnId: "t2"}); err != nil {
+	if err := c.SendTurn(context.Background(), &llmpb.TurnRequest{SessionId: "s1", TurnId: "t2"}); err != nil {
 		t.Fatalf("发起第二轮失败: %v", err)
 	}
 	waitFor(t, 3*time.Second, func() bool { return atomic.LoadInt32(&fake.cancelled) == 1 })
@@ -234,9 +234,9 @@ func TestCancelTurnStopsStream(t *testing.T) {
 	fake := &fakeAgent{events: 100, interval: 20 * time.Millisecond, started: make(chan string, 4)}
 	addr := startFakeAgent(t, fake)
 	got := make(chan *llmpb.TurnResponse, 16)
-	c := newTestClient(t, addr, func(r *llmpb.TurnResponse) { got <- r })
+	c := newTestClient(t, addr, func(_ context.Context, r *llmpb.TurnResponse) { got <- r })
 
-	if err := c.SendTurn(&llmpb.TurnRequest{SessionId: "s1", TurnId: "t1"}); err != nil {
+	if err := c.SendTurn(context.Background(), &llmpb.TurnRequest{SessionId: "s1", TurnId: "t1"}); err != nil {
 		t.Fatalf("发起轮次失败: %v", err)
 	}
 	select {
@@ -260,7 +260,7 @@ func TestCloseSessionCancelsInflightAndReleases(t *testing.T) {
 	addr := startFakeAgent(t, fake)
 	c := newTestClient(t, addr, nil)
 
-	if err := c.SendTurn(&llmpb.TurnRequest{SessionId: "s1", TurnId: "t1"}); err != nil {
+	if err := c.SendTurn(context.Background(), &llmpb.TurnRequest{SessionId: "s1", TurnId: "t1"}); err != nil {
 		t.Fatalf("发起轮次失败: %v", err)
 	}
 	select {
@@ -284,10 +284,10 @@ func TestSendTurnValidatesRequiredFields(t *testing.T) {
 		t.Fatalf("创建客户端失败: %v", err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
-	if err := c.SendTurn(&llmpb.TurnRequest{TurnId: "t1"}); err == nil {
+	if err := c.SendTurn(context.Background(), &llmpb.TurnRequest{TurnId: "t1"}); err == nil {
 		t.Fatal("缺少 session_id 应报错")
 	}
-	if err := c.SendTurn(&llmpb.TurnRequest{SessionId: "s1"}); err == nil {
+	if err := c.SendTurn(context.Background(), &llmpb.TurnRequest{SessionId: "s1"}); err == nil {
 		t.Fatal("缺少 turn_id 应报错")
 	}
 	if got := c.Stats().Sent; got != 0 {

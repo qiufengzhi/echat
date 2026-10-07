@@ -25,10 +25,12 @@ package sfu
 
 import (
 	"bytes"
+	"context"
 	"echat-backend/asr_cli"
 	"echat-backend/config"
 	"echat-backend/dataplane"
 	"echat-backend/logging"
+	"echat-backend/observability"
 	asrpb "echat-backend/proto/asr"
 	"echat-backend/tts_cli"
 	"fmt"
@@ -629,6 +631,7 @@ func (r *SFURoom) forwardRtp(sourceID string, sessionID string, remoteTrack *web
 
 		for otherClintId, relay := range forwardClient {
 			if err = relay.WriteRTP(rtpPacket); err != nil {
+				observability.RelayWriteErrors.Add(context.Background(), 1)
 				logger.Warnw("写入 RTP 失败", "source", sourceID[:8], "dest", otherClintId, "error", err)
 			}
 		}
@@ -675,6 +678,7 @@ func (r *SFURoom) deliverToASR(sourceID string, sessionID string, queue *datapla
 
 		n, decErr := decodeOpusInto(dec, payload, pcm)
 		if decErr != nil {
+			observability.OpusDecodeErrors.Add(context.Background(), 1)
 			logger.Warnw("解码失败", "source", sourceID[:8], "error", decErr)
 			continue
 		}
@@ -732,6 +736,7 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 	var pcmBuf []int16    // PCM 采样缓冲区，用于帧对齐（TTS 输出可能不对齐 20ms 帧边界）
 	var totalPCM int      // 累计收到的 TTS PCM 字节数（16kHz 原始）
 	var framesEncoded int // 累计编码发送的 Opus 帧数
+	var lastTurn string   // 最近输出过音频的轮次，轮次切换即本轮首个音频块
 
 	// 订阅会话级音频端点：端点与会话同寿命，合成执行器换代（打断或轮次重建）不影响订阅，
 	// 因此不会出现「执行器重建之后没人消费音频」的失联
@@ -801,6 +806,7 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 							Duration:           20 * time.Millisecond,
 							PrevDroppedPackets: 0,
 						}); err != nil {
+							observability.AIWriteErrors.Add(context.Background(), 1)
 							logger.Warnw("写入AI TTS轨失败", "dest", destID[:8], "error", err)
 						}
 					}
@@ -896,6 +902,7 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 		if ev.Kind == tts_cli.AudioInterrupt {
 			// 打断：丢弃尚未播出的帧与未编码的采样，并重建编码器状态
 			// 不重建的话，下一轮开头会带上上一轮编码器与滤波器的残留
+			observability.MarkInterruptDone(acr.sessionID)
 			droppedFrames := drainFrameQueue()
 			pcmBuf = pcmBuf[:0]
 			rawBuf = rawBuf[:0]
@@ -905,6 +912,11 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 			continue
 		}
 
+		// AudioData：轮次切换判定——新一轮的首个音频块，记 e2e / ttfb 时间戳
+		if ev.TurnID != lastTurn {
+			lastTurn = ev.TurnID
+			observability.MarkFirstAudio(ev.TurnID)
+		}
 		// AudioData：重置空闲计时
 		if !idleTimer.Stop() {
 			select {

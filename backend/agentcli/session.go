@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"sync"
+
+	"echat-backend/observability"
 )
 
 // ErrTurnInFlight 同一会话已有在途轮次，新轮次被拒绝
@@ -45,6 +47,7 @@ func (r *Registry) Begin(sessionID, turnID string, cancel context.CancelFunc) er
 		return ErrTurnInFlight
 	}
 	r.turns[sessionID] = &turn{turnID: turnID, cancel: cancel}
+	observability.AgentInflight.Record(context.Background(), int64(len(r.turns)))
 	return nil
 }
 
@@ -59,6 +62,7 @@ func (r *Registry) End(sessionID, turnID string) {
 	if t, ok := r.turns[sessionID]; ok && t.turnID == turnID {
 		delete(r.turns, sessionID)
 	}
+	observability.AgentInflight.Record(context.Background(), int64(len(r.turns)))
 }
 
 // Cancel 取消某会话的在途轮次

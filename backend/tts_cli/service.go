@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"echat-backend/dataplane"
+	"echat-backend/observability"
 	"echat-backend/proto/llm"
 )
 
@@ -170,6 +171,7 @@ func (ss *Service) ProcessText(resp *llm.TurnResponse) {
 		// 将完整句子送入 TTS（synthesizeSentence 里还会再做 ToValidUTF8 兜底）
 		if strings.TrimSpace(sentence) != "" {
 			if sb.sp.SendSentence(sentence) {
+				observability.MarkFirstSentence(resp.TurnId)
 				logger.Infow("送入 TTS", "sessionID", sessionID, "sentence", sentence)
 			} else {
 				logger.Warnw("TTS 队列已满，丢弃句子", "sessionID", sessionID, "sentence", sentence)
@@ -185,6 +187,7 @@ func (ss *Service) ProcessText(resp *llm.TurnResponse) {
 	if resp.IsFinal {
 		if strings.TrimSpace(sb.text.String()) != "" {
 			if sb.sp.SendSentence(sb.text.String()) {
+				observability.MarkFirstSentence(resp.TurnId)
 				logger.Infow("最后一句送入 TTS", "sessionID", sessionID, "sentence", sb.text.String())
 			} else {
 				logger.Warnw("最后一句队列已满，丢弃", "sessionID", sessionID)

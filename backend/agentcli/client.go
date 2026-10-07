@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"echat-backend/logging"
+	"echat-backend/observability"
 	llmpb "echat-backend/proto/llm"
 
 	"google.golang.org/grpc/codes"
@@ -24,10 +25,10 @@ const (
 
 // Options 客户端可调参数
 type Options struct {
-	Addr        string                    // Agent gRPC 服务地址
-	Shards      int                       // 连接分片数，小于 1 时按 1 处理
-	TurnTimeout time.Duration             // 单轮 RPC 总超时，小于等于 0 时取默认值
-	Dispatch    func(*llmpb.TurnResponse) // 响应落地回调，每个事件调用一次，nil 表示丢弃
+	Addr        string                                     // Agent gRPC 服务地址
+	Shards      int                                        // 连接分片数，小于 1 时按 1 处理
+	TurnTimeout time.Duration                              // 单轮 RPC 总超时，小于等于 0 时取默认值
+	Dispatch    func(context.Context, *llmpb.TurnResponse) // 响应落地回调，携带该轮 ctx，每事件一次，nil 表示丢弃
 }
 
 // Stats 客户端运行计数，用于观测与排查
@@ -44,10 +45,10 @@ type Stats struct {
 
 // Client 每轮一次 RPC 的 Agent 客户端
 type Client struct {
-	pool        *Pool                     // 分片连接池
-	reg         *Registry                 // 每会话在途轮次表
-	dispatch    func(*llmpb.TurnResponse) // 响应落地回调
-	turnTimeout time.Duration             // 单轮 RPC 总超时
+	pool        *Pool                                      // 分片连接池
+	reg         *Registry                                  // 每会话在途轮次表
+	dispatch    func(context.Context, *llmpb.TurnResponse) // 响应落地回调
+	turnTimeout time.Duration                              // 单轮 RPC 总超时
 
 	sent      int64 // 计数：已发起轮次
 	responses int64 // 计数：已分发响应
@@ -74,7 +75,7 @@ func New(opts Options) (*Client, error) {
 	}
 	dispatch := opts.Dispatch
 	if dispatch == nil {
-		dispatch = func(*llmpb.TurnResponse) {}
+		dispatch = func(context.Context, *llmpb.TurnResponse) {}
 	}
 	return &Client{
 		pool:        pool,
@@ -84,30 +85,33 @@ func New(opts Options) (*Client, error) {
 	}, nil
 }
 
-// SendTurn 发起一轮对话，立即返回，响应经 Dispatch 回调异步送达
+// SendTurn 在给定 ctx 下发起一轮对话，立即返回，响应经 Dispatch 回调异步送达
 //
+// ctx 携带 turn 根 span：随 RPC 传播到 Python，供 otelgrpc 建跨语言 trace
 // 同一会话已有在途轮次时先取消它再接手：用户再次开口即打断上一轮
 // 取消后旧轮需要一点时间释放在途登记，所以接手在新协程内异步完成，不阻塞调用方
+// ctx: 该轮的父上下文（turn span）
 // req: 轮次请求，SessionId 与 TurnId 必填
 // return: 入参非法时返回错误
-func (c *Client) SendTurn(req *llmpb.TurnRequest) error {
+func (c *Client) SendTurn(ctx context.Context, req *llmpb.TurnRequest) error {
 	if req.SessionId == "" || req.TurnId == "" {
 		return errors.New("agentcli: session_id 与 turn_id 均不能为空")
 	}
-	go c.startTurn(req)
+	go c.startTurn(ctx, req)
 	return nil
 }
 
 // startTurn 抢占同会话在途轮次后发起本轮
 //
+// parent: 该轮父上下文（turn span）
 // req: 轮次请求
-func (c *Client) startTurn(req *llmpb.TurnRequest) {
+func (c *Client) startTurn(parent context.Context, req *llmpb.TurnRequest) {
 	if c.reg.Cancel(req.SessionId) {
 		atomic.AddInt64(&c.preempted, 1)
 		logger.Infow("同会话已有在途轮次，先取消再发起新轮", "sessionID", req.SessionId, "turnID", req.TurnId)
 		c.waitSlot(req.SessionId)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), c.turnTimeout)
+	ctx, cancel := context.WithTimeout(parent, c.turnTimeout)
 	if err := c.reg.Begin(req.SessionId, req.TurnId, cancel); err != nil {
 		cancel()
 		atomic.AddInt64(&c.rejected, 1)
@@ -220,6 +224,7 @@ func (c *Client) runTurn(ctx context.Context, cancel context.CancelFunc, req *ll
 	if err != nil && !received && retryableConnErr(err) && c.pool.Shards() > 1 {
 		// 首选分片在收到任何响应前就连接级失败：改投相邻分片重试一次
 		atomic.AddInt64(&c.retried, 1)
+		observability.AgentRetried.Add(ctx, 1)
 		logger.Warnw("分片不可用，改投相邻分片", "sessionID", req.SessionId, "turnID", req.TurnId, "error", err)
 		_, err = c.streamOnce(ctx, c.pool.Next(req.SessionId), req)
 	}
@@ -230,12 +235,16 @@ func (c *Client) runTurn(ctx context.Context, cancel context.CancelFunc, req *ll
 	case isCancelled(err):
 		atomic.AddInt64(&c.cancelled, 1)
 		logger.Infow("轮次已取消", "sessionID", req.SessionId, "turnID", req.TurnId)
+		// 打断路径已在 sfu 侧 EndTurn，这里作为兜底（幂等）
+		observability.EndTurn(req.TurnId, "interrupted")
 	case status.Code(err) == codes.DeadlineExceeded:
 		atomic.AddInt64(&c.timedOut, 1)
 		logger.Warnw("轮次超时", "sessionID", req.SessionId, "turnID", req.TurnId, "timeout", c.turnTimeout)
+		observability.EndTurn(req.TurnId, "error")
 	default:
 		atomic.AddInt64(&c.failed, 1)
 		logger.Warnw("轮次异常结束", "sessionID", req.SessionId, "turnID", req.TurnId, "error", err)
+		observability.EndTurn(req.TurnId, "error")
 	}
 }
 
@@ -261,7 +270,7 @@ func (c *Client) streamOnce(ctx context.Context, stub llmpb.LLMServiceClient, re
 		}
 		received = true
 		atomic.AddInt64(&c.responses, 1)
-		c.dispatch(resp)
+		c.dispatch(ctx, resp)
 	}
 }
 

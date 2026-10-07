@@ -12,6 +12,7 @@ import (
 
 	llmpb "echat-backend/proto/llm"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
@@ -51,6 +52,8 @@ func NewPool(addr string, shards int) (*Pool, error) {
 		conn, err := grpc.NewClient(addr,
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 			grpc.WithKeepaliveParams(kp),
+			// otelgrpc：按 call 建 span 并逐轮传播 traceparent metadata（每轮一次 RPC 的前提）
+			grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 		)
 		if err != nil {
 			_ = p.Close()
