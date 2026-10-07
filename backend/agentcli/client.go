@@ -108,7 +108,7 @@ func (c *Client) SendTurn(ctx context.Context, req *llmpb.TurnRequest) error {
 func (c *Client) startTurn(parent context.Context, req *llmpb.TurnRequest) {
 	if c.reg.Cancel(req.SessionId) {
 		atomic.AddInt64(&c.preempted, 1)
-		logger.Infow("同会话已有在途轮次，先取消再发起新轮", "sessionID", req.SessionId, "turnID", req.TurnId)
+		logger.InfowCtx(parent, "同会话已有在途轮次，先取消再发起新轮", "sessionID", req.SessionId, "turnID", req.TurnId)
 		c.waitSlot(req.SessionId)
 	}
 	ctx, cancel := context.WithTimeout(parent, c.turnTimeout)
@@ -225,7 +225,7 @@ func (c *Client) runTurn(ctx context.Context, cancel context.CancelFunc, req *ll
 		// 首选分片在收到任何响应前就连接级失败：改投相邻分片重试一次
 		atomic.AddInt64(&c.retried, 1)
 		observability.AgentRetried.Add(ctx, 1)
-		logger.Warnw("分片不可用，改投相邻分片", "sessionID", req.SessionId, "turnID", req.TurnId, "error", err)
+		logger.WarnwCtx(ctx, "分片不可用，改投相邻分片", "sessionID", req.SessionId, "turnID", req.TurnId, "error", err)
 		_, err = c.streamOnce(ctx, c.pool.Next(req.SessionId), req)
 	}
 	if err == nil {
@@ -234,16 +234,16 @@ func (c *Client) runTurn(ctx context.Context, cancel context.CancelFunc, req *ll
 	switch {
 	case isCancelled(err):
 		atomic.AddInt64(&c.cancelled, 1)
-		logger.Infow("轮次已取消", "sessionID", req.SessionId, "turnID", req.TurnId)
+		logger.InfowCtx(ctx, "轮次已取消", "sessionID", req.SessionId, "turnID", req.TurnId)
 		// 打断路径已在 sfu 侧 EndTurn，这里作为兜底（幂等）
 		observability.EndTurn(req.TurnId, "interrupted")
 	case status.Code(err) == codes.DeadlineExceeded:
 		atomic.AddInt64(&c.timedOut, 1)
-		logger.Warnw("轮次超时", "sessionID", req.SessionId, "turnID", req.TurnId, "timeout", c.turnTimeout)
+		logger.WarnwCtx(ctx, "轮次超时", "sessionID", req.SessionId, "turnID", req.TurnId, "timeout", c.turnTimeout)
 		observability.EndTurn(req.TurnId, "error")
 	default:
 		atomic.AddInt64(&c.failed, 1)
-		logger.Warnw("轮次异常结束", "sessionID", req.SessionId, "turnID", req.TurnId, "error", err)
+		logger.WarnwCtx(ctx, "轮次异常结束", "sessionID", req.SessionId, "turnID", req.TurnId, "error", err)
 		observability.EndTurn(req.TurnId, "error")
 	}
 }

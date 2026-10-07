@@ -7,6 +7,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"sync"
@@ -31,7 +32,7 @@ func main() {
 		Addr:        *addr,
 		Shards:      *shards,
 		TurnTimeout: 30 * time.Second,
-		Dispatch: func(resp *llmpb.TurnResponse) {
+		Dispatch: func(_ context.Context, resp *llmpb.TurnResponse) {
 			mu.Lock()
 			perTurn[resp.TurnId]++
 			first := perTurn[resp.TurnId] == 1
@@ -53,7 +54,7 @@ func main() {
 		SessionId: sessionID, RoomId: "room1", ClientId: "client1",
 		TurnId: "smoke-turn-1", UserText: "你好，请说长一点", Seq: 1,
 	}
-	if err := c.SendTurn(first); err != nil {
+	if err := c.SendTurn(context.Background(), first); err != nil {
 		panic(err)
 	}
 	fmt.Printf("已发起轮次 %s\n", first.TurnId)
@@ -66,7 +67,7 @@ func main() {
 			TurnId: "smoke-turn-2", UserText: "换个话题，短一点", Seq: 2,
 		}
 		fmt.Printf("[%.2fs] 发起第二轮 %s（应抢占第一轮）\n", time.Since(start).Seconds(), second.TurnId)
-		if err := c.SendTurn(second); err != nil {
+		if err := c.SendTurn(context.Background(), second); err != nil {
 			panic(err)
 		}
 		waitEvents(&mu, perTurn, second.TurnId, 3)

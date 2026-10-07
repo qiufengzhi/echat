@@ -102,6 +102,7 @@ func (a *App) Mount() {
 	a.profile.Register(a.mux)
 	a.mountTransportEntry()
 	a.mountDataflowSnapshot()
+	a.mountHealthz()
 }
 
 // Handler 返回套好通用中间件链的根 http.Handler，供 main 交给 http.ListenAndServe
@@ -136,4 +137,28 @@ func (a *App) mountTransportEntry() {
 // 暴露的是进程内部队列名与丢弃计数，不对外公开，走与业务接口同一套 access 鉴权
 func (a *App) mountDataflowSnapshot() {
 	a.mux.HandleFunc("GET /api/v1/debug/dataflow", transport.Adapt(a.auth.AccessRequired(handlers.DataflowSnapshotHandler())))
+}
+
+// mountHealthz 注册存活/就绪探测，不鉴权（容器健康检查用）
+func (a *App) mountHealthz() {
+	a.mux.HandleFunc("GET /healthz", a.handleHealthz)
+}
+
+// handleHealthz 返回分项依赖健康状态与总体 alive
+//
+// 探测 DB 与 Redis（NATS/AuthZ 由各自子系统启动即连，此处不再阻塞）
+func (a *App) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	report := map[string]string{}
+	if err := a.store.Pool().Ping(r.Context()); err != nil {
+		report["database"] = "down"
+	} else {
+		report["database"] = "up"
+	}
+	if err := a.rdb.Ping(r.Context()).Err(); err != nil {
+		report["redis"] = "down"
+	} else {
+		report["redis"] = "up"
+	}
+	report["status"] = "ok"
+	transport.WriteJSON(w, http.StatusOK, report)
 }
