@@ -19,10 +19,11 @@ import (
 
 // turnEntry 一轮的运行时记录
 type turnEntry struct {
-	span   trace.Span // turn 根 span，EndTurn 时结束
-	start  time.Time  // t0：ASR 句末投递时刻
-	sentAt time.Time  // 首句送入 TTS provider 时刻，ttfb 起点
-	firstA bool       // 是否已记过本轮首个音频（只记一次）
+	span     trace.Span // turn 根 span，EndTurn 时结束
+	start    time.Time  // t0：ASR 句末投递时刻
+	sentAt   time.Time  // 首句送入 TTS provider 时刻，ttfb 起点
+	firstA   bool       // 是否已记过本轮首个音频（只记一次）
+	firstTok bool       // 是否已记过本轮首个 LLM token（只记一次）
 }
 
 // turnEtc 全局轮次表，键是进程内唯一的 turnID（turnSeq 全局递增保证）
@@ -53,6 +54,23 @@ func StartTurn(ctx context.Context, turnID, sessionID, roomID string) context.Co
 	turnEtc.m[turnID] = &turnEntry{span: span, start: time.Now()}
 	turnEtc.Unlock()
 	return spanCtx
+}
+
+// MarkFirstToken 记录本轮首个 LLM token 回 Go 的时刻，记 llm_ttft（t0 → 首 token）
+//
+// 每个 turnID 只记一次；调用方可对每个含文本的响应调用
+// turnID: 轮次 ID
+func MarkFirstToken(turnID string) {
+	turnEtc.Lock()
+	e, ok := turnEtc.m[turnID]
+	if !ok || e.firstTok {
+		turnEtc.Unlock()
+		return
+	}
+	e.firstTok = true
+	start := e.start
+	turnEtc.Unlock()
+	TurnLLMTTFT.Record(recordContext, time.Since(start).Milliseconds())
 }
 
 // MarkFirstSentence 记录本轮首句送入 TTS provider 的时刻（ttfb 起点）

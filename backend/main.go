@@ -125,6 +125,9 @@ func initAgentClient(cfg *config.Config) {
 			tracer := otel.Tracer("echat-backend")
 			_, span := tracer.Start(ctx, "tts.process",
 				trace.WithAttributes(observability.TurnID(resp.TurnId)))
+			if resp.ResponseText != "" {
+				observability.MarkFirstToken(resp.TurnId)
+			}
 			tts_cli.GlobalTTSService.ProcessText(resp)
 			span.End()
 			if resp.IsFinal {
