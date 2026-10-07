@@ -15,6 +15,7 @@ import (
 	"github.com/pion/webrtc/v4"
 
 	"echat-backend/global"
+	"echat-backend/observability"
 	"echat-backend/room/aggregate"
 	"echat-backend/room/events"
 	"echat-backend/room/gateway"
@@ -85,6 +86,22 @@ func handleMessage(client *gateway.Client, msg *Message) {
 		handleKickMic(client, msg.Payload)
 	case MsgTypeMuteMic:
 		handleMuteMic(client, msg.Payload)
+	case MsgTypeClientStats:
+		handleClientStats(msg.Payload)
+	}
+}
+
+// handleClientStats 处理客户端上报的播放侧统计，记客户端播放延迟
+//
+// 这是服务端测不到的一段（首帧 RTP 后的网络抖动 + jitter buffer + 解码 + 播放），
+// 由浏览器 getStats 上报时长差值补全延迟预算的终点
+func handleClientStats(payload json.RawMessage) {
+	var stats ClientStatsPayload
+	if err := json.Unmarshal(payload, &stats); err != nil {
+		return
+	}
+	if stats.PlaybackDelayMs != nil {
+		observability.RecordClientPlayback(*stats.PlaybackDelayMs)
 	}
 }
 
@@ -199,6 +216,13 @@ func handleJoin(client *gateway.Client, msg *Message) {
 		logger.Warnw("加入失败", "userID", client.ConnID[:8], "error", err)
 		sendError(client, "无法创建 WebRTC 连接，请重试")
 		return
+	}
+
+	// join 帧若带 traceparent，登记为该会话的远端上下文，供后续 turn span 以 link 关联浏览器信号
+	if msg.Traceparent != "" {
+		if sc, ok := observability.ParseTraceparent(msg.Traceparent); ok {
+			observability.RegisterPeerLink(sfuRoom.SessionIDOf(client.ConnID), sc)
+		}
 	}
 
 	// --- 房间状态广播 ---
@@ -343,7 +367,9 @@ func disconnect(client *gateway.Client, preferredNextHostID string, reason strin
 		// 先清理 SFU 连接，确保停止音轨转发
 		if roomID != "" {
 			if sfuRoom := sfuServer.GetRoom(roomID); sfuRoom != nil {
+				sid := sfuRoom.SessionIDOf(client.ConnID)
 				sfuRoom.Leave(client.ConnID)
+				observability.ClearPeerLink(sid)
 				// 如果 SFU 房间已空，也清理 SFU 房间
 				if sfuRoom.PeerCount() == 0 {
 					sfuServer.RemoveRoom(roomID)

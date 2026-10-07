@@ -331,6 +331,8 @@ func (r *SFURoom) Join(clientID string) error {
 		peer.publishedAudioTrack = remoteTrack
 		// 在锁外启动转发，避免持有锁时调用 AddTrack（AddTrack 也可能触发 ICE 回调）
 		go r.startForwarding(clientID, remoteTrack)
+		// 同时读 RTCP，采集下行抖动与丢包
+		go r.readRTCP(clientID, receiver)
 	})
 
 	r.peers[clientID] = peer
@@ -416,6 +418,7 @@ func (r *SFURoom) Leave(clientID string) {
 
 	// 会话结束：释放该会话的 TTS 端点与合成执行器，不调用会泄漏合成协程
 	tts_cli.GlobalTTSService.Close(sessionID)
+	observability.ClearVoice(sessionID)
 
 	// 从其他所有客户端的中继表中移除当前客户端的音轨
 	r.lock.Lock()
@@ -483,6 +486,19 @@ func (r *SFURoom) HasPeer(clientID string) bool {
 	defer r.lock.RUnlock()
 	_, ok := r.peers[clientID]
 	return ok
+}
+
+// SessionIDOf 返回对端的会话标识，对端不存在时返回空串
+//
+// clientID: 对端标识
+// return: 会话标识
+func (r *SFURoom) SessionIDOf(clientID string) string {
+	r.lock.RLock()
+	defer r.lock.RUnlock()
+	if p, ok := r.peers[clientID]; ok {
+		return p.SessionID
+	}
+	return ""
 }
 
 // startForwarding 在收到客户端音频轨后，创建中继音轨并开始转发
@@ -684,6 +700,11 @@ func (r *SFURoom) deliverToASR(sourceID string, sessionID string, queue *datapla
 		}
 		if n == 0 {
 			continue // DTX 静音包，解码后没有有效采样
+		}
+
+		// 本地能量判停：记录最后一帧有效语音的时刻，供 asr_final_delay 近似测量
+		if observability.HasVoice(pcm[:n]) {
+			observability.MarkVoiceFrame(sessionID)
 		}
 
 		// 非阻塞投递：识别消费端繁忙时按背压丢弃，丢弃由 asr_cli 计数

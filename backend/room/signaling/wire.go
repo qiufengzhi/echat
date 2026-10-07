@@ -30,6 +30,9 @@ const (
 	// 客户端的 ICE Candidate 通过 sfu_ice 发送给 SFU 引擎
 	MsgTypeSFUICE = "sfu_ice" // 客户端的 ICE Candidate
 
+	// MsgTypeClientStats 客户端上报播放侧统计（getStats 的 jitterBufferDelay 等时长差值）
+	MsgTypeClientStats = "client_stats"
+
 	// ---------- 服务端 -> 客户端 ----------
 	MsgTypePong        = "pong"         // 心跳响应，回应客户端 ping
 	MsgTypeWaiting     = "waiting"      // 当前房间只有自己，服务端返回 host_id 让前端先标记房主
@@ -71,6 +74,8 @@ type Message struct {
 	RoomID string `json:"roomId"`
 	// UserID 服务端填充的发送者 ID，前端上行通常不需要传
 	UserID string `json:"userId"`
+	// Traceparent W3C traceparent，前端仅在 join 帧注入，用于把浏览器信号与轮次 trace 关联
+	Traceparent string `json:"traceparent,omitempty"`
 	// Payload 原始 JSON 载荷，由具体消息处理函数按 Type 解析
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
@@ -192,6 +197,12 @@ func SFUPayloadFromICECandidateInit(candidate webrtc.ICECandidateInit) SFUICEPay
 type AiToggleReq struct {
 	// Enable 是否启用 AI 助手
 	Enable bool `json:"enable"`
+}
+
+// ClientStatsPayload 客户端上报的播放侧统计
+type ClientStatsPayload struct {
+	// PlaybackDelayMs 播放延迟毫秒（getStats 时长差值），负值或缺失表示不带
+	PlaybackDelayMs *int64 `json:"playbackDelayMs,omitempty"`
 }
 
 // AiToggleRes 是服务端回复客户端当前 AI 语音助手状态的载荷

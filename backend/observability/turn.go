@@ -14,8 +14,56 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// peerLinks 会话 -> 浏览器 join 帧恢复出的远端 span 上下文，供 turn span link
+var peerLinks = struct {
+	sync.Mutex
+	m map[string]trace.SpanContext
+}{m: make(map[string]trace.SpanContext)}
+
+// ParseTraceparent 从 W3C traceparent 字符串恢复远端 span 上下文
+//
+// tp: 形如 00-<32hex>-<16hex>-01 的 traceparent
+// return: 远端 span 上下文与是否有效
+func ParseTraceparent(tp string) (trace.SpanContext, bool) {
+	carrier := propagation.MapCarrier{"traceparent": tp}
+	ctx := propagation.TraceContext{}.Extract(context.Background(), carrier)
+	sc := trace.SpanContextFromContext(ctx)
+	return sc, sc.IsValid()
+}
+
+// RegisterPeerLink 登记会话对应的浏览器 join 远端上下文（join 帧带 traceparent 时）
+//
+// sessionID: 会话标识
+// sc: 远端 span 上下文
+func RegisterPeerLink(sessionID string, sc trace.SpanContext) {
+	peerLinks.Lock()
+	peerLinks.m[sessionID] = sc
+	peerLinks.Unlock()
+}
+
+// ClearPeerLink 会话结束时清理 join 链路登记
+//
+// sessionID: 会话标识
+func ClearPeerLink(sessionID string) {
+	peerLinks.Lock()
+	delete(peerLinks.m, sessionID)
+	peerLinks.Unlock()
+}
+
+// peerLinkOf 取会话对应的远端上下文
+//
+// sessionID: 会话标识
+// return: 远端上下文与是否存在
+func peerLinkOf(sessionID string) (trace.SpanContext, bool) {
+	peerLinks.Lock()
+	sc, ok := peerLinks.m[sessionID]
+	peerLinks.Unlock()
+	return sc, ok
+}
 
 // turnEntry 一轮的运行时记录
 type turnEntry struct {
@@ -46,10 +94,15 @@ var interruptReg = struct {
 // return: 携带 turn span 的 ctx，供 RPC 与后续埋点延续
 func StartTurn(ctx context.Context, turnID, sessionID, roomID string) context.Context {
 	tracer := otel.Tracer("echat-backend")
-	spanCtx, span := tracer.Start(ctx, "turn",
+	opts := []trace.SpanStartOption{
 		trace.WithAttributes(TurnID(turnID), SessionID(sessionID), RoomID(roomID)),
 		trace.WithNewRoot(),
-	)
+	}
+	// 若该会话的 join 帧带过 traceparent，用 span link 指向浏览器信号（媒体起点无父子关系）
+	if sc, ok := peerLinkOf(sessionID); ok {
+		opts = append(opts, trace.WithLinks(trace.Link{SpanContext: sc}))
+	}
+	spanCtx, span := tracer.Start(ctx, "turn", opts...)
 	turnEtc.Lock()
 	turnEtc.m[turnID] = &turnEntry{span: span, start: time.Now()}
 	turnEtc.Unlock()

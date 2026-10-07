@@ -16,6 +16,7 @@ export type SignalingClientMessageType =
   | 'reject_mic' // 前端（房主/副主持）拒绝举手，payload 带目标用户 ID
   | 'kick_mic' // 前端（房主/副主持）请成员下麦，payload 带目标用户 ID
   | 'mute_mic' // 前端（房主/副主持）静音/解除静音成员，payload 带目标用户 ID 与 muted
+  | 'client_stats' // 前端上报播放侧统计（getStats 时长差值），服务端记播放延迟
 
 // SignalingServerMessageType 描述服务端发给前端的房间状态和 SFU 信令消息类型
 export type SignalingServerMessageType =
@@ -184,4 +185,5 @@ export interface OutgoingSignalingMessage<TPayload = unknown> {
   type: SignalingClientMessageType // 前端要发送的信令类型
   roomId: string                    // 目标房间 ID
   payload?: TPayload                 // 要发送给后端或转发给对端浏览器的消息载荷
+  traceparent?: string               // W3C traceparent，仅在 join 帧注入，供后端把浏览器信号与轮次 trace 关联
 }

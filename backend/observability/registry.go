@@ -23,6 +23,8 @@ var (
 	TurnInterruptDelay metric.Int64Histogram
 	// TurnFirstAudioEncode 首块音频 → 首帧 RTP（播发循环内统计）
 	TurnFirstAudioEncode metric.Int64Histogram
+	// TurnASRFinalDelay 本地能量判停（最后一帧有效语音）→ ASR 句末
+	TurnASRFinalDelay metric.Int64Histogram
 
 	// TurnsTotal 轮次计数，label end=completed|interrupted|error
 	TurnsTotal metric.Int64Counter
@@ -39,6 +41,13 @@ var (
 	AIWriteErrors metric.Int64Counter
 	// RedisFallback Redis 不可用降级进程内
 	RedisFallback metric.Int64Counter
+
+	// RTCPJitterUs RTCP Receiver Report 的到达间隔抖动（微秒）
+	RTCPJitterUs metric.Int64Histogram
+	// RTCPLossPercent RTCP Receiver Report 的丢包率（百分比 0-100）
+	RTCPLossPercent metric.Int64Histogram
+	// ClientPlaybackDelayMs 客户端 getStats 上报的播放延迟（毫秒）
+	ClientPlaybackDelayMs metric.Int64Histogram
 
 	// RingBacklog 数据面队列当前积压，label queue=聚合后的队列族
 	RingBacklog metric.Int64Gauge
@@ -65,6 +74,7 @@ func initInstruments() {
 	TurnTTSTTFB = mustInt64Histogram(meter, "echat.turn.tts_ttfb", "ms", "TTS 首块：首句送入 provider 到本轮首块音频")
 	TurnInterruptDelay = mustInt64Histogram(meter, "echat.turn.interrupt_delay", "ms", "打断响应：新语音到达到播发循环 drain 完成")
 	TurnFirstAudioEncode = mustInt64Histogram(meter, "echat.turn.first_audio_encode", "ms", "首块音频到首帧 RTP 写出")
+	TurnASRFinalDelay = mustInt64Histogram(meter, "echat.turn.asr_final_delay", "ms", "本地能量判停到 ASR 句末")
 
 	TurnsTotal = mustInt64Counter(meter, "echat.turns_total", "轮次，label end 取值 completed/interrupted/error")
 	AgentInflight = mustInt64Gauge(meter, "echat.agentcli.inflight_turns", "当前在途轮次数")
@@ -74,6 +84,10 @@ func initInstruments() {
 	OpusDecodeErrors = mustInt64Counter(meter, "echat.sfu.opus_decode_errors_total", "本地 Opus 解码失败次数")
 	AIWriteErrors = mustInt64Counter(meter, "echat.sfu.ai_write_errors_total", "写 AI TTS 轨失败次数")
 	RedisFallback = mustInt64Counter(meter, "echat.redis.fallback_total", "Redis 不可用降级进程内次数")
+
+	RTCPJitterUs = mustInt64Histogram(meter, "echat.sfu.rtcp_jitter_us", "us", "RTCP RR 到达间隔抖动")
+	RTCPLossPercent = mustInt64Histogram(meter, "echat.sfu.rtcp_loss_percent", "%", "RTCP RR 丢包率")
+	ClientPlaybackDelayMs = mustInt64Histogram(meter, "echat.client.playback_delay_ms", "ms", "客户端 getStats 播放延迟")
 
 	RingBacklog = mustInt64Gauge(meter, "echat.dataplane.ring_backlog", "数据面队列当前积压")
 	RingCapacity = mustInt64Gauge(meter, "echat.dataplane.ring_capacity", "数据面队列容量")

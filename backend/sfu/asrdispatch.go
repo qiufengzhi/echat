@@ -173,6 +173,8 @@ func handleASRResult(res *asrpb.TranscriptAudioChunk) {
 	}
 
 	logger.Infow("收到识别结果", "userID", res.ClientId, "text", res.Text, "isFinal", res.IsFinal, "seq", res.Seq)
+	// 本地判停 → ASR 句末延迟（用最近一帧有效语音时刻近似）
+	observability.MarkASRFinal(res.SessionId)
 	// 用户再次开口即打断在途轮次：取消该轮 RPC 并结束当前轮的音频输出，避免两轮音频叠着播
 	// 完整的确认打断状态机（最小打断时长、误打断恢复）属 D1 范围，这里只做「新语音即打断」
 	if runningTurn, inFlight := agentcli.Global.TurnID(res.SessionId); inFlight {

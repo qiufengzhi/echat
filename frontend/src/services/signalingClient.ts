@@ -61,6 +61,14 @@ export function getDefaultSignalingUrl(): string {
   return `${protocol}//${window.location.host}/ws`
 }
 
+// genTraceparent 生成一个 W3C traceparent（随机 trace/span id），仅用于把浏览器信号与后端 turn trace 关联
+// 不引入浏览器 OTel SDK：只关心 join 一帧的关联，手工生成即可
+function genTraceparent(): string {
+  const hex = (n: number) =>
+    Array.from(crypto.getRandomValues(new Uint8Array(n)), b => b.toString(16).padStart(2, '0')).join('')
+  return `00-${hex(16)}-${hex(8)}-01`
+}
+
 // SignalingClient 封装信令服务器双通道通信：WebTransport(QUIC) 优先，失败自动降级 WebSocket
 // 内部持有传输适配层（SignalTransport），对上层暴露与通道无关的生命周期与消息方法
 export class SignalingClient {
@@ -129,6 +137,16 @@ export class SignalingClient {
       type: 'join',
       roomId: this.roomId,
       payload: this.username,
+      traceparent: genTraceparent(), // 后端据此把浏览器信号与后续轮次 trace 关联
+    })
+  }
+
+  // sendClientStats 上报播放侧统计（getStats 时长差值），服务端记客户端播放延迟
+  sendClientStats(playbackDelayMs: number): void {
+    this.send({
+      type: 'client_stats',
+      roomId: this.roomId,
+      payload: { playbackDelayMs },
     })
   }
 

@@ -219,6 +219,7 @@ export function useVoiceRoom(options?: { onKicked?: () => void; onAuthExpired?: 
   // 这些 ref 保存不会直接触发页面刷新的底层连接对象，避免事件回调拿到过期值
   const signalingClientRef = useRef<SignalingClient | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
+  const statsTimerRef = useRef<number | null>(null) // 播放侧统计上报定时器
   const localStreamRef = useRef<MediaStream | null>(null)
   // 当前用户 ID 由服务端在 waiting/room_ready 中返回，用来判断自己是不是房主
   const currentUserIdRef = useRef<string | null>(null)
@@ -427,6 +428,33 @@ export function useVoiceRoom(options?: { onKicked?: () => void; onAuthExpired?: 
       }
       // 连接断开/失败时，通过 signaling handler 兜底处理
     }
+
+    // 播放侧统计上报：周期性读 getStats 的 jitterBufferDelay 均值，补全「到出声」这一段延迟
+    if (statsTimerRef.current) window.clearInterval(statsTimerRef.current)
+    statsTimerRef.current = window.setInterval(() => {
+      void (async () => {
+        if (pc.connectionState !== 'connected') return
+        try {
+          const stats = await pc.getStats()
+          let delaySum = 0
+          let emitted = 0
+          stats.forEach(report => {
+            if (report.type === 'inbound-rtp') {
+              const inbound = report as RTCInboundRtpStreamStats
+              if (inbound.kind === 'audio') {
+                delaySum += inbound.jitterBufferDelay ?? 0
+                emitted += inbound.jitterBufferEmittedCount ?? 0
+              }
+            }
+          })
+          if (emitted > 0) {
+            signalingClientRef.current?.sendClientStats(Math.round((delaySum / emitted) * 1000))
+          }
+        } catch {
+          // 统计读取失败不影响主流程
+        }
+      })()
+    }, 3000)
 
     pcRef.current = pc
     return pc
@@ -741,6 +769,10 @@ export function useVoiceRoom(options?: { onKicked?: () => void; onAuthExpired?: 
   // 离开房间时先向服务端发送 leave，再释放本地麦克风、WebSocket 和 WebRTC 资源
   // nextHostId 只在当前用户是房主时有意义；服务端仍会校验它是否在线
   const leaveRoom = useCallback((nextHostId?: string) => {
+    if (statsTimerRef.current) {
+      window.clearInterval(statsTimerRef.current)
+      statsTimerRef.current = null
+    }
     if (signalingClientRef.current) {
       signalingClientRef.current.sendLeave(nextHostId ? { nextHostId } : undefined)
     }
