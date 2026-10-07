@@ -13,7 +13,8 @@ import logging
 import socket
 from typing import Optional
 
-from opentelemetry import metrics, trace
+# 用下划线别名避免遮蔽同包子模块名 observability.metrics / observability.attrs
+from opentelemetry import metrics as _otel_metrics, trace as _otel_trace
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.metrics import MeterProvider
@@ -61,13 +62,13 @@ def setup(cfg: Optional[ObservabilityConfig]) -> None:
     tracer_provider.add_span_processor(
         BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=True))
     )
-    trace.set_tracer_provider(tracer_provider)
+    _otel_trace.set_tracer_provider(tracer_provider)
 
     reader = PeriodicExportingMetricReader(
         OTLPMetricExporter(endpoint=endpoint, insecure=True),
         export_interval_millis=_interval_ms(cfg.metrics_export_interval),
     )
-    metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=[reader]))
+    _otel_metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=[reader]))
 
     logger.info(
         "可观测性已启用 service=%s endpoint=%s rate=%s",

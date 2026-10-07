@@ -11,9 +11,11 @@ OpenAI 兼容 API 的 LLM Provider
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import AsyncIterator, List, Optional
 
 from loguru import logger
+from opentelemetry import trace
 from openai import AsyncOpenAI
 
 from agent.core.types import (
@@ -24,6 +26,8 @@ from agent.core.types import (
     TokenUsage,
     ToolCallEvent,
 )
+from agent.observability import attrs
+import agent.observability.metrics as obs_metrics
 from agent.providers.base import (
     BaseLLMProvider,
     LLMAPIConnectionError,
@@ -78,6 +82,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         api_key: str,
         base_url: str,
         model: str,
+        provider_name: str = "openai-compatible",
         max_tokens: int = 1024,
         temperature: float = 0.7,
         request_timeout: float = 30.0,
@@ -89,6 +94,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         api_key: 服务商 API 密钥
         base_url: OpenAI 兼容接口地址，如 https://api.deepseek.com/v1
         model: 模型名，如 deepseek-chat
+        provider_name: 提供商名，写入 gen_ai.provider.name，默认 openai-compatible
         max_tokens: 单次回复最大 token 数，默认 1024
         temperature: 采样温度，越高越随机，默认 0.7
         request_timeout: 单次请求超时秒数，默认 30
@@ -96,6 +102,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         first_token_timeout: 首包超时秒数，默认 5，超时按可重试错误结束本轮
         """
         self._model = model  # 模型名
+        self._provider_name = provider_name  # 提供商名
         self._max_tokens = max_tokens  # 单次回复最大 token 数
         self._temperature = temperature  # 采样温度
         self._request_timeout = request_timeout  # 请求超时秒数
@@ -164,6 +171,24 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         if tools:
             kwargs["tools"] = tools
 
+        # LLM 请求 span：gen_ai.* 语义约定属性供后端按名解析（不写消息内容，见 PII 规则）
+        tracer = trace.get_tracer("echat-agent")
+        span = tracer.start_span(
+            "agent.llm.request",
+            attributes={
+                attrs.ATTR_GEN_AI_REQUEST_MODEL: self._model,
+                attrs.ATTR_GEN_AI_PROVIDER_NAME: self._provider_name,
+                attrs.ATTR_GEN_AI_REQUEST_MAX_TOKENS: self._max_tokens,
+                attrs.ATTR_GEN_AI_REQUEST_TEMPERATURE: self._temperature,
+                attrs.ATTR_GEN_AI_REQUEST_STREAM: True,
+            },
+        )
+        t_start = time.perf_counter()
+        span_attrs = {
+            attrs.ATTR_GEN_AI_REQUEST_MODEL: self._model,
+            attrs.ATTR_GEN_AI_PROVIDER_NAME: self._provider_name,
+        }
+
         try:
             stream = await self._client.chat.completions.create(**kwargs)
         except Exception as exc:
@@ -187,6 +212,11 @@ class OpenAICompatibleProvider(BaseLLMProvider):
                             iterator.__anext__(), timeout=self._first_token_timeout
                         )
                         first_chunk = False
+                        ttfc_s = time.perf_counter() - t_start
+                        obs_metrics.llm_ttft().record(ttfc_s * 1000)
+                        obs_metrics.ttfc().record(ttfc_s, attributes=span_attrs)
+                        span.set_attribute("gen_ai.response.time_to_first_chunk", ttfc_s)
+                        span.add_event("llm.first_token")
                     else:
                         chunk = await iterator.__anext__()
                 except StopAsyncIteration:
@@ -246,6 +276,20 @@ class OpenAICompatibleProvider(BaseLLMProvider):
                         arguments=acc["arguments"],
                     )
 
+            # token 用量与请求耗时：gen_ai.* 语义约定名，label 仅限有限枚举
+            obs_metrics.tokens().record(
+                prompt_tokens,
+                attributes={**span_attrs, "gen_ai.token.type": "input"},
+            )
+            obs_metrics.tokens().record(
+                completion_tokens,
+                attributes={**span_attrs, "gen_ai.token.type": "output"},
+            )
+            obs_metrics.dur().record(time.perf_counter() - t_start, attributes=span_attrs)
+            span.set_attribute(attrs.ATTR_GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens)
+            span.set_attribute(attrs.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens)
+            span.set_attribute(attrs.ATTR_GEN_AI_RESPONSE_FINISH_REASONS, (finish_reason,))
+
             yield DoneEvent(
                 cancelled=(finish_reason == "cancelled"),
                 finish_reason=finish_reason,
@@ -259,12 +303,15 @@ class OpenAICompatibleProvider(BaseLLMProvider):
 
         except ProviderError:
             # 首包超时等本层已结构化的错误，不再二次映射，保留原始错误码
+            span.set_status(trace.Status(trace.StatusCode.ERROR))
             raise
         except Exception as exc:
             mapped = self._map_error(exc)
+            span.set_status(trace.Status(trace.StatusCode.ERROR))
             self._logger.warning("LLM 流式调用失败: {}", mapped.message)
             raise mapped
         finally:
+            span.end()
             # 上游连接必须显式关闭：取消、超时、正常结束都不该让连接与计费继续
             try:
                 await stream.close()

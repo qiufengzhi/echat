@@ -107,6 +107,7 @@ def build_orchestrator(cfg: Config) -> tuple[ChatOrchestrator, ToolRegistry]:
         api_key=cfg.llm.api_key,
         base_url=cfg.llm.base_url,
         model=cfg.llm.model,
+        provider_name=cfg.llm.provider,
         max_tokens=cfg.llm.max_tokens,
         temperature=cfg.llm.temperature,
         request_timeout=cfg.llm.request_timeout,
