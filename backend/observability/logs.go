@@ -18,16 +18,16 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-// logsEnabled OTLP 日志腿是否可用（日志未启用时 LogExtraCore 返回空）
+// logsEnabled OTLP 日志链路是否可用（日志未启用时 LogExtraCore 返回空）
 var logsEnabled bool
 
-// logMinLevel OTLP 日志腿的级别下限，由 initLogs 按配置解析
+// logMinLevel OTLP 日志链路的级别下限，由 initLogs 按配置解析
 var logMinLevel = zapcore.WarnLevel
 
 // noopShutdown 空清理函数
 func noopShutdown(context.Context) error { return nil }
 
-// initLogs 搭 OTLP Logs 腿：LoggerProvider + 批量 processor，并设为全局供 otelzap 取用
+// initLogs 搭 OTLP Logs 链路：LoggerProvider + 批量 processor，并设为全局供 otelzap 取用
 //
 // 仅在 logs_enabled 时启用；日志落盘始终保留
 // cfg: observability 配置段，取 LogsEnabled / LogsMinLevel / OTLPEndpoint
@@ -64,9 +64,9 @@ func LogExtraCore() (zapcore.Core, bool) {
 	return &levelGateCore{core: otelzap.NewCore("echat-backend"), min: logMinLevel}, true
 }
 
-// levelGateCore 按级别门控包装，拦下低于下限的日志不进 OTLP 腿
+// levelGateCore 按级别门控包装，拦下低于下限的日志不进 OTLP 链路
 type levelGateCore struct {
-	core zapcore.Core // 被包装的 otelzap core
+	core zapcore.Core  // 被包装的 otelzap core
 	min  zapcore.Level // 级别下限
 }
 

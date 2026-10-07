@@ -43,7 +43,7 @@ type Config struct {
 	EnableConsole bool   // 输出到终端 stderr，默认 true
 	EnableFile    bool   // 输出到按天日志文件，默认 true
 	FileDir       string // 日志文件目录，默认 "logs"
-	// ExtraCore 追加的 zap core（如 OTLP Logs 腿），函数返回 nil 或 false 时不追加
+	// ExtraCore 追加的 zap core（如 OTLP Logs 链路），函数返回 nil 或 false 时不追加
 	ExtraCore func() (zapcore.Core, bool)
 }
 
