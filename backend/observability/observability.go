@@ -66,6 +66,8 @@ func (s *shutdownFunc) shutdown(timeout time.Duration) error {
 // cfg: observability 配置段
 // return: 清理函数与错误，禁用或被禁时清理函数为空操作
 func Init(cfg config.ObservabilityConfig) (func(), error) {
+	// 始终建指标表：禁用时绑定 noop provider，record 为空操作，热路径无需判空
+	initInstruments()
 	if !cfg.Enabled {
 		return func() {}, nil
 	}
@@ -96,6 +98,14 @@ func Init(cfg config.ObservabilityConfig) (func(), error) {
 		return nil, err
 	}
 	cleanup.add(metricShutdown)
+
+	// 真实 MeterProvider 就位后重绑指标表（此前绑定的 noop 全部丢弃）
+	initInstruments()
+
+	// dataplane 运行快照 → OTLP 桥（周期协程，队列名按族聚合）
+	bridgeCtx, bridgeCancel := context.WithCancel(context.Background())
+	startBridge(bridgeCtx)
+	cleanup.add(func(context.Context) error { bridgeCancel(); return nil })
 
 	// 把 W3C 传播器设为全局，otelgrpc 与手动 extract 都依赖它
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
