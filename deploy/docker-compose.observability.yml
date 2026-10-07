@@ -60,6 +60,17 @@ services:
     depends_on:
       - otel-collector
 
+  # 资源层：宿主机/容器 CPU、内存、网络指标（Prometheus 直接抓，不经 Collector）
+  node-exporter:
+    image: docker.m.daocloud.io/prom/node-exporter:latest
+    command: ["--path.rootfs=/host"]
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    ports:
+      - "9100:9100"
+    restart: unless-stopped
+
 volumes:
   tempo-data:
   loki-data:

@@ -173,6 +173,7 @@ func (s *SFUServer) GetOrCreateRoom(roomID string) *SFURoom {
 	s.rooms[roomID] = room
 	// 识别结果按房间分发：订阅随 SFU 房间创建建立，随房间移除关闭
 	GlobalASRDispatcher.subscribe(roomID)
+	observability.RecordRooms(len(s.rooms))
 	logger.Infow("房间已创建", "roomID", roomID)
 	return room
 }
@@ -186,6 +187,7 @@ func (s *SFUServer) RemoveRoom(roomID string) {
 		delete(s.rooms, roomID)
 		// 一并移除识别结果订阅，否则订阅者与其队列会随房间数累积
 		GlobalASRDispatcher.unsubscribe(roomID)
+		observability.RecordRooms(len(s.rooms))
 		logger.Infow("房间已删除", "roomID", roomID)
 	}
 }
@@ -301,6 +303,7 @@ func (r *SFURoom) Join(clientID string) error {
 			return
 		}
 		logger.Debugw("renegotiation Offer 已创建", "clientID", clientID[:8])
+		observability.IncRenegotiation()
 		r.onRenegotiation(clientID, offer.SDP)
 	})
 
@@ -334,8 +337,16 @@ func (r *SFURoom) Join(clientID string) error {
 	})
 
 	r.peers[clientID] = peer
+	observability.RecordPeers(r.peerCountLocked())
 	logger.Infow("对端加入", "clientID", clientID[:8], "roomID", r.ID)
 	return nil
+}
+
+// peerCountLocked 在已持锁（r.lock 写锁）前提下返回对端数，供埋点使用
+//
+// return: 当前对端数
+func (r *SFURoom) peerCountLocked() int {
+	return len(r.peers)
 }
 
 // AcceptOffer 处理客户端发来的 SDP Offer，创建并返回 Answer SDP
@@ -396,6 +407,7 @@ func (r *SFURoom) Leave(clientID string) {
 		return
 	}
 	delete(r.peers, clientID)
+	observability.RecordPeers(r.peerCountLocked())
 	r.lock.Unlock()
 
 	logger.Infow("对端离开", "clientID", clientID[:8])
@@ -713,13 +725,15 @@ func (r *SFURoom) deliverToASR(sourceID string, sessionID string, queue *datapla
 		}
 
 		// 非阻塞投递：识别消费端繁忙时按背压丢弃，丢弃由 asr_cli 计数
-		asr_cli.Push(&asrpb.AudioChunk{
+		if asr_cli.Push(&asrpb.AudioChunk{
 			SessionId:  sessionID,
 			RoomId:     r.ID,
 			ClientId:   sourceID,
 			Pcm:        int16ToLEBytes(pcm[:n]),
 			SampleRate: asrSampleRate,
-		})
+		}) {
+			observability.AddASRAudioSeconds(int64(n) * 1000 / int64(asrSampleRate))
+		}
 	}
 }
 
@@ -759,10 +773,12 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 	// enc.Close() 推迟到 audioLoopDone 中调用，在关闭 frameQueue 之前
 	// 确保编码器在帧队列排空期间仍可用
 
-	var pcmBuf []int16    // PCM 采样缓冲区，用于帧对齐（TTS 输出可能不对齐 20ms 帧边界）
-	var totalPCM int      // 累计收到的 TTS PCM 字节数（16kHz 原始）
-	var framesEncoded int // 累计编码发送的 Opus 帧数
-	var lastTurn string   // 最近输出过音频的轮次，轮次切换即本轮首个音频块
+	var pcmBuf []int16        // PCM 采样缓冲区，用于帧对齐（TTS 输出可能不对齐 20ms 帧边界）
+	var totalPCM int          // 累计收到的 TTS PCM 字节数（16kHz 原始）
+	var framesEncoded int     // 累计编码发送的 Opus 帧数
+	var lastTurn string       // 最近输出过音频的轮次，轮次切换即本轮首个音频块
+	var pendingTurn string    // 首个编码帧尚未记录的轮次
+	var turnAudioAt time.Time // 该轮首块音频到达时刻，用于 first_audio_encode
 
 	// 订阅会话级音频端点：端点与会话同寿命，合成执行器换代（打断或轮次重建）不影响订阅，
 	// 因此不会出现「执行器重建之后没人消费音频」的失联
@@ -882,6 +898,11 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 			}
 			frameQueue <- queuedFrame{payload: opusPayload}
 			framesEncoded++
+			// 本轮首个编码帧：记录首块音频 → 首帧 RTP 的间隔
+			if pendingTurn != "" {
+				observability.RecordFirstAudioEncode(time.Since(turnAudioAt).Milliseconds())
+				pendingTurn = ""
+			}
 		}
 	}
 
@@ -941,6 +962,8 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 		// AudioData：轮次切换判定——新一轮的首个音频块，记 e2e / ttfb 时间戳
 		if ev.TurnID != lastTurn {
 			lastTurn = ev.TurnID
+			turnAudioAt = time.Now()
+			pendingTurn = ev.TurnID
 			observability.MarkFirstAudio(ev.TurnID)
 		}
 		// AudioData：重置空闲计时

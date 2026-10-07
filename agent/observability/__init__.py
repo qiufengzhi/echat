@@ -38,7 +38,7 @@ from agent.config.loader import ObservabilityConfig
 
 logger = logging.getLogger("obs")
 
-# 日志腿：loguru 与 zap 相同，落盘保留、另接一条 OTLP Logs 推 Collector → Loki
+# 日志链路：loguru 与 zap 相同，落盘保留、另接一条 OTLP Logs 推 Collector → Loki
 _otel_logger = None  # loguru sink 使用的 OTel Logger
 
 # defaultEndpoint OTLP 端点兜底，与 observability compose 对齐
@@ -114,7 +114,7 @@ def _interval_ms(raw: str) -> int:
 
 
 def setup_logs(cfg: Optional[ObservabilityConfig]) -> None:
-    """搭 OTLP Logs 腿：LoggerProvider + 批量 processor，供 loguru sink 推送
+    """搭 OTLP Logs 链路：LoggerProvider + 批量 processor，供 loguru sink 推送
 
     cfg: observability 配置段，None 或 logs_enabled 为假时不初始化
     """

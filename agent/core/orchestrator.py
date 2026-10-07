@@ -18,6 +18,7 @@ from typing import AsyncIterator, Dict, Optional
 
 from loguru import logger
 
+import agent.observability.metrics as obs_metrics
 from agent.config.loader import Config
 from agent.core.session import Session
 from agent.core.strategies import PlanAndSolveStrategy, ReActStrategy, SimpleStrategy
@@ -82,6 +83,7 @@ class ChatOrchestrator:
                     # 池满：淘汰最久未活动的会话
                     await self._evict_expired_locked()
                 if len(self._sessions) >= self._config.session.max_sessions:
+                    obs_metrics.agent_pool_full().add(1)
                     raise RuntimeError("SESSION_POOL_FULL")
                 logger.info("创建新会话 session={} room={}", session_id, room_id)
                 session = Session(
@@ -91,6 +93,7 @@ class ChatOrchestrator:
                     ttl_seconds=self._config.session.ttl_seconds,
                 )
                 self._sessions[session_id] = session
+                obs_metrics.agent_sessions().add(1)
                 # 从持久化记忆恢复历史
                 try:
                     restored = self._memory.load(session_id)
@@ -124,6 +127,7 @@ class ChatOrchestrator:
             session = self._sessions.pop(session_id, None)
         if session is None:
             return False
+        obs_metrics.agent_sessions().add(-1)
         session.cancel()
         if session.history:
             try:
@@ -149,6 +153,8 @@ class ChatOrchestrator:
             session = self._sessions.pop(sid, None)
             if session is None:
                 continue
+            obs_metrics.agent_sessions().add(-1)
+            obs_metrics.agent_evicted().add(1)
             # 淘汰前尝试保存历史
             try:
                 if session.history:

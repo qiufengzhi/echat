@@ -105,7 +105,7 @@ def setup_logging(cfg: Config) -> None:
     # 为日志设置默认 extra 并注入 trace_id（trace 上下文内的记录自动带上全 32 位 id）
     logger.configure(extra={"session": "", "trace_id": "", "span_id": ""}, patcher=_trace_patcher)
 
-    # OTLP Logs 腿：loguru → Collector → Loki（可观测性未启用时 sink 空操作）
+    # OTLP Logs 链路：loguru → Collector → Loki（可观测性未启用时 sink 空操作）
     if cfg.observability and cfg.observability.logs_enabled:
         log_level = (cfg.observability.logs_min_level or "INFO").upper()
         logger.add(log_sink, level=log_level)

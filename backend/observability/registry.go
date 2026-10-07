@@ -32,6 +32,30 @@ var (
 	AgentInflight metric.Int64Gauge
 	// AgentRetried 分片改投重试次数
 	AgentRetried metric.Int64Counter
+	// AgentTimedOut 轮次超时次数
+	AgentTimedOut metric.Int64Counter
+	// AgentFailed 轮次异常结束次数
+	AgentFailed metric.Int64Counter
+	// AgentRejected 在途未释放被放弃次数
+	AgentRejected metric.Int64Counter
+	// AgentCancelled 主动取消次数
+	AgentCancelled metric.Int64Counter
+	// AgentPreempted 同会话新轮抢占次数
+	AgentPreempted metric.Int64Counter
+
+	// RoomsActive 当前 SFU 房间数
+	RoomsActive metric.Int64Gauge
+	// PeersActive 当前 SFU 连接数
+	PeersActive metric.Int64Gauge
+	// Renegotiations SFU 重新协商次数
+	Renegotiations metric.Int64Counter
+
+	// TtsRequests TTS 合成请求数，label provider、status
+	TtsRequests metric.Int64Counter
+	// TtsCharacters TTS 合成字符数，label provider
+	TtsCharacters metric.Int64Counter
+	// AsrAudioSeconds 送识别的音频秒数
+	AsrAudioSeconds metric.Int64Counter
 
 	// RelayWriteErrors 写中继轨失败
 	RelayWriteErrors metric.Int64Counter
@@ -79,6 +103,19 @@ func initInstruments() {
 	TurnsTotal = mustInt64Counter(meter, "echat.turns_total", "轮次，label end 取值 completed/interrupted/error")
 	AgentInflight = mustInt64Gauge(meter, "echat.agentcli.inflight_turns", "当前在途轮次数")
 	AgentRetried = mustInt64Counter(meter, "echat.agentcli.retried_total", "分片改投重试次数")
+	AgentTimedOut = mustInt64Counter(meter, "echat.agentcli.timedout_total", "轮次超时次数")
+	AgentFailed = mustInt64Counter(meter, "echat.agentcli.failed_total", "轮次异常结束次数")
+	AgentRejected = mustInt64Counter(meter, "echat.agentcli.rejected_total", "在途未释放被放弃次数")
+	AgentCancelled = mustInt64Counter(meter, "echat.agentcli.cancelled_total", "主动取消次数")
+	AgentPreempted = mustInt64Counter(meter, "echat.agentcli.preempted_total", "同会话新轮抢占次数")
+
+	RoomsActive = mustInt64Gauge(meter, "echat.sfu.rooms_active", "当前 SFU 房间数")
+	PeersActive = mustInt64Gauge(meter, "echat.sfu.peers_active", "当前 SFU 连接数")
+	Renegotiations = mustInt64Counter(meter, "echat.sfu.renegotiations_total", "SFU 重新协商次数")
+
+	TtsRequests = mustInt64Counter(meter, "echat.tts.requests_total", "TTS 合成请求数")
+	TtsCharacters = mustInt64Counter(meter, "echat.tts.characters_total", "TTS 合成字符数")
+	AsrAudioSeconds = mustInt64Counter(meter, "echat.asr.audio_seconds_total", "送识别的音频秒数")
 
 	RelayWriteErrors = mustInt64Counter(meter, "echat.sfu.relay_write_errors_total", "写中继轨失败次数")
 	OpusDecodeErrors = mustInt64Counter(meter, "echat.sfu.opus_decode_errors_total", "本地 Opus 解码失败次数")

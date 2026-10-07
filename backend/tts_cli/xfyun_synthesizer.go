@@ -15,6 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"echat-backend/config"
+	"echat-backend/observability"
 )
 
 // ---------- 讯飞 TTS 常量 ----------
@@ -275,6 +276,15 @@ func (s *XfyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence stri
 		return
 	}
 	delaySynthetic()
+	observability.AddTTSCharacters("xfyun", len([]rune(sentence)))
+	ok := false
+	defer func() {
+		status := "error"
+		if ok {
+			status = "ok"
+		}
+		observability.AddTTSRequest("xfyun", status)
+	}()
 
 	logger.Debugw("讯飞合成开始", "sessionID", sessionID, "seq", sentenceSeq, "sentence", sentence)
 
@@ -322,6 +332,7 @@ func (s *XfyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence stri
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) ||
 				strings.Contains(err.Error(), "close 1000") {
+				ok = true
 				logger.Infow("合成完成", "sessionID", sessionID, "seq", sentenceSeq, "totalBytes", totalBytes)
 				return
 			}
@@ -367,6 +378,7 @@ func (s *XfyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence stri
 
 		// status=2 合成结束
 		if resp.Data.Status == 2 {
+			ok = true
 			logger.Infow("合成完成(status=2)", "sessionID", sessionID, "seq", sentenceSeq, "totalBytes", totalBytes)
 			return
 		}

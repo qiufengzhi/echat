@@ -108,6 +108,7 @@ func (c *Client) SendTurn(ctx context.Context, req *llmpb.TurnRequest) error {
 func (c *Client) startTurn(parent context.Context, req *llmpb.TurnRequest) {
 	if c.reg.Cancel(req.SessionId) {
 		atomic.AddInt64(&c.preempted, 1)
+		observability.IncAgentPreempted()
 		logger.InfowCtx(parent, "同会话已有在途轮次，先取消再发起新轮", "sessionID", req.SessionId, "turnID", req.TurnId)
 		c.waitSlot(req.SessionId)
 	}
@@ -115,6 +116,7 @@ func (c *Client) startTurn(parent context.Context, req *llmpb.TurnRequest) {
 	if err := c.reg.Begin(req.SessionId, req.TurnId, cancel); err != nil {
 		cancel()
 		atomic.AddInt64(&c.rejected, 1)
+		observability.IncAgentRejected()
 		logger.Warnw("在途轮次未及时释放，放弃本轮", "sessionID", req.SessionId, "turnID", req.TurnId)
 		return
 	}
@@ -234,15 +236,18 @@ func (c *Client) runTurn(ctx context.Context, cancel context.CancelFunc, req *ll
 	switch {
 	case isCancelled(err):
 		atomic.AddInt64(&c.cancelled, 1)
+		observability.IncAgentCancelled()
 		logger.InfowCtx(ctx, "轮次已取消", "sessionID", req.SessionId, "turnID", req.TurnId)
 		// 打断路径已在 sfu 侧 EndTurn，这里作为兜底（幂等）
 		observability.EndTurn(req.TurnId, "interrupted")
 	case status.Code(err) == codes.DeadlineExceeded:
 		atomic.AddInt64(&c.timedOut, 1)
+		observability.IncAgentTimedOut()
 		logger.WarnwCtx(ctx, "轮次超时", "sessionID", req.SessionId, "turnID", req.TurnId, "timeout", c.turnTimeout)
 		observability.EndTurn(req.TurnId, "error")
 	default:
 		atomic.AddInt64(&c.failed, 1)
+		observability.IncAgentFailed()
 		logger.WarnwCtx(ctx, "轮次异常结束", "sessionID", req.SessionId, "turnID", req.TurnId, "error", err)
 		observability.EndTurn(req.TurnId, "error")
 	}

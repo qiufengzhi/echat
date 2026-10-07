@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"echat-backend/config"
+	"echat-backend/observability"
 )
 
 // ---------- 阿里云 TTS 配置 ----------
@@ -170,6 +171,15 @@ func (s *AliyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence str
 		return
 	}
 	delaySynthetic()
+	observability.AddTTSCharacters("aliyun", len([]rune(sentence)))
+	ok := false
+	defer func() {
+		status := "error"
+		if ok {
+			status = "ok"
+		}
+		observability.AddTTSRequest("aliyun", status)
+	}()
 
 	logger.Debugw("阿里云合成开始", "sessionID", sessionID, "seq", sentenceSeq, "sentence", sentence)
 
@@ -233,6 +243,7 @@ func (s *AliyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence str
 		}
 	}
 
+	ok = true
 	logger.Infow("合成完成", "sessionID", sessionID, "seq", sentenceSeq, "totalBytes", totalBytes)
 }
 

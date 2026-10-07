@@ -147,7 +147,9 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         """
         if self._semaphore.locked():
             self._logger.info("上游并发已打满，本轮排队等待")
+        wait_start = time.perf_counter()
         async with self._semaphore:
+            obs_metrics.upstream_wait().record((time.perf_counter() - wait_start) * 1000)
             async for event in self._stream_once(messages, tools, cancel_event):
                 yield event
 
@@ -199,6 +201,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         except Exception as exc:
             mapped = self._map_error(exc)
             self._logger.warning("LLM 创建流失败: {}", mapped.message)
+            obs_metrics.llm_requests().add(1, attributes={"status": "error"})
             raise mapped
 
         tool_calls_accum: dict = {}  # 按 index 聚合分片的 tool_call
@@ -294,6 +297,8 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             span.set_attribute(attrs.ATTR_GEN_AI_USAGE_INPUT_TOKENS, prompt_tokens)
             span.set_attribute(attrs.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS, completion_tokens)
             span.set_attribute(attrs.ATTR_GEN_AI_RESPONSE_FINISH_REASONS, (finish_reason,))
+            req_status = "cancelled" if finish_reason == "cancelled" else "ok"
+            obs_metrics.llm_requests().add(1, attributes={"status": req_status})
 
             yield DoneEvent(
                 cancelled=(finish_reason == "cancelled"),
@@ -309,10 +314,12 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         except ProviderError:
             # 首包超时等本层已结构化的错误，不再二次映射，保留原始错误码
             span.set_status(trace.Status(trace.StatusCode.ERROR))
+            obs_metrics.llm_requests().add(1, attributes={"status": "error"})
             raise
         except Exception as exc:
             mapped = self._map_error(exc)
             span.set_status(trace.Status(trace.StatusCode.ERROR))
+            obs_metrics.llm_requests().add(1, attributes={"status": "error"})
             self._logger.warning("LLM 流式调用失败: {}", mapped.message)
             raise mapped
         finally:
