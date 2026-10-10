@@ -194,8 +194,83 @@ services:
     volumes:
       - ./agent/config.yaml:/app/agent/config.yaml:ro # 挂载 Agent 完整配置（含密钥）
 
+  # ===== 可观测性栈（应用唯一 OTLP 出口，全部走内部网络，OTLP 不对公网暴露）=====
+  # 服务名（otel-collector/tempo/loki/prometheus/grafana）即容器网络 DNS，
+  # 与 deploy/otel/collector-config.yaml 及各 provisioning 里的地址一一对应
+  otel-collector: # OTLP 入口：尾采样 + PII 剥离 + 扇出到 Tempo/Prometheus/Loki
+    container_name: echat-otel-collector
+    image: docker.m.daocloud.io/otel/opentelemetry-collector-contrib:latest
+    restart: unless-stopped
+    command: ["--config", "/etc/otel/config.yaml"]
+    volumes:
+      - ./otel/collector-config.yaml:/etc/otel/config.yaml:ro
+    depends_on:
+      - tempo
+      - loki
+    # 不映射宿主端口：backend/agent 以 otel-collector:4317 在内部网络推送
+
+  tempo: # 分布式追踪后端：存 trace（v3，搜索读已落块数据，最新 trace 有落块延迟）
+    container_name: echat-tempo
+    image: docker.m.daocloud.io/grafana/tempo:latest
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./otel/tempo.yaml:/etc/tempo.yaml:ro
+      - echat_prod_tempo:/var/tempo
+    # 不映射宿主端口：Collector 以 tempo:4317 推送，Grafana 以 tempo:3200 查询
+
+  loki: # 日志后端：收 OTLP Logs（Collector 经 otlphttp 推入）
+    container_name: echat-loki
+    image: docker.m.daocloud.io/grafana/loki:latest
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - ./otel/loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - echat_prod_loki:/loki
+    # 不映射宿主端口：Collector 与 Grafana 在内部网络访问
+
+  prometheus: # 指标后端：抓 Collector :8889（应用指标）与 node-exporter:9100（资源层）
+    container_name: echat-prometheus
+    image: docker.m.daocloud.io/prom/prometheus:latest
+    restart: unless-stopped
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=15d"]
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - echat_prod_prometheus:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090" # 只绑本机回环，经 SSH 隧道查看，不暴露公网
+
+  grafana: # 可视化：Prometheus/Tempo/Loki 三数据源 + 预置面板，带 trace↔log 双向跳转
+    container_name: echat-grafana
+    image: docker.m.daocloud.io/grafana/grafana:latest
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin} # 生产用 .env 覆盖，勿留默认
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - echat_prod_grafana:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000" # 只绑本机回环，经 SSH 隧道查看；要公网访问走 gateway 反代
+    depends_on:
+      - otel-collector
+
+  node-exporter: # 资源层：宿主 CPU/内存/网络指标（Prometheus 直接抓）
+    container_name: echat-node-exporter
+    image: docker.m.daocloud.io/prom/node-exporter:latest
+    restart: unless-stopped
+    command: ["--path.rootfs=/host"]
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    # 不映射宿主端口：Prometheus 以 node-exporter:9100 在内部网络抓取
+
 volumes:
   echat_prod_pgdata: # PostgreSQL 数据卷
   echat_prod_natsdata: # NATS JetStream 事件流卷
   echat_prod_redisdata: # Redis 热状态与限流计数持久化卷
   echat_prod_uploads: # 后端上传头像持久化卷（config.yaml uploads.dir 指向 /app/data/uploads）
+  echat_prod_tempo: # Tempo trace 数据卷
+  echat_prod_loki: # Loki 日志数据卷
+  echat_prod_prometheus: # Prometheus 指标数据卷
+  echat_prod_grafana: # Grafana 面板与状态数据卷

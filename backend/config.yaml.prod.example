@@ -126,3 +126,15 @@ webtransport:
   addr: ":4433"
   cert_file: "/etc/letsencrypt/live/echat.qxbnx.cn/fullchain.pem"  # 握手 TLS 证书,容器内路径
   key_file: "/etc/letsencrypt/live/echat.qxbnx.cn/privkey.pem"     # 握手 TLS 私钥,容器内路径
+# 可观测性:三信号(trace/metrics/logs)推 OTLP Collector
+# 生产要真出图,需另起 deploy/docker-compose.observability.yml,并把 otlp_endpoint 指向它的 Collector
+observability:
+  enabled: false                        # 生产默认关:依赖 Collector,未部署观测栈时保持 false 保证主链路可跑
+  service_name: "echat-backend"
+  otlp_endpoint: "otel-collector:4317"  # OTLP gRPC 端点,指向观测栈 Collector 的容器名:端口
+  trace_sample_rate: 0.1                # 生产建议降采样,dev 用 1.0
+  capture_content: false                # 生产写死 false:对话内容不入 span
+  metrics_export_interval: "15s"
+  logs_enabled: true                    # 日志推 OTLP Logs 到 Loki,落盘始终保留
+  logs_min_level: "warn"                # 生产默认 warn,dev 可 info
+  logs_export_interval: "5s"
