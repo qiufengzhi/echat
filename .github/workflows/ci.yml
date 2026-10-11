@@ -364,6 +364,36 @@ jobs:
           script_stop: true # 远端命令一旦失败，立刻终止步骤。
           script: mkdir -p "${{ secrets.DEPLOY_PATH }}/nginx" "${{ secrets.DEPLOY_PATH }}/backend" # 创建部署目录（含迁移目录父级），避免后续上传失败。
 
+      - name: Remove miscreated mount directories # 清掉 Docker 对缺失挂载源自动建出的目录，否则后续 scp 会把文件送进目录里
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }} # 目标服务器地址。
+          username: ${{ secrets.DEPLOY_USER }} # SSH 登录用户名。
+          password: ${{ secrets.DEPLOY_PASSWORD }} # SSH 登录密码。
+          port: ${{ secrets.DEPLOY_PORT || '22' }} # SSH 端口。
+          script_stop: true # 远端命令一旦失败，立刻终止步骤。
+          script: |
+            set -eu # 遇到未定义变量或命令失败时立即退出。
+            cd "${{ secrets.DEPLOY_PATH }}" # 进入服务器上的部署目录。
+
+            # 只处理「本该是文件却成了目录」的精确路径，且必须先判 -d 再删，正常文件不受影响。
+            # 为什么必须清：scp 遇到已存在的同名目录时，会把文件写进那个目录里
+            # （变成 otel/loki-config.yaml/loki-config.yaml），compose 仍把目录挂到容器内的
+            # 目标文件上，故障会一直复现。先删再上传才能真正恢复。
+            for d in otel/collector-config.yaml otel/tempo.yaml otel/loki-config.yaml \
+                     prometheus/prometheus.yml \
+                     grafana/provisioning grafana/dashboards \
+                     backend/config.yaml agent/config.yaml; do
+              if [ -d "$d" ]; then
+                echo "WARN: $d 是目录（本应是文件/由上次挂载失败留下），删除以恢复挂载"
+                rm -rf "$d"
+              fi
+            done
+
+            # 兜底：任何名字带扩展名却是目录的路径一并清掉（同样只删目录，不动文件）
+            find . -mindepth 1 -maxdepth 3 -type d \( -name '*.yaml' -o -name '*.yml' -o -name '*.conf' \) \
+              -exec sh -c 'echo "WARN: 清理误建目录 $1"; rm -rf "$1"' _ {} \; || true
+
       - name: Upload production compose file # 把生产 compose 文件和 HTTPS 网关配置上传到服务器部署目录。
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -398,6 +428,76 @@ jobs:
           # 幂等退出 0、后端 store.Migrate 却因漂移 FATAL——2026-09-20 线上故障即此。
           strip_components: 1
           overwrite: true # 每次部署覆盖为仓库当前版本。
+
+      - name: Upload observability configs # 上传可观测性栈配置：otel / prometheus / grafana
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }} # 目标服务器地址。
+          username: ${{ secrets.DEPLOY_USER }} # SSH 登录用户名。
+          password: ${{ secrets.DEPLOY_PASSWORD }} # SSH 登录密码。
+          port: ${{ secrets.DEPLOY_PORT || '22' }} # SSH 端口。
+          # 必须与 docker-compose.prod.yml 里这些只读挂载逐条对应：
+          #   otel-collector  ./otel/collector-config.yaml
+          #   tempo           ./otel/tempo.yaml
+          #   loki            ./otel/loki-config.yaml
+          #   prometheus      ./prometheus/prometheus.yml
+          #   grafana         ./grafana/provisioning  ./grafana/dashboards
+          # 为什么必须单独上传：宿主机侧的挂载源缺失时 Docker 不会报错，而是静默把它
+          # 建成「目录」，再把这个目录往容器内的目标文件上 bind 挂载，容器创建阶段即失败：
+          #   OCI runtime create failed: ... not a directory: Are you trying to mount
+          #   a directory onto a file (or vice-versa)?
+          # 2026-10-10 线上 loki 起不来即是此因：此前只上传了 compose 与 nginx 配置，
+          # deploy/otel 等目录从未上过服务器。
+          source: "deploy/otel,deploy/prometheus,deploy/grafana"
+          target: ${{ secrets.DEPLOY_PATH }} # 落到 <部署目录>/otel、<部署目录>/prometheus、<部署目录>/grafana
+          strip_components: 1 # 去掉本地 deploy/ 层级，与 compose 里 ./otel/... 的相对路径对齐
+          overwrite: true # 每次部署覆盖为仓库当前版本。
+
+      - name: Verify deployment files # up 之前自检宿主机侧配置文件，把缺失/误建成目录挡在部署前
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }} # 目标服务器地址。
+          username: ${{ secrets.DEPLOY_USER }} # SSH 登录用户名。
+          password: ${{ secrets.DEPLOY_PASSWORD }} # SSH 登录密码。
+          port: ${{ secrets.DEPLOY_PORT || '22' }} # SSH 端口。
+          script_stop: true # 远端命令一旦失败，立刻终止步骤。
+          script: |
+            set -eu # 遇到未定义变量或命令失败时立即退出。
+            cd "${{ secrets.DEPLOY_PATH }}" # 进入服务器上的部署目录。
+
+            # 1) 名字带扩展名却是目录：几乎都是 Docker 对「缺失的挂载源」自动 mkdir 出来的。
+            #    这类目录一旦生成，后续 scp/覆盖也写不进同名文件，必须先 rm -rf 才能恢复。
+            bad=$(find . -mindepth 1 -maxdepth 3 -type d \( -name '*.yaml' -o -name '*.yml' -o -name '*.conf' \) || true)
+            if [ -n "$bad" ]; then
+              echo "ERROR: 以下路径是目录，本应是文件（多为 Docker 对缺失的挂载源自动创建）："
+              echo "$bad"
+              echo "处理办法：先在服务器上 rm -rf 这些目录，再重跑本次部署。"
+              exit 1
+            fi
+
+            # 2) 必须由 CI 上传的文件：少任何一个，对应容器都会在 mount 阶段起不来。
+            for f in docker-compose.prod.yml nginx/gateway.prod.conf \
+                     otel/collector-config.yaml otel/tempo.yaml otel/loki-config.yaml \
+                     prometheus/prometheus.yml \
+                     grafana/provisioning/datasources/datasources.yml \
+                     grafana/provisioning/dashboards/dashboards.yml \
+                     grafana/dashboards/latency-budget.json \
+                     backend/migrations/atlas.sum; do
+              if [ ! -f "$f" ]; then
+                echo "ERROR: 部署目录缺少文件 $f（CI 上传步骤未覆盖到？）"
+                exit 1
+              fi
+            done
+
+            # 3) 密钥类配置不入 git，由运维在服务器上手工维护，缺失只告警不阻断：
+            #    它们同样是挂载源，缺失也会被 Docker 建成目录，但补齐属于运维动作而非 CI 动作。
+            for f in backend/config.yaml agent/config.yaml; do
+              if [ ! -f "$f" ]; then
+                echo "WARN: $f 不存在（含密钥、不入 git，需手工放置），对应容器会因挂载异常起不来"
+              fi
+            done
+
+            echo "部署文件自检通过"
 
       - name: Pull and restart services # 在服务器上登录 ACR、拉镜像并重启所有服务。
         uses: appleboy/ssh-action@v1.0.3
