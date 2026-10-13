@@ -1,115 +1,52 @@
-# eChat 本地开发环境 Docker Compose
+# eChat 原生开发叠加层（在共享基础设施 base 之上）
 #
-# 当前起 PostgreSQL + NATS(JetStream) + Redis + SpiceDB（纯基础设施，后端二进制原生跑，连 127.0.0.1）
-# 启动：docker compose -f deploy/docker-compose.dev.yml up -d
-# 迁移：cd backend && go run . migrate（迁移 SQL 已内嵌后端镜像，方案 A，不再用 atlas 容器）
-# 端口避开生产栈占用的 8080/5432，PostgreSQL 用 5433，NATS 用 4222，Redis 用 6379，SpiceDB gRPC 用 50051
+# 只做两件事：把基础设施端口暴露到宿主、固定开发库名与数据卷。
+# 业务进程（backend / agent）在宿主机原生跑，直连 127.0.0.1。
+#
+# 启动：docker compose -f deploy/docker-compose.base.yml -f deploy/docker-compose.dev.yml up -d
+# 迁移：cd backend && go run . migrate（迁移 SQL 已内嵌后端二进制，方案 A，不用 atlas 容器）
+# 端口避开生产栈：PostgreSQL 5433、NATS 4222/8222、Redis 6379、SpiceDB gRPC 50051
+name: echat-dev
 
 services:
   postgres:
     container_name: echat-dev-postgres
-    image: postgres:16-alpine
-    restart: unless-stopped
     environment:
-      POSTGRES_USER: echat        # 开发库用户
-      POSTGRES_PASSWORD: echat    # 开发库密码，仅本地开发，生产以环境变量覆盖
-      POSTGRES_DB: echat_dev      # 开发库名
-    ports:
-      - "5433:5432"               # 宿主机 5433 -> 容器 5432，避开生产默认 5432
-    volumes:
-      - echat_dev_pgdata:/var/lib/postgresql/data
+      POSTGRES_DB: echat_dev # 开发库名，与 backend/config.yaml 的 database.name 一致
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U echat -d echat_dev"]
+      test: ["CMD-SHELL", "pg_isready -U echat -d echat_dev"] # 库名随本层覆盖，须同步
       interval: 5s
       timeout: 3s
       retries: 10
+    ports:
+      - "5433:5432" # 宿主 5433 避开生产默认 5432
 
   nats:
     container_name: echat-dev-nats
-    image: nats:2-alpine
-    restart: unless-stopped
-    command: ["-js", "-m", "8222", "-sd", "/data"]  # 开启 JetStream + 8222 监控；-sd 指定事件流落盘到 /data 卷（默认 /tmp，重建即丢）
     ports:
-      - "4222:4222"                 # NATS 客户端连接（relay 发布 / 消费者订阅）
-      - "8222:8222"                 # JetStream 监控与健康检查
-    volumes:
-      - echat_dev_natsdata:/data    # 事件流持久化目录
+      - "4222:4222" # NATS 客户端连接
+      - "8222:8222" # JetStream 监控与健康检查
 
   redis:
     container_name: echat-dev-redis
-    image: docker.m.daocloud.io/library/redis:7-alpine  # 本机走 DaoCloud 加速器路径拉取，Docker Hub 直连不可达
-    restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]  # 开启 AOF 持久化，重启不丢热状态
     ports:
-      - "6379:6379"                 # 登录限流 / 在线热状态读写
-    volumes:
-      - echat_dev_redisdata:/data   # 数据 AOF 持久化目录
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+      - "6379:6379" # 登录限流 / 在线热状态读写
 
-  # 迁移：后端已改为镜像/二进制内嵌迁移 SQL（方案 A），本地开发不再需要 atlas CLI 与迁移目录挂载。
-  # 本地原生跑后端时执行：cd backend && go run . migrate（config.yaml 的 database 段直连 127.0.0.1:5433）
-
-  # SpiceDB(Zanzibar) 对象级授权服务：关系元组存储复用 Postgres（echat_spicedb 库），不加新存储
-  # 建库一次性服务：SpiceDB 元数据库必须先存在，migrate 才能连上建表
-  # 为什么不能只靠 initdb.d：postgres 官方镜像只在 PGDATA 为空（首次建卷）时执行
-  # /docker-entrypoint-initdb.d/*.sh，卷已存在时整段跳过，于是 echat_spicedb 建不出来。
-  # 这里每次 up 都用 psql 幂等补建：库在就跳过，不在就 CREATE，新卷老卷都成立。
   spicedb-db-init:
     container_name: echat-dev-spicedb-db-init
-    image: postgres:16-alpine   # 复用 postgres 镜像自带的 psql 客户端，不引入新依赖
-    restart: "no"               # 一次性任务，成功即退出
-    entrypoint: ["/bin/sh", "-c"] # 覆盖 postgres 启动入口，只执行下面的 shell 片段
-    command:
-      - |
-        psql "postgresql://echat:echat@postgres:5432/postgres" \
-          -tAc "SELECT 1 FROM pg_database WHERE datname='echat_spicedb'" | grep -q 1 \
-          || psql "postgresql://echat:echat@postgres:5432/postgres" \
-             -v ON_ERROR_STOP=1 -c "CREATE DATABASE echat_spicedb OWNER echat"
-    depends_on:
-      postgres:
-        condition: service_healthy # 等 Postgres 真正可连再建库
 
-  spicedb-migrate: # 一次性迁移：serve 不自动建表，先 migrate head 建好关系元组表
+  spicedb-migrate:
     container_name: echat-dev-spicedb-migrate
-    # 与生产保持同一版本：迁移是单向的，只能向前不能降级。
-    # 本地库若还停在 v1.18.0，换成 v1.56.2 会自动"向前迁移"补齐（安全）；
-    # 反过来（新库 + 老镜像）会报 "unable to find migration for revision: "。
-    image: ghcr.io/authzed/spicedb:v1.56.2
-    restart: "no"
-    command: ["migrate", "head"]
-    environment:
-      SPICEDB_DATASTORE_ENGINE: postgres
-      SPICEDB_DATASTORE_CONN_URI: postgres://echat:echat@postgres:5432/echat_spicedb?sslmode=disable
-    depends_on:
-      postgres:
-        condition: service_healthy
-      spicedb-db-init:
-        condition: service_completed_successfully # echat_spicedb 库由 spicedb-db-init 幂等补建，先保证库存在再迁移
 
   spicedb:
     container_name: echat-dev-spicedb
-    image: ghcr.io/authzed/spicedb:v1.56.2 # 与 spicedb-migrate 同版本，serve 前会校验库内 revision
-    restart: unless-stopped
-    command: ["serve"]
     ports:
-      - "50051:50051"                 # gRPC 鉴权接口（control-plane 权限裁决）
-    environment:
-      SPICEDB_GRPC_PRESHARED_KEY: dev-secret-local  # 与 config.yaml 默认一致
-      SPICEDB_DATASTORE_ENGINE: postgres            # 复用同一 Postgres，元组表由 spicedb-migrate 迁移
-      SPICEDB_DATASTORE_CONN_URI: postgres://echat:echat@postgres:5432/echat_spicedb?sslmode=disable
-      SPICEDB_DATASTORE_REVISION_QUANTIZATION: 1s   # 降低可读版本推进粒度，控制面强一致读等待上限
-      SPICEDB_LOG_LEVEL: info
-    depends_on:
-      postgres:
-        condition: service_healthy
-      spicedb-migrate:
-        condition: service_completed_successfully # 元组表迁移落库后才 serve，否则 WriteSchema 报 datastore 内部错误
+      - "50051:50051" # gRPC 鉴权接口
 
 volumes:
-  echat_dev_pgdata:
-  echat_dev_natsdata:
-  echat_dev_redisdata:
+  pgdata:
+    name: echat_dev_pgdata # 固定卷名，复用既有开发数据
+  natsdata:
+    name: echat_dev_natsdata
+  redisdata:
+    name: echat_dev_redisdata

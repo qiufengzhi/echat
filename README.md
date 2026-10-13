@@ -37,10 +37,10 @@ echat/
 
 ```bash
 # 1. 起基础设施（PostgreSQL + NATS + Redis + SpiceDB）
-docker compose -f deploy/docker-compose.dev.yml up -d
+docker compose -f deploy/docker-compose.base.yml -f deploy/docker-compose.dev.yml up -d
 
-# 2. 应用数据库迁移（首次或迁移文件变更后执行）
-docker compose -f deploy/docker-compose.dev.yml run --rm migrate
+# 2. 应用数据库迁移（首次或迁移文件变更后执行；迁移 SQL 已内嵌后端二进制）
+(cd backend && go run . migrate)
 
 # 3. Python AI 服务（按需启动）
 cd agent && python -m agent.cmd.main --config agent/config.yaml &      # LLM Agent

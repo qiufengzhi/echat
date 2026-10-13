@@ -1,0 +1,177 @@
+# eChat 共享基础设施（dev / local 复用一份，消除重复）
+#
+# 只含基础设施：PostgreSQL + NATS(JetStream) + Redis + SpiceDB。
+# 不含 ports、不含业务服务——端口映射与业务进程由叠加层决定：
+#   原生开发：docker compose -f deploy/docker-compose.base.yml -f deploy/docker-compose.dev.yml up -d
+#   全栈容器：docker compose -f deploy/docker-compose.base.yml -f deploy/docker-compose.local.yml up -d --build
+#
+# 库名由叠加层覆盖（dev=echat_dev / local=echat），卷名由叠加层固定以复用既有数据卷。
+
+services:
+  postgres: # 持久层：账号/会话 + outbox_events + 房间事实表，后端全部读写入口
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-echat} # 连接用户名
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-echat} # 连接密码（本地固定 echat）
+      POSTGRES_DB: ${POSTGRES_DB:-echat} # 默认库名，叠加层按环境覆盖
+    volumes:
+      - pgdata:/var/lib/postgresql/data # 数据持久化
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-echat} -d ${POSTGRES_DB:-echat}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nats: # 事件骨干：事务性 Outbox 向 JetStream 投递的落点
+    image: nats:2-alpine
+    restart: unless-stopped
+    command: ["-js", "-m", "8222", "-sd", "/data"] # -sd 指定事件流落盘到 /data 卷（默认 /tmp，重建即丢）
+    volumes:
+      - natsdata:/data
+
+  redis: # 热状态与限流共享存储：登录限流计数 + 在线成员心跳 ZSET
+    image: docker.m.daocloud.io/library/redis:7-alpine # 本地走 DaoCloud 加速路径拉取
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"] # 本地无密码，与 backend config.yaml 一致
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # 建库一次性服务：SpiceDB 元数据库必须先存在
+  # 为什么不能只靠 initdb.d：postgres 官方镜像只在 PGDATA 为空（首次建卷）时执行
+  # /docker-entrypoint-initdb.d/*.sh，卷已存在时整段跳过，echat_spicedb 建不出来。
+  # 这里每次 up 都用 psql 幂等补建：库在就跳过，不在就 CREATE，新卷老卷都成立。
+  spicedb-db-init:
+    image: postgres:16-alpine # 复用 postgres 镜像自带的 psql 客户端
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        psql "postgresql://${POSTGRES_USER:-echat}:${POSTGRES_PASSWORD:-echat}@postgres:5432/postgres" \
+          -tAc "SELECT 1 FROM pg_database WHERE datname='echat_spicedb'" | grep -q 1 \
+          || psql "postgresql://${POSTGRES_USER:-echat}:${POSTGRES_PASSWORD:-echat}@postgres:5432/postgres" \
+             -v ON_ERROR_STOP=1 -c "CREATE DATABASE echat_spicedb OWNER ${POSTGRES_USER:-echat}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  spicedb-migrate: # 一次性迁移：serve 不自动建表，先 migrate head 建好关系元组表
+    image: ghcr.io/authzed/spicedb:v1.56.2 # 版本必须与 spicedb 一致：迁移单向，只能向前不能降级
+    restart: "no"
+    command: ["migrate", "head"]
+    environment:
+      SPICEDB_DATASTORE_ENGINE: postgres
+      SPICEDB_DATASTORE_CONN_URI: postgres://${POSTGRES_USER:-echat}:${POSTGRES_PASSWORD:-echat}@postgres:5432/echat_spicedb?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+      spicedb-db-init:
+        condition: service_completed_successfully # echat_spicedb 库幂等补建后再迁移
+
+  spicedb: # 对象级授权（Zanzibar）：关系元组复用 postgres 的 echat_spicedb 库
+    image: ghcr.io/authzed/spicedb:v1.56.2 # 与 spicedb-migrate 同版本
+    restart: unless-stopped
+    command: ["serve"]
+    environment:
+      SPICEDB_GRPC_PRESHARED_KEY: dev-secret-local # 与 backend config.yaml 的 spicedb.preshared_key 一致
+      SPICEDB_DATASTORE_ENGINE: postgres
+      SPICEDB_DATASTORE_CONN_URI: postgres://${POSTGRES_USER:-echat}:${POSTGRES_PASSWORD:-echat}@postgres:5432/echat_spicedb?sslmode=disable
+      SPICEDB_DATASTORE_REVISION_QUANTIZATION: 1s # 降低可读版本推进粒度，控制面强一致读等待上限
+      SPICEDB_LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      spicedb-migrate:
+        condition: service_completed_successfully # 元组表迁移落库后才 serve
+
+  # ===== 可观测性栈（profile: observability，按需启动）=====
+  # 用法：docker compose -f deploy/docker-compose.base.yml -f deploy/docker-compose.dev.yml --profile observability up -d
+  # 为什么用 profile 而非默认常开：日常原生开发不需要多起这些容器（见 designs/observability-plan.md）
+  # 端口：4317/4318(otlp) 8889(collector prometheus) 9090(prometheus) 3200(tempo) 3100(loki) 3000(grafana)
+  # 配置来自配置仓（多项目单一份），以 OBS_DIR 指向配置仓克隆，默认 app 仓上级的 deploy-config/projects/echat
+  otel-collector:
+    profiles: ["observability"]
+    image: docker.m.daocloud.io/otel/opentelemetry-collector-contrib:latest
+    command: ["--config", "/etc/otel/config.yaml"]
+    volumes:
+      - ${OBS_DIR:-../../deploy-config/projects/echat}/otel/collector-config.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8889:8889"
+    depends_on:
+      - tempo
+      - loki
+    restart: unless-stopped
+
+  tempo:
+    profiles: ["observability"]
+    image: docker.m.daocloud.io/grafana/tempo:latest
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ${OBS_DIR:-../../deploy-config/projects/echat}/otel/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200"
+    restart: unless-stopped
+
+  prometheus:
+    profiles: ["observability"]
+    image: docker.m.daocloud.io/prom/prometheus:latest
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=1d"]
+    volumes:
+      - ${OBS_DIR:-../../deploy-config/projects/echat}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  loki:
+    profiles: ["observability"]
+    image: docker.m.daocloud.io/grafana/loki:latest
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - ${OBS_DIR:-../../deploy-config/projects/echat}/otel/loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+    restart: unless-stopped
+
+  grafana:
+    profiles: ["observability"]
+    image: docker.m.daocloud.io/grafana/grafana:latest
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ${OBS_DIR:-../../deploy-config/projects/echat}/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ${OBS_DIR:-../../deploy-config/projects/echat}/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    depends_on:
+      - otel-collector
+
+  # 资源层：宿主机/容器 CPU、内存、网络指标（Prometheus 直接抓，不经 Collector）
+  node-exporter:
+    profiles: ["observability"]
+    image: docker.m.daocloud.io/prom/node-exporter:latest
+    command: ["--path.rootfs=/host"]
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    ports:
+      - "9100:9100"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  natsdata:
+  redisdata:
+  tempo-data:
+  loki-data:

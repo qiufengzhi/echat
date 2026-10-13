@@ -89,7 +89,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		`SELECT version FROM `+revisionsTable+` WHERE type = 2 ORDER BY executed_at DESC LIMIT 1`).Scan(&applied)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return fmt.Errorf("数据库尚未应用版本化迁移——请先运行: docker compose -f deploy/docker-compose.dev.yml run --rm migrate")
+		return fmt.Errorf("数据库尚未应用版本化迁移——请先运行: cd backend && go run . migrate")
 	case err != nil:
 		return fmt.Errorf("读取迁移日记表 %s: %w", revisionsTable, err)
 	}

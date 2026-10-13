@@ -1,126 +1,105 @@
 # 部署说明
 
-这套部署方案使用 GitHub Actions 完成以下流程：
+部署分两块：
 
-1. 校验前端是否可以构建、后端是否可以通过测试。
-2. 分别构建前端、后端和 Agent 三个 Docker 镜像。
-3. 把镜像**推送到 GHCR**（主构建目标），再从 GHCR 同步到**阿里云 ACR**（国内服务器拉取用，尽力而为）。
-4. 通过 SSH 登录服务器，上传生产环境 `compose` 文件和 Nginx HTTPS 网关配置。
-5. 在服务器上**优先从 ACR 拉取镜像**并执行 `docker compose up -d`；ACR 不可用时自动 fallback 到 GHCR 拉取。
+- **CI/CD 与镜像构建** —— 本仓 `.github/workflows/ci.yml`
+- **线上编排与配置** —— 独立配置仓 `deploy-config`（生产 compose / nginx / otel / grafana / 部署脚本 / 加密配置）
 
-## 仓库内相关文件
+## CI/CD 流程（本仓 ci.yml）
 
-- `.github/workflows/ci.yml`
-  负责 CI/CD 工作流：校验、构建镜像、推送镜像、部署服务器。
-- `deploy/docker-compose.prod.yml`
-  负责服务器端的网关、前端、后端与基础设施（PostgreSQL / NATS / Redis / SpiceDB）容器编排。
-- `deploy/nginx/gateway.prod.conf`
-  负责最外层 Nginx HTTPS 入口配置。
+1. 校验前端可构建、后端测试通过（`go test -race`）。
+2. 分别构建前端 / 后端 / Agent 三个镜像。
+3. 镜像推 **GHCR**（主目标），再从 GHCR 尽力同步到**阿里云 ACR**（国内拉取加速）。
+4. **一次 SSH** 到服务器，执行配置仓内的 `projects/echat/deploy.sh`；该脚本在服务器本地完成：`git pull` 配置仓 → SOPS 解密 prod 配置 → 按 registry 拉镜像 → 跑内嵌迁移 → `docker compose up -d`。
+
+> 为什么收敛成一次 SSH：旧链路要 7 次跨境建连（每次 3.5~5 分钟），是部署超时的根因。详见 `docs/deploy-config-repo.md`。
+
+## 本仓相关文件
+
+- `.github/workflows/ci.yml` —— 校验 / 构建 / 推镜像 / 触发部署
+- `deploy/docker-compose.base.yml` —— 共享基础设施（PostgreSQL + NATS + Redis + SpiceDB），dev / local 复用
+- `deploy/docker-compose.dev.yml` —— 原生开发叠加层（只暴露基础设施端口，业务进程在宿主机原生跑）
+- `deploy/docker-compose.local.yml` —— 全栈容器叠加层（镜像化 backend / frontend / agent，模拟生产拓扑）
+- `deploy/local-up.ps1` / `deploy/build-local.ps1` —— 本地全栈容器的便捷脚本
+- 生产编排与配置**不在本仓**，在配置仓 `deploy-config`：`projects/echat/{docker-compose.prod.yml, nginx, otel, prometheus, grafana, deploy.sh, envs/prod}`
+
+## 本地开发
+
+基础设施共享一份 `base`，按需叠加：
+
+```bash
+# 原生开发（业务进程宿主机跑，连 127.0.0.1）
+docker compose -f deploy/docker-compose.base.yml -f deploy/docker-compose.dev.yml up -d
+(cd backend && go run . migrate)      # 迁移 SQL 已内嵌后端二进制
+(cd backend && go run .)              # 后端
+(cd agent && python -m agent.cmd.main --config agent/config.yaml)   # Agent
+(cd frontend && npm run dev)          # 前端
+
+# 全栈容器（镜像化，模拟生产）
+.\deploy\local-up.ps1                 # 内部已拼好 base + local
+
+# 附带可观测栈（profile 按需）
+docker compose -f deploy/docker-compose.base.yml -f deploy/docker-compose.dev.yml --profile observability up -d
+```
+
+端口：dev 用 5433 / 4222 / 6379 / 50051；local 只暴露前端 8081、后端 8082、QUIC 4433、媒体 50000-50100。
 
 ## 服务器准备
 
-部署机至少需要提前安装以下组件：
+部署机需要：
 
-- Docker
-- Docker Compose v2 插件；如果服务器只有旧版 `docker-compose`，部署脚本会用先停旧容器再新建的方式兼容。
-- 一个可以通过 SSH 登录的用户
+- Docker + Docker Compose v2 插件
+- 一个可 SSH 登录的用户
+- `git`、`age`、`sops`（由配置仓 `scripts/bootstrap.sh` 安装）
 
-建议服务器目录结构如下：
+服务器目录结构（由 `bootstrap.sh` 建立）：
 
 ```text
-/srv/echat/
-  docker-compose.prod.yml
-  .env                       # CI 自动写入四个镜像名变量，首次部署 touch 占位
-  backend/
-    config.yaml              # 后端配置，手动维护和更新
-    migrations/              # CI 每次部署自动覆盖上传（含 atlas.sum），勿手工改动
-  agent/
-    config.yaml              # Agent LLM 配置
-  nginx/
-    gateway.prod.conf
+/srv/echat/config/        # 配置仓 checkout（sparse: projects/echat），无状态、可重 clone
+/etc/echat/               # 树外，chmod 600
+  keys/age.key            # age 私钥，唯一根信任，由运维从离线备份放入
+  backend.config.yaml     # deploy.sh 从 envs/prod 解密落到此处
+  agent.config.yaml
+  .env                    # 基础设施凭据 + 镜像变量
 ```
 
 ## GitHub Secrets 配置
 
-需要在 GitHub 仓库的 `Settings -> Secrets and variables -> Actions` 中配置这些 Secrets：
+本仓 `Settings -> Secrets and variables -> Actions`：
 
 **部署相关：**
 
-- `DEPLOY_HOST`
-  服务器 IP 或域名。
-- `DEPLOY_PORT`
-  SSH 端口，通常是 `22`。
-- `DEPLOY_USER`
-  SSH 登录用户名。
-- `DEPLOY_PASSWORD`
-  用于登录服务器的 SSH 密码。
-- `DEPLOY_PATH`
-  服务器上的部署目录，例如 `/opt/echat`。
+- `DEPLOY_HOST` / `DEPLOY_PORT` / `DEPLOY_USER` / `DEPLOY_PASSWORD` —— SSH 目标与凭据
+- `DEPLOY_CONFIG_PATH`（可选）—— 配置仓 checkout 路径，默认 `/srv/echat/config`
 
-**ACR（阿里云容器镜像服务）相关：**
+**ACR 相关：**
 
-- `ACR_USERNAME`
-  ACR 登录用户名（在 ACR 控制台「访问凭证」中查看）。
-- `ACR_PASSWORD`
-  ACR 登录密码（在 ACR 控制台设置固定密码）。
+- `ACR_USERNAME` / `ACR_PASSWORD` —— 阿里云容器镜像服务访问凭证
 
-> ACR 仓库地址已写死在 `ci.yml` 中（`crpi-cqc86h0ovlhhtcpq.cn-hangzhou.personal.cr.aliyuncs.com/axjj`），无需单独配置 Secret。
-
-**GHCR 认证：无需额外配置**
-
-工作流推送和拉取 GHCR 使用的是 GitHub Actions 内置的 `GITHUB_TOKEN` + `github.actor`，只要 workflow 中声明了 `packages: write` 权限即可，**不需要**手动创建 `GHCR_DEPLOY_USERNAME` / `GHCR_DEPLOY_TOKEN` 这类 Secret。
-
-## GHCR 权限要求
-
-工作流推送镜像到 GHCR 使用的是 GitHub Actions 自带的 `GITHUB_TOKEN`，因此工作流文件里已经开启了：
-
-- `packages: write`
-
-服务器部署**优先从 ACR 拉取**（国内速度快），但 ACR 不可用时仍有 GHCR fallback 兜底，因此仓库需保持 `packages: write` 权限。
+> ACR 仓库地址已写死在 `ci.yml`（`crpi-cqc86h0ovlhhtcpq.cn-hangzhou.personal.cr.aliyuncs.com/axjj`）。
+> GHCR 用 Actions 内置 `GITHUB_TOKEN` + `github.actor`，无需额外 Secret（workflow 已声明 `packages: write`）。
+> **配置仓另需自己的只读 Deploy Key**，供服务器 `git clone`（见配置仓 README）。
 
 ## 阿里云 ACR 准备
 
-服务器**优先从 ACR 拉取**镜像（国内速度快），ACR 不可用时自动 fallback 到 GHCR。ACR 作为加速通道非必需但强烈推荐。
+服务器**优先从 ACR 拉取**（国内快），ACR 不可用时自动 fallback GHCR。ACR 非必需但强烈推荐。
 
-1. 登录[阿里云容器镜像服务](https://cr.console.aliyun.com/)，开通**个人版**（免费）。
-2. 创建命名空间 `axjj`（必须叫这个，CI 里已写死 `crpi-cqc86h0ovlhhtcpq.cn-hangzhou.personal.cr.aliyuncs.com/axjj`）。
-3. 在 ACR 控制台「访问凭证」中设置**固定密码**。
-4. 在 GitHub Secrets 中配置 `ACR_USERNAME` 和 `ACR_PASSWORD`。
-5. CI 构建时自动推送到 GHCR，再从 GHCR 同步到 ACR（尽力而为，ACR 同步失败不影响整体流程）。
+1. 开通[阿里云容器镜像服务](https://cr.console.aliyun.com/)个人版（免费）。
+2. 创建命名空间 `axjj`（CI 已写死该命名空间）。
+3. 设置**固定密码**，配置到本仓 Secrets 的 `ACR_USERNAME` / `ACR_PASSWORD`。
 
 ## 触发方式
 
-以下情况会自动触发部署：
-
-- 推送到 `main`
-- 修改了前端、后端、Agent、部署配置或工作流文件
-
-也支持在 GitHub Actions 页面手动点击 `Run workflow` 触发。
+- 推送到 `main`，且改动命中 `backend/**`、`frontend/**`、`agent/**` 或 workflow 自身
+- GitHub Actions 页面手动 `Run workflow`
 
 ## 镜像命名规则
 
-工作流会自动生成两套镜像名：
-
-**GHCR（海外 / Actions 内部）：**
-- `ghcr.io/<owner>/<repo>-backend`
-- `ghcr.io/<owner>/<repo>-frontend`
-- `ghcr.io/<owner>/<repo>-agent`
-
-**ACR（国内服务器拉取）：**
-- `crpi-cqc86h0ovlhhtcpq.cn-hangzhou.personal.cr.aliyuncs.com/axjj/<repo>-backend`
-- `crpi-cqc86h0ovlhhtcpq.cn-hangzhou.personal.cr.aliyuncs.com/axjj/<repo>-frontend`
-- `crpi-cqc86h0ovlhhtcpq.cn-hangzhou.personal.cr.aliyuncs.com/axjj/<repo>-agent`
-
-并同时打两个 tag：
-
-- `${GITHUB_SHA}`
-- `latest`
-
-部署时默认使用当前提交对应的 `${GITHUB_SHA}`
+**GHCR：** `ghcr.io/<owner>/<repo>-{backend,frontend,agent}`
+**ACR：** `crpi-.../axjj/{echat-backend,echat-frontend,echat-agent}`
+每个镜像打两个 tag：`${GITHUB_SHA}` 与 `latest`；部署默认用 `${GITHUB_SHA}`。
 
 ## 部署后的访问方式
-
-当前生产 `compose` 配置请求链路为：
 
 ```
 浏览器 ── HTTPS(443) ──► gateway(Nginx) ──► frontend(Nginx) ──► backend:8080
@@ -129,55 +108,60 @@
    └─ WebTransport UDP(4433) ────────────────────► backend(QUIC 信令)
 ```
 
-- **gateway 容器**：对外暴露 `80`/`443`，TLS 终止后 proxy_pass 到前端容器
-- **frontend 容器**：内部 Nginx，反向代理 `/ws` 和 `/api` 到 `backend:8080`
-- **backend 容器**：Go 后端，仅内网暴露 `8080`（HTTP + WebSocket）与 `4433/udp`（WebTransport/QUIC 信令）；对外暴露 `50000-50100/udp` 供浏览器 WebRTC 媒体流直连、`4433/udp` 供 WebTransport 直连；QUIC 握手证书与 gateway 共用一份 Let's Encrypt
-- **agent 容器**：Python LLM Agent，仅内网暴露 `50053`（gRPC），Go 后端直连
-- **redis 容器**：登录限流计数 + 在线成员心跳 ZSET 的共享热状态存储，仅内网暴露 `6379`
-- **spicedb 容器**：对象级授权判定（Zanzibar），关系元组落 PostgreSQL 的 `echat_spicedb` 库，仅内网暴露 `50051`
+- **gateway**：对外 `80`/`443`，TLS 终止后 proxy_pass 到前端容器
+- **frontend**：内部 Nginx，反代 `/ws`、`/api` 到 `backend:8080`
+- **backend**：内网 `8080`（HTTP/WS）+ `4433/udp`（QUIC）；对外 `50000-50100/udp`（WebRTC）、`4433/udp`（WebTransport）
+- **agent**：内网 `50053`（gRPC）
+- **redis / spicedb / postgres / nats**：仅内网
 
-## 首次部署前准备
+## 线上配置与密钥
 
-1. 上传后端配置：以仓库内 `backend/config.yaml.prod.example` 为模板复制到服务器，替换占位符后作为 `backend/config.yaml`
-   > 本文件是后端唯一配置源：连接地址（PostgreSQL / NATS / Redis / SpiceDB / WebTransport）与全部凭据（ASR/TTS 密钥、DB/Redis 密码、SpiceDB 预共享密钥、JWT 签名密钥）都写在这里，模板以 REPLACE 占位；文件不入 git，直接维护在服务器
+线上配置**不入本仓**，由配置仓 `projects/echat/envs/prod/` 以 SOPS 加密存放，`deploy.sh` 在服务器解密到 `/etc/echat/`：
+
+- `backend.config.enc.yaml` → `/etc/echat/backend.config.yaml`（后端唯一配置源：连接地址 + 全部凭据）
+- `agent.config.enc.yaml` → `/etc/echat/agent.config.yaml`
+- `.env.enc` → `/etc/echat/.env`（基础设施凭据；`deploy.sh` 每次覆盖其中的镜像变量）
+
+基础设施容器（postgres / redis / spicedb / grafana）自身的密码经 compose 的 `.env` 变量提供，**后端 `config.yaml` 对应字段须与之一致**，否则连不上或被拒。首次接入与密钥初始化见配置仓 README 与 `scripts/bootstrap.sh`。
+
+## 数据库迁移
+
+迁移 SQL **编译期内嵌进后端二进制**（`backend/migrations/*.sql` + `atlas.sum`，`//go:embed`），服务器不再需要迁移目录，也不再使用 atlas CLI：
+
+- 后端启动期 `store.Migrate` 只做**漂移校验**：比对「二进制内嵌最新版本」与库里 `atlas_schema_revisions` 已应用版本，落后即 FATAL 退出。
+- 真正 apply 由 `./server migrate` 子命令完成（`ariga.io/atlas` Go SDK 从内嵌 `embed.FS` apply），幂等；已最新时视为成功，apply 后按 `store.Migrate` 同口径复核。
+- `deploy.sh` 在 `up -d` 前以一次性 `migrate` 服务（后端镜像 + `command: ["./server","migrate"]`）执行，失败即终止部署。
+
+手工运维：
+
 ```bash
-# 从项目模板复制到服务器，替换所有 REPLACE 占位（jwt_secret / nat_1_to_1_ip / 阿里云与讯飞密钥）
-# database.password / redis.password / spicedb.preshared_key 须与 .env 中给 postgres / redis / spicedb 容器配置的凭据一致
-scp backend/config.yaml.prod.example user@host:/srv/echat/backend/config.yaml
+cd /srv/echat/config/projects/echat
+IMAGE_TAG=<当前tag> BACKEND_IMAGE=<后端镜像> FRONTEND_IMAGE=<前端镜像> AGENT_IMAGE=<agent镜像> \
+ACR_OK=true ACR_REGISTRY=<acr地址> ACR_USERNAME=<用户> ACR_PASSWORD=<密码> ./deploy.sh
 ```
 
-2. 上传 Agent 配置（LLM 密钥等）：
-```bash
-scp agent/config.yaml user@host:/srv/echat/agent/config.yaml
-```
+后端日志若出现 `数据库已应用迁移 <旧> 落后于最新 <新>`，说明所部署镜像落后于库里 schema——用当前镜像 tag 重跑上面的 `deploy.sh` 即可。
 
-3. 创建 `.env` 文件（仅首次部署前需初始化空文件，后续 CI 会自动写入镜像名）：
-```bash
-touch /srv/echat/.env
-```
+## 基础设施两个易踩的点
 
-> ⚠️ **注意**：`.env` 文件由 CI 自动管理，每次部署都会覆盖 `BACKEND_IMAGE`、`FRONTEND_IMAGE`、`AGENT_IMAGE`、`IMAGE_TAG` 四个字段。基础设施容器（postgres / redis / spicedb）的密码经 `${VAR:-默认值}` 从 `.env` 读取（不写则用默认值）；后端 `backend/config.yaml` 中对应字段（`database.password` / `redis.password` / `spicedb.preshared_key`）须与之一致，否则后端连不上或授权校验被拒。ASR 密钥、JWT 签名密钥等其余敏感配置直接写进 `backend/config.yaml`（不入 git），Agent LLM 密钥在 `agent/config.yaml`。
+- **NATS 必须显式 `-sd /data`**：nats-server 未配 `store_dir` 时 JetStream 默认落 `/tmp`，容器重建即丢事件流，`echat_*_natsdata` 卷变空挂（outbox 已投递事件与依赖事件重建的投影一起丢）。base / prod 的 nats 都已带 `-sd /data`。
+- **头像上传要两层 nginx 同时放开请求体上限**：后端允许 5 MiB（`backend/profile/avatar.go` 的 `maxAvatarBytes`），nginx 默认 1 MiB。外层 `nginx/gateway.prod.conf`（配置仓）与前端镜像内 `frontend/nginx.conf` 任一层没设 `client_max_body_size`，请求先被挡成 413。
 
-`docker-compose.prod.yml` 编排基础设施（PostgreSQL + NATS + Redis + SpiceDB）与业务服务（gateway / frontend / backend / agent）；后端连接地址与全部凭据统一在挂载的 `backend/config.yaml`（生产按 `config.yaml.prod.example` 模板准备，填 compose 服务名与 REPLACE 占位），compose 不再给 backend 注入任何环境变量；基础设施容器（postgres / redis / spicedb）自身的密码仍经 compose 的 `.env` 变量提供，后端 config.yaml 对应字段须与之一致。持久卷 `echat_prod_pgdata` / `echat_prod_natsdata` / `echat_prod_redisdata` 承载数据、事件流与热状态；所有基础设施不映射宿主端口，仅容器内部网络访问。SpiceDB 关系元组复用 PostgreSQL，`echat_spicedb` 库由一次性 `spicedb-db-init` 服务幂等创建（库在跳过、不在补建），随后 `spicedb-migrate` 建表。
-
-4. Let's Encrypt 证书获取：
+## Let's Encrypt 证书
 
 ```bash
 certbot certonly --standalone -d echat.qxbnx.cn
 ```
 
-Let's Encrypt 会自动续期，无需额外操作。证书被两处共用：
-- Nginx 网关挂载 `fullchain.pem` / `privkey.pem`（HTTPS 终止，Docker 会在宿主侧解析符号链接后挂真实文件）
-- backend 容器挂载 `live/<domain>` 与 `archive/<domain>` 两个目录（WebTransport/QUIC 握手，前端默认走 `https://echat.qxbnx.cn:4433` 信令）
-  > `live/*.pem` 是指向 `../../archive/<domain>/*.pem` 的相对符号链接，只挂 `live` 会让链接在容器内断链（报 `no such file or directory`），故 archive 必须一起挂
+证书被 gateway（HTTPS 终止）与 backend（WebTransport/QUIC 握手）共用，backend 需同时挂 `live/<domain>` 与 `archive/<domain>`（`live/*.pem` 是相对符号链接，只挂 `live` 会在容器内断链）。
 
-certbot 续期替换私钥后，宿主机上的 nginx 会经 reload 自动生效，但**本项目的 HTTPS 入口是 gateway 容器内的 nginx，宿主机 reload 管不到它**。更隐蔽的是：gateway 与 backend 都是「文件挂载」，容器创建时绑定的是 inode；续期后 `live/` 下的符号链接指向新的 archive 文件，容器内仍读旧 inode，表现为浏览器拿到已过期证书。因此续期后必须重启两个容器让它们重新解析证书：
+续期替换私钥后，**容器读的是旧 inode**，必须重启让其重解析证书：
 
 ```bash
 docker restart echat-gateway echat-backend
 ```
 
-建议挂到 certbot 续期钩子上，避免忘记：
+建议挂到续期钩子：
 
 ```bash
 cat > /etc/letsencrypt/renewal-hooks/deploy/restart-echat.sh <<'EOF'
@@ -187,33 +171,4 @@ EOF
 chmod +x /etc/letsencrypt/renewal-hooks/deploy/restart-echat.sh
 ```
 
-5. 确认服务器端口开放：
-   - 80/tcp（HTTP → HTTPS 重定向）
-   - 443/tcp（HTTPS + WebSocket 信令，WebTransport 不可用时的降级通道）
-   - 4433/udp（WebTransport / QUIC 信令，浏览器直连后端）
-   - 50000-50100/udp（WebRTC SFU 媒体流）
-
-如果服务器只有旧版 `docker-compose`，排查命令可以把上面的 `docker compose` 改成 `docker-compose`。部署时不要直接执行 `docker-compose up -d` 重建旧容器；旧版工具可能读取不到新版镜像元数据里的 `ContainerConfig`，更稳妥的顺序是先 `pull`，再 `down --remove-orphans`，最后 `up -d`。
-
-## 数据库迁移与 schema 漂移
-
-后端启动期只做校验（`store.Migrate`）：拿**二进制内嵌的最新迁移版本**比对库里 `atlas_schema_revisions` 已应用版本，落后就 FATAL 退出。因此每次新增 `backend/migrations/*.sql`，CI 必须先把迁移目录上传到服务器、再由一次性 `migrate` 服务 apply，后端才能起来。
-
-CI 已负责两件事：上传 `backend/migrations`（含 `atlas.sum`，缺失会让 atlas 校验目录哈希失败），以及在 `up -d` 之前显式执行 `docker compose run --rm migrate`。
-
-两步任一失败都会终止部署：`run --rm migrate` 退出码非 0 直接判失败；迁移跑完还会按 `store.Migrate` 同口径比对「目录内最新迁移版本」与库里 `atlas_schema_revisions` 已应用版本，不一致同样判失败。只看退出码不够——atlas 在迁移目录落后时是**幂等退出 0** 的（无事可做即成功），必须复核版本才能发现「服务器目录没更新 / apply 到了别的库」这类静默漂移。
-
-手工运维（排查/救急）时执行：
-
-```bash
-cd /srv/echat
-docker compose --env-file .env -f docker-compose.prod.yml run --rm migrate  # 幂等，可重复执行
-docker compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans
-```
-
-若后端日志出现 `数据库已应用迁移 <旧版本> 落后于最新 <新版本>，schema 漂移`，说明线上迁移目录还是旧的（或迁移没跑到）：先确认服务器 `backend/migrations` 与仓库一致（含 `atlas.sum`），再执行上面两条命令。
-
-## 基础设施两个易踩的点
-
-- **NATS 必须显式指定 `-sd /data`**：nats-server 未配置 `store_dir` 时 JetStream 默认落 `/tmp`，容器重建即丢事件流，`echat_*_natsdata` 卷会变成空挂（outbox 已投递的事件、依赖事件重建的投影读模型一起丢）。三个 compose 的 nats 都已带 `-sd /data`，新增环境时别漏。
-- **头像上传要两层 nginx 同时放开请求体上限**：后端允许 5 MiB（`backend/profile/avatar.go` 的 `maxAvatarBytes`），而 nginx 默认只有 1 MiB。外层 `deploy/nginx/gateway.prod.conf` 与前端镜像内的 `frontend/nginx.conf` 任一层没设 `client_max_body_size`，请求都会先被挡成 413，且返回的是 nginx 的 HTML 错误页而不是后端 JSON，前端拿不到可读的错误信息。
+服务器需开放端口：`80/tcp`、`443/tcp`、`4433/udp`、`50000-50100/udp`。
