@@ -44,18 +44,19 @@ func (p *UserHistoryProjector) Handle(ctx context.Context, ev Event) error {
 
 	switch ev.Type {
 	case events.EventTypeRoomJoined:
-		return p.handleJoined(cctx, ev.Payload, roomID, when)
+		return p.handleJoined(cctx, ev.Payload, roomID, when, ev.Seq)
 	case events.EventTypeRoomLeft:
-		return p.handleLeft(cctx, ev.Payload, roomID, when)
+		return p.handleLeft(cctx, ev.Payload, roomID, when, ev.Seq)
 	case events.EventTypeRoomHostTransferred:
-		return p.handleHostTransferred(cctx, ev.Payload, roomID)
+		return p.handleHostTransferred(cctx, ev.Payload, roomID, ev.Seq)
 	default:
 		return nil
 	}
 }
 
 // handleJoined 加入即 upsert 在场记录：left_at 置空表示在场，角色保持既有（默认 listener）
-func (p *UserHistoryProjector) handleJoined(ctx context.Context, raw json.RawMessage, roomID uuid.UUID, when time.Time) error {
+// last_event_seq 作 LWW 水位：仅当事件业务序号大于行内水位才生效，旧事件晚到不覆盖新状态
+func (p *UserHistoryProjector) handleJoined(ctx context.Context, raw json.RawMessage, roomID uuid.UUID, when time.Time, seq int64) error {
 	var body struct {
 		// RoomCode 房间短码（冗余，查询免 join）
 		RoomCode string `json:"room_code"`
@@ -70,16 +71,17 @@ func (p *UserHistoryProjector) handleJoined(ctx context.Context, raw json.RawMes
 		return nil
 	}
 	_, err = p.pool.Exec(ctx,
-		`INSERT INTO user_room_history (id, user_id, room_id, room_code, joined_at, left_at, role)
-		 VALUES ($1, $2, $3, $4, $5, NULL, $6)
+		`INSERT INTO user_room_history (id, user_id, room_id, room_code, joined_at, left_at, role, last_event_seq)
+		 VALUES ($1, $2, $3, $4, $5, NULL, $6, $7)
 		 ON CONFLICT (user_id, room_id) DO UPDATE
-		   SET room_code = EXCLUDED.room_code, joined_at = EXCLUDED.joined_at, left_at = NULL`,
-		uuid.New(), userID, roomID, body.RoomCode, when, userHistoryRoleListener)
+		   SET room_code = EXCLUDED.room_code, joined_at = EXCLUDED.joined_at, left_at = NULL, last_event_seq = EXCLUDED.last_event_seq
+		   WHERE user_room_history.last_event_seq < EXCLUDED.last_event_seq`,
+		uuid.New(), userID, roomID, body.RoomCode, when, userHistoryRoleListener, seq)
 	return err
 }
 
-// handleLeft 置离开时间：仅当天在场记录生效，重复 left 事件幂等跳过
-func (p *UserHistoryProjector) handleLeft(ctx context.Context, raw json.RawMessage, roomID uuid.UUID, when time.Time) error {
+// handleLeft 置离开时间：当前在场记录生效，last_event_seq 作 LWW 水位，旧事件晚到不覆盖
+func (p *UserHistoryProjector) handleLeft(ctx context.Context, raw json.RawMessage, roomID uuid.UUID, when time.Time, seq int64) error {
 	var body struct {
 		// UserID 离开成员
 		UserID string `json:"user_id"`
@@ -92,13 +94,15 @@ func (p *UserHistoryProjector) handleLeft(ctx context.Context, raw json.RawMessa
 		return nil
 	}
 	_, err = p.pool.Exec(ctx,
-		`UPDATE user_room_history SET left_at = $1 WHERE user_id = $2 AND room_id = $3 AND left_at IS NULL`,
-		when, userID, roomID)
+		`UPDATE user_room_history SET left_at = $1, last_event_seq = $4
+		 WHERE user_id = $2 AND room_id = $3 AND left_at IS NULL AND last_event_seq < $4`,
+		when, userID, roomID, seq)
 	return err
 }
 
-// handleHostTransferred 校正在场角色：原房主转 listener，新房主转 host
-func (p *UserHistoryProjector) handleHostTransferred(ctx context.Context, raw json.RawMessage, roomID uuid.UUID) error {
+// handleHostTransferred 校正在场角色：原房主转 listener，新房主转 host，限在场记录
+// last_event_seq 作 LWW 水位：仅当事件业务序号大于行内水位才生效，旧交接晚到不覆盖新角色
+func (p *UserHistoryProjector) handleHostTransferred(ctx context.Context, raw json.RawMessage, roomID uuid.UUID, seq int64) error {
 	var body struct {
 		// FromUserID 原房主
 		FromUserID string `json:"from_user_id"`
@@ -116,15 +120,17 @@ func (p *UserHistoryProjector) handleHostTransferred(ctx context.Context, raw js
 	// 角色校正限定在场记录（left_at IS NULL），已离场的用户角色不再覆盖
 	if ferr == nil {
 		if _, err := p.pool.Exec(ctx,
-			`UPDATE user_room_history SET role = $1 WHERE user_id = $2 AND room_id = $3 AND left_at IS NULL`,
-			userHistoryRoleListener, fromID, roomID); err != nil {
+			`UPDATE user_room_history SET role = $1, last_event_seq = $4
+			 WHERE user_id = $2 AND room_id = $3 AND left_at IS NULL AND last_event_seq < $4`,
+			userHistoryRoleListener, fromID, roomID, seq); err != nil {
 			return err
 		}
 	}
 	if terr == nil {
 		if _, err := p.pool.Exec(ctx,
-			`UPDATE user_room_history SET role = $1 WHERE user_id = $2 AND room_id = $3 AND left_at IS NULL`,
-			"host", toID, roomID); err != nil {
+			`UPDATE user_room_history SET role = $1, last_event_seq = $4
+			 WHERE user_id = $2 AND room_id = $3 AND left_at IS NULL AND last_event_seq < $4`,
+			"host", toID, roomID, seq); err != nil {
 			return err
 		}
 	}

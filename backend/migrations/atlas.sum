@@ -1,5 +1,6 @@
-h1:6GQVeLrVBKDhzI8OLUIpgiWxlQ+ol1JiMYRBEtIHkkg=
+h1:JZu+tvOCBjSDsjuKXnHgAlO11XcwS8xiHlxpif80wSk=
 20260903_000000_initial.sql h1:qeincK+bGWY3c9Y2kqI3o1IgIJxhg1+yztGbEACL660=
 20260908_000000_user_room_history.sql h1:sFjKI6gBgm6Ymhpaz42CdH+cP7G7I68QNDSpX6EockE=
 20260919_000000_user_preferences.sql h1:y2BP7ayIqmYcGLC57YLZpCLTiObXHRZSgolZ5tl/u3Y=
 20261012_000000_outbox_event_seq.sql h1:fYes1vBMM6Eu2I/UjqZfEmMGw2ElT/8+hI9u8DlWLiM=
+20261013_000000_user_history_watermark.sql h1:tUZv5SGxSzm2uGaLMTP0r/Rqe1wn8BUvRsP1UEdcFRo=
