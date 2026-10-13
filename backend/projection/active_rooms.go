@@ -35,6 +35,7 @@ func NewActiveRoomsProjector(rdb *redis.Client) *ActiveRoomsProjector {
 
 // Handle 按事件类型更新 active_rooms SET
 // 仅处理 room.created / room.closed，其余类型直接返回 nil
+// 写入经 Lua 版本守卫（LWW by seq）条件应用：早于房间水位的事件晚到被拒绝，不复活已关闭房间
 func (p *ActiveRoomsProjector) Handle(ctx context.Context, ev Event) error {
 	var body struct {
 		// RoomCode 房间短码
@@ -46,14 +47,23 @@ func (p *ActiveRoomsProjector) Handle(ctx context.Context, ev Event) error {
 	if body.RoomCode == "" {
 		return nil
 	}
-	cctx, cancel := roomEventCtx(ctx)
-	defer cancel()
+
+	op := ""
 	switch ev.Type {
 	case events.EventTypeRoomCreated:
-		return p.rdb.SAdd(cctx, "active_rooms", body.RoomCode).Err()
+		op = "created"
 	case events.EventTypeRoomClosed:
-		return p.rdb.SRem(cctx, "active_rooms", body.RoomCode).Err()
+		op = "closed"
 	default:
 		return nil
 	}
+
+	cctx, cancel := roomEventCtx(ctx)
+	defer cancel()
+
+	// 版本守卫：较早的 room.created / room.closed 晚到被拒绝，不复活已关闭房间、不清除复开状态
+	_, err := indexApplyScript.Run(cctx, p.rdb,
+		[]string{"active_rooms", indexGuardKey},
+		body.RoomCode, ev.Seq, op).Int()
+	return err
 }

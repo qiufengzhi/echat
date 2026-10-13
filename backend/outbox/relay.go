@@ -61,6 +61,7 @@ type envelope struct {
 	ID          uuid.UUID       `json:"id"`                // 唯一事件 id（= outbox 主键），消费者去重键
 	Type        string          `json:"type"`              // 事件类型，如 user.registered
 	AggregateID string          `json:"aggregate_id"`      // 所属聚合 id（此处为 user_id 字符串）
+	Seq         int64           `json:"seq"`               // 业务序号，写侧单调分配、重投沿用原号，读侧版本守卫坐标
 	OccurredAt  string          `json:"occurred_at"`       // 业务事务时间，RFC3339，非发布/消费时间
 	Payload     json.RawMessage `json:"payload,omitempty"` // 事件载荷，原样透传 outbox.payload
 }
@@ -71,6 +72,7 @@ type claimed struct {
 	Type        string          // 事件类型
 	AggregateID uuid.UUID       // 聚合根 id
 	Subject     string          // JetStream subject
+	Seq         int64           // 业务序号，写侧单调分配，读侧版本守卫坐标
 	Payload     json.RawMessage // 事件载荷
 	OccurredAt  time.Time       // 记账时间
 }
@@ -246,7 +248,7 @@ func (r *Relayer) processBatch(ctx context.Context) error {
 // claimBatch 在事务内锁定并取出至多 cfg.BatchSize 条 pending 事件
 // ctx 链路上下文，tx 当前事务；返回取出的待投递事件切片
 func (r *Relayer) claimBatch(ctx context.Context, tx pgx.Tx) ([]claimed, error) {
-	sql := `SELECT id, event_type, aggregate_id, subject, payload, created_at
+	sql := `SELECT id, event_type, aggregate_id, subject, seq, payload, created_at
 FROM outbox_events
 WHERE status = $1
 ORDER BY created_at
@@ -262,7 +264,7 @@ FOR UPDATE SKIP LOCKED`
 	for rows.Next() {
 		var ev claimed
 		var payload []byte
-		if err := rows.Scan(&ev.ID, &ev.Type, &ev.AggregateID, &ev.Subject, &payload, &ev.OccurredAt); err != nil {
+		if err := rows.Scan(&ev.ID, &ev.Type, &ev.AggregateID, &ev.Subject, &ev.Seq, &payload, &ev.OccurredAt); err != nil {
 			return nil, err
 		}
 		ev.Payload = json.RawMessage(payload)
@@ -278,6 +280,7 @@ func (r *Relayer) publish(ctx context.Context, ev *claimed) error {
 		ID:          ev.ID,
 		Type:        ev.Type,
 		AggregateID: ev.AggregateID.String(),
+		Seq:         ev.Seq,
 		OccurredAt:  ev.OccurredAt.UTC().Format(time.RFC3339Nano),
 		Payload:     ev.Payload,
 	}

@@ -24,6 +24,8 @@ type Event struct {
 	Type string `json:"type"`
 	// AggregateID 聚合根 id 字符串（房间为 rooms.id）
 	AggregateID string `json:"aggregate_id"`
+	// Seq 写侧分配的单调业务序号，同一聚合内递增、事件重投沿用原号，读侧版本守卫坐标
+	Seq int64 `json:"seq"`
 	// OccurredAt 业务事务时间，RFC3339Nano
 	OccurredAt string `json:"occurred_at"`
 	// Payload 事件载荷，各事件键见 room/events 目录

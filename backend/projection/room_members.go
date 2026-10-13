@@ -24,6 +24,7 @@ func NewRoomMembersProjector(rdb *redis.Client) *RoomMembersProjector {
 
 // Handle 按事件类型维护 room:members:{code} HASH
 // 仅处理 room.joined / room.left，其余类型直接返回 nil
+// 写入经 Lua 版本守卫（LWW by seq）条件应用：早于水位的事件晚到被拒绝，不误删已重新加入的成员
 func (p *RoomMembersProjector) Handle(ctx context.Context, ev Event) error {
 	cctx, cancel := roomEventCtx(ctx)
 	defer cancel()
@@ -40,7 +41,9 @@ func (p *RoomMembersProjector) Handle(ctx context.Context, ev Event) error {
 	if base.RoomCode == "" || base.UserID == "" {
 		return nil
 	}
-	key := "room:members:" + base.RoomCode
+
+	op := ""
+	username := ""
 	switch ev.Type {
 	case events.EventTypeRoomJoined:
 		var body struct {
@@ -50,10 +53,18 @@ func (p *RoomMembersProjector) Handle(ctx context.Context, ev Event) error {
 		if err := decodePayload(ev.Payload, &body); err != nil {
 			return err
 		}
-		return p.rdb.HSet(cctx, key, base.UserID, body.Username).Err()
+		op = "join"
+		username = body.Username
 	case events.EventTypeRoomLeft:
-		return p.rdb.HDel(cctx, key, base.UserID).Err()
+		op = "left"
 	default:
 		return nil
 	}
+
+	// 读模型键与水位键分属两个命名空间，独立前缀隔离任意客户端短码构成的歧义
+	// 脚本返回 0 表示事件早于已应用水位、属乱序重投，读模型已是最新状态，按成功处理
+	_, err := rosterApplyScript.Run(cctx, p.rdb,
+		[]string{"room:members:" + base.RoomCode, rosterGuardPrefix + base.RoomCode},
+		base.UserID, ev.Seq, op, username).Int()
+	return err
 }
