@@ -31,7 +31,7 @@ func StartRoomReadModel(ctx context.Context, rdb *redis.Client, pool *pgxpool.Po
 	router.Handle(NewUserHistoryProjector(pool),
 		events.EventTypeRoomJoined, events.EventTypeRoomLeft, events.EventTypeRoomHostTransferred)
 	if az != nil {
-		router.Handle(NewAuthzSyncProjector(az),
+		router.Handle(NewAuthzSyncProjector(rdb, az),
 			events.EventTypeRoomJoined,
 			events.EventTypeRoomLeft,
 			events.EventTypeRoomHostTransferred,
