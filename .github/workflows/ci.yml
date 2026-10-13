@@ -9,7 +9,6 @@ on:
       - "backend/**" # 后端代码变化时触发
       - "frontend/**" # 前端代码变化时触发
       - "agent/**" # Agent gRPC 服务变化时触发
-      - "deploy/**" # 部署配置变化时触发
 
   workflow_dispatch: # 支持在 GitHub 页面上手动点击执行
 
@@ -344,371 +343,40 @@ jobs:
           echo "acr_ok=${acr_ok}" >> "$GITHUB_OUTPUT"
           echo "GHCR all ok: ${ghcr_ok}, ACR all ok: ${acr_ok}"
 
-  deploy: # 镜像推送完成后，通过 SSH 到服务器拉取并重启服务。优先 ACR，不可用时 fallback 到 GHCR。
+  deploy: # 镜像推送完成后，一次 SSH 到服务器触发配置仓内的部署脚本（见 docs/deploy-config-repo.md）
     needs: build-and-push # 依赖镜像构建完成（至少一个 registry 推送成功）。
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') # 仅 main 分支和 tag 触发部署，其他分支不触发。
     runs-on: ubuntu-latest
-    timeout-minutes: 15 # 部署超时兜底。
+    # 本 job 只发一次 SSH，服务器本地完成「拉配置仓 / 解密密钥 / 拉镜像 / 迁移 / 起栈」。
+    # 旧链路 7 次跨境建连（每次 3.5~5 分钟，含服务端 sshd 反向 DNS 反查）是超时根因；
+    # 建连降为 1 次后，30 分钟是宽裕兜底（含服务器侧串行拉镜像与迁移）。
+    timeout-minutes: 30
 
     steps:
-      - name: Checkout repository # 拉取仓库，供后续上传部署文件使用。
-        uses: actions/checkout@v4
-
-      - name: Ensure deploy directory exists # 先在服务器上创建部署目录以及 Nginx/证书子目录。
+      - name: Deploy via single SSH # 一次连接执行配置仓内的 deploy.sh，不再 scp 任何文件
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.DEPLOY_HOST }} # 目标服务器地址。
-          username: ${{ secrets.DEPLOY_USER }} # SSH 登录用户名。
-          password: ${{ secrets.DEPLOY_PASSWORD }} # SSH 登录密码，适用于当前服务器的密码登录方式。
-          port: ${{ secrets.DEPLOY_PORT || '22' }} # SSH 端口，未配置时默认 22。
-          script_stop: true # 远端命令一旦失败，立刻终止步骤。
-          script: mkdir -p "${{ secrets.DEPLOY_PATH }}/nginx" "${{ secrets.DEPLOY_PATH }}/backend" # 创建部署目录（含迁移目录父级），避免后续上传失败。
-
-      - name: Remove miscreated mount directories # 清掉 Docker 对缺失挂载源自动建出的目录，否则后续 scp 会把文件送进目录里
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.DEPLOY_HOST }} # 目标服务器地址。
-          username: ${{ secrets.DEPLOY_USER }} # SSH 登录用户名。
-          password: ${{ secrets.DEPLOY_PASSWORD }} # SSH 登录密码。
-          port: ${{ secrets.DEPLOY_PORT || '22' }} # SSH 端口。
-          script_stop: true # 远端命令一旦失败，立刻终止步骤。
+          host: ${{ secrets.DEPLOY_HOST }} # 目标服务器地址
+          username: ${{ secrets.DEPLOY_USER }} # SSH 登录用户名
+          password: ${{ secrets.DEPLOY_PASSWORD }} # SSH 登录密码
+          port: ${{ secrets.DEPLOY_PORT || '22' }} # SSH 端口，未配置默认 22
+          command_timeout: 20m # 服务器侧拉镜像 + 迁移 + 起栈的耗时上限
           script: |
-            set -eu # 遇到未定义变量或命令失败时立即退出。
-            cd "${{ secrets.DEPLOY_PATH }}" # 进入服务器上的部署目录。
-
-            # 只处理「本该是文件却成了目录」的精确路径，且必须先判 -d 再删，正常文件不受影响。
-            # 为什么必须清：scp 遇到已存在的同名目录时，会把文件写进那个目录里
-            # （变成 otel/loki-config.yaml/loki-config.yaml），compose 仍把目录挂到容器内的
-            # 目标文件上，故障会一直复现。先删再上传才能真正恢复。
-            for d in otel/collector-config.yaml otel/tempo.yaml otel/loki-config.yaml \
-                     prometheus/prometheus.yml \
-                     grafana/provisioning grafana/dashboards \
-                     backend/config.yaml agent/config.yaml; do
-              if [ -d "$d" ]; then
-                echo "WARN: $d 是目录（本应是文件/由上次挂载失败留下），删除以恢复挂载"
-                rm -rf "$d"
-              fi
-            done
-
-            # 兜底：任何名字带扩展名却是目录的路径一并清掉（同样只删目录，不动文件）
-            find . -mindepth 1 -maxdepth 3 -type d \( -name '*.yaml' -o -name '*.yml' -o -name '*.conf' \) \
-              -exec sh -c 'echo "WARN: 清理误建目录 $1"; rm -rf "$1"' _ {} \; || true
-
-      - name: Upload production compose file # 把生产 compose 文件和 HTTPS 网关配置上传到服务器部署目录。
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DEPLOY_HOST }} # 目标服务器地址。
-          username: ${{ secrets.DEPLOY_USER }} # SSH 登录用户名。
-          password: ${{ secrets.DEPLOY_PASSWORD }} # SSH 登录密码，适用于当前服务器的密码登录方式。
-          port: ${{ secrets.DEPLOY_PORT || '22' }} # SSH 端口。
-          source: "deploy/docker-compose.prod.yml,deploy/nginx/gateway.prod.conf" # 上传 compose 文件与 Nginx 生产配置
-          target: ${{ secrets.DEPLOY_PATH }} # 服务器上的目标目录。
-          strip_components: 1 # 去掉本地 deploy/ 目录层级，保留 nginx 子目录结构。
-          overwrite: true # 如果目标文件已存在，则直接覆盖。
-
-      - name: Upload database migrations # 把 Atlas 版本化迁移目录（含 atlas.sum）上传到服务器。
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DEPLOY_HOST }} # 目标服务器地址。
-          username: ${{ secrets.DEPLOY_USER }} # SSH 登录用户名。
-          password: ${{ secrets.DEPLOY_PASSWORD }} # SSH 登录密码，适用于当前服务器的密码登录方式。
-          port: ${{ secrets.DEPLOY_PORT || '22' }} # SSH 端口。
-          # 必须与 compose 里 migrate 服务的只读挂载 ./backend/migrations 完全对应。
-          # 为什么必须单独上传：迁移 SQL 编译期内嵌进后端二进制，启动时 store.Migrate 拿
-          # 「内嵌最新版本」比对「库里已应用版本」。若服务器上的迁移目录停留在旧版本，
-          # migrate 服务无新文件可 apply（幂等退出 0，看起来一切正常），后端却因漂移
-          # FATAL 并 restart: unless-stopped 无限崩溃重启。atlas.sum 必须一并上传，
-          # 否则 atlas 校验目录哈希失败、迁移根本跑不起来。
-          source: "backend/migrations"
-          target: ${{ secrets.DEPLOY_PATH }}/backend # 落到 <部署目录>/backend/migrations
-          # strip_components 必须=1：从 source「backend/migrations」去掉第一级 backend/，
-          # 剩 migrations/，拼到 target/backend → backend/migrations（与 compose migrate
-          # 服务的只读挂载 ./backend/migrations 对齐）。
-          # strip=0 会多一层落到 backend/backend/migrations（migrate 挂载不到），migrate
-          # 幂等退出 0、后端 store.Migrate 却因漂移 FATAL——2026-09-20 线上故障即此。
-          strip_components: 1
-          overwrite: true # 每次部署覆盖为仓库当前版本。
-
-      - name: Upload observability configs # 上传可观测性栈配置：otel / prometheus / grafana
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DEPLOY_HOST }} # 目标服务器地址。
-          username: ${{ secrets.DEPLOY_USER }} # SSH 登录用户名。
-          password: ${{ secrets.DEPLOY_PASSWORD }} # SSH 登录密码。
-          port: ${{ secrets.DEPLOY_PORT || '22' }} # SSH 端口。
-          # 必须与 docker-compose.prod.yml 里这些只读挂载逐条对应：
-          #   otel-collector  ./otel/collector-config.yaml
-          #   tempo           ./otel/tempo.yaml
-          #   loki            ./otel/loki-config.yaml
-          #   prometheus      ./prometheus/prometheus.yml
-          #   grafana         ./grafana/provisioning  ./grafana/dashboards
-          # 为什么必须单独上传：宿主机侧的挂载源缺失时 Docker 不会报错，而是静默把它
-          # 建成「目录」，再把这个目录往容器内的目标文件上 bind 挂载，容器创建阶段即失败：
-          #   OCI runtime create failed: ... not a directory: Are you trying to mount
-          #   a directory onto a file (or vice-versa)?
-          # 2026-10-10 线上 loki 起不来即是此因：此前只上传了 compose 与 nginx 配置，
-          # deploy/otel 等目录从未上过服务器。
-          source: "deploy/otel,deploy/prometheus,deploy/grafana"
-          target: ${{ secrets.DEPLOY_PATH }} # 落到 <部署目录>/otel、<部署目录>/prometheus、<部署目录>/grafana
-          strip_components: 1 # 去掉本地 deploy/ 层级，与 compose 里 ./otel/... 的相对路径对齐
-          overwrite: true # 每次部署覆盖为仓库当前版本。
-
-      - name: Verify deployment files # up 之前自检宿主机侧配置文件，把缺失/误建成目录挡在部署前
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.DEPLOY_HOST }} # 目标服务器地址。
-          username: ${{ secrets.DEPLOY_USER }} # SSH 登录用户名。
-          password: ${{ secrets.DEPLOY_PASSWORD }} # SSH 登录密码。
-          port: ${{ secrets.DEPLOY_PORT || '22' }} # SSH 端口。
-          script_stop: true # 远端命令一旦失败，立刻终止步骤。
-          script: |
-            set -eu # 遇到未定义变量或命令失败时立即退出。
-            cd "${{ secrets.DEPLOY_PATH }}" # 进入服务器上的部署目录。
-
-            # 1) 名字带扩展名却是目录：几乎都是 Docker 对「缺失的挂载源」自动 mkdir 出来的。
-            #    这类目录一旦生成，后续 scp/覆盖也写不进同名文件，必须先 rm -rf 才能恢复。
-            bad=$(find . -mindepth 1 -maxdepth 3 -type d \( -name '*.yaml' -o -name '*.yml' -o -name '*.conf' \) || true)
-            if [ -n "$bad" ]; then
-              echo "ERROR: 以下路径是目录，本应是文件（多为 Docker 对缺失的挂载源自动创建）："
-              echo "$bad"
-              echo "处理办法：先在服务器上 rm -rf 这些目录，再重跑本次部署。"
-              exit 1
-            fi
-
-            # 2) 必须由 CI 上传的文件：少任何一个，对应容器都会在 mount 阶段起不来。
-            for f in docker-compose.prod.yml nginx/gateway.prod.conf \
-                     otel/collector-config.yaml otel/tempo.yaml otel/loki-config.yaml \
-                     prometheus/prometheus.yml \
-                     grafana/provisioning/datasources/datasources.yml \
-                     grafana/provisioning/dashboards/dashboards.yml \
-                     grafana/dashboards/latency-budget.json \
-                     backend/migrations/atlas.sum; do
-              if [ ! -f "$f" ]; then
-                echo "ERROR: 部署目录缺少文件 $f（CI 上传步骤未覆盖到？）"
-                exit 1
-              fi
-            done
-
-            # 3) 密钥类配置不入 git，由运维在服务器上手工维护，缺失只告警不阻断：
-            #    它们同样是挂载源，缺失也会被 Docker 建成目录，但补齐属于运维动作而非 CI 动作。
-            for f in backend/config.yaml agent/config.yaml; do
-              if [ ! -f "$f" ]; then
-                echo "WARN: $f 不存在（含密钥、不入 git，需手工放置），对应容器会因挂载异常起不来"
-              fi
-            done
-
-            echo "部署文件自检通过"
-
-      - name: Pull and restart services # 在服务器上登录 ACR、拉镜像并重启所有服务。
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.DEPLOY_HOST }} # 目标服务器地址。
-          username: ${{ secrets.DEPLOY_USER }} # SSH 登录用户名。
-          password: ${{ secrets.DEPLOY_PASSWORD }} # SSH 登录密码，适用于当前服务器的密码登录方式。
-          port: ${{ secrets.DEPLOY_PORT || '22' }} # SSH 端口。
-          script_stop: true # 任一命令失败时立即终止整个部署。
-          command_timeout: 20m # 串行拉取（COMPOSE_PARALLEL_LIMIT=1）+ 失败重试一次，耗时比并发更久，放宽到 20 分钟。
-          script: |
-            set -eu # 遇到未定义变量或命令失败时立即退出。
-            cd "${{ secrets.DEPLOY_PATH }}" # 进入服务器上的部署目录。
-
-            # 写 .env 的镜像变量。必须定义在 try_deploy 之外：ACR 分支若登录失败会直接
-            # return，定义写在分支里的话 GHCR 回退就调到未定义函数（set -e 下整段退出）。
-            write_image_env() {
-              # 只覆盖四个镜像变量，必须保留运维手工写入的基础设施凭据
-              # （POSTGRES_PASSWORD / REDIS_PASSWORD / SPICEDB_PRESHARED_KEY）：
-              # 直接 cat > .env 会整份清空，compose 随即回退 ${VAR:-默认值}，
-              # 与服务器 backend/config.yaml 里填的强密码不一致 → 后端连不上库或授权被拒。
-              touch .env
-              grep -v -E '^(BACKEND_IMAGE|FRONTEND_IMAGE|AGENT_IMAGE|IMAGE_TAG)=' .env > .env.keep || true
-              mv .env.keep .env
-              cat >> .env <<EOF
-            BACKEND_IMAGE=$1
-            FRONTEND_IMAGE=$2
-            AGENT_IMAGE=$3
-            IMAGE_TAG=$4
-            EOF
-            }
-
-            # 尝试拉取并部署：先试 ACR（国内快），失败则 fallback 到 GHCR。
-            try_deploy() {
-              local registry="$1"  # "acr" or "ghcr"
-              local tag="${{ needs.build-and-push.outputs.image_tag }}"
-
-              echo "Trying to deploy from ${registry}..."
-
-              if [ "$registry" = "acr" ]; then
-                echo "Logging in to ACR..."
-                echo "${{ secrets.ACR_PASSWORD }}" | docker login "${{ env.ACR_REGISTRY }}" -u "${{ secrets.ACR_USERNAME }}" --password-stdin || {
-                  echo "ERROR: docker login to ACR failed (exit=$?). Check ACR_USERNAME/ACR_PASSWORD or network."
-                  return 1
-                }
-                write_image_env \
-                  "${{ needs.build-and-push.outputs.acr_backend_image }}" \
-                  "${{ needs.build-and-push.outputs.acr_frontend_image }}" \
-                  "${{ needs.build-and-push.outputs.acr_agent_image }}" \
-                  "${tag}"
-              else
-                echo "Logging in to GHCR..."
-                echo "${{ secrets.GITHUB_TOKEN }}" | docker login "${{ env.GHCR_REGISTRY }}" -u "${{ github.actor }}" --password-stdin || {
-                  echo "ERROR: docker login to GHCR failed (exit=$?). Check if server can reach ghcr.io."
-                  return 1
-                }
-                write_image_env \
-                  "${{ needs.build-and-push.outputs.backend_image }}" \
-                  "${{ needs.build-and-push.outputs.frontend_image }}" \
-                  "${{ needs.build-and-push.outputs.agent_image }}" \
-                  "${tag}"
-              fi
-
-              echo "Pulling images..."
-
-              # 为什么单独包一个函数并串行拉取：
-              # docker compose pull 默认并发拉取多个镜像。当多个镜像共享同一个基础层时，
-              # 并发"拆包"同一层会偶发竞态，表现为
-              #   failed to register layer: invalid hardlink target "/usr/share/zoneinfo/Africa/Abidjan"
-              # （层 tar 里的硬链接记录找不到目标文件）。这是 Docker 的已知偶发问题，
-              # 镜像本身没坏，单独重拉同一镜像是正常的。
-              # COMPOSE_PARALLEL_LIMIT=1 强制一个一个拉，从根上避开并发竞态。
-              pull_images() {
-                # 第一遍全量拉取（含 postgres/nats/redis/spicedb/atlas/nginx 等基础设施与
-                # 一次性工具镜像），失败不阻断：这些镜像几乎不变，不该由它们决定本次部署成败。
-                # 反例教训：早先这里整段 pull 失败就判定 registry 不可用，于是 atlas 之类
-                # 工具镜像偶发拉不动时，已经拉到的业务镜像也跟着不上线，白跑一轮部署。
-                COMPOSE_PARALLEL_LIMIT=1 docker compose --env-file .env -f docker-compose.prod.yml pull || true
-
-                # 第二遍只严格校验本次要上线的三个业务镜像：只有它们拉到才认为可部署。
-                COMPOSE_PARALLEL_LIMIT=1 docker compose --env-file .env -f docker-compose.prod.yml pull backend frontend agent
-              }
-
-              # 应用数据库迁移（幂等，可重复执行）：必须在 up 之前跑完。
-              # 为什么不能只依赖 backend 的 depends_on: service_completed_successfully：
-              # 1) up -d 不保证重跑已成功退出的一次性容器（配置哈希未变时直接跳过），
-              #    新增迁移文件可能压根没被 apply；
-              # 2) 即便跑了，也不改变校验顺序——后端启动期 store.Migrate 拿「二进制内嵌的
-              #    最新迁移版本」比对库里已应用版本，落后即 FATAL 退出，被 restart:
-              #    unless-stopped 拉起后再次 FATAL，形成崩溃重启循环（本次线上故障表现）。
-              # 这里显式 run --rm 一次，迁移失败即让本 registry 的部署失败，避免带着
-              # 漂移的 schema 把后端拉起来刷日志。
-              migrate_db() {
-                # 先清掉上一轮 up 留下的一次性 migrate 容器：该服务声明了固定
-                # container_name（echat-migrate），残留容器可能让 run 报名字冲突。
-                # 删除后 up -d 会重建并重跑一次，迁移幂等，无副作用。
-                docker compose --env-file .env -f docker-compose.prod.yml rm -f migrate || true
-                # 失败必须上抛：早先这里不判返回码，atlas 拉不动镜像 / 目录哈希校验失败时
-                # 迁移静默跳过，后端却照常 up，于是带着漂移 schema 崩溃重启（2026-09-20 线上故障）。
-                if ! docker compose --env-file .env -f docker-compose.prod.yml run --rm migrate; then
-                  echo "ERROR: 数据库迁移执行失败，终止本次部署（不让后端带漂移 schema 起来）"
-                  return 1
-                fi
-                verify_migration
-              }
-
-              # 迁移后复核：按与后端 store.Migrate 相同的口径比对「目录内最新迁移版本」与
-              # 「库里 atlas_schema_revisions 已应用版本」。仅靠 run --rm migrate 的退出码不够：
-              # atlas 在目录落后时也会幂等退出 0（无事可做即成功），只有比对版本才能发现
-              # 「迁移目录没上传 / apply 到了别的库」这类静默漂移。
-              verify_migration() {
-                local latest applied
-                latest=$(ls backend/migrations/*.sql 2>/dev/null | xargs -n1 basename | cut -d_ -f1 | sort | tail -1)
-                if [ -z "$latest" ]; then
-                  echo "ERROR: 服务器上 backend/migrations 为空，无法校验迁移版本"
-                  return 1
-                fi
-                # POSTGRES_* 来自部署目录的 .env，缺省值与 compose 里 migrate 服务保持一致
-                set -a; . ./.env 2>/dev/null || true; set +a
-                applied=$(docker compose --env-file .env -f docker-compose.prod.yml exec -T postgres \
-                  psql -U "${POSTGRES_USER:-echat}" -d "${POSTGRES_DB:-echat}" -tAc \
-                  "SELECT version FROM atlas_schema_revisions.atlas_schema_revisions WHERE type = 2 ORDER BY executed_at DESC LIMIT 1" \
-                  | tr -d '[:space:]')
-                if [ "$applied" != "$latest" ]; then
-                  echo "ERROR: 迁移复核失败：库内已应用 ${applied:-<空>}，迁移目录最新 ${latest}——schema 仍漂移"
-                  return 1
-                fi
-                echo "迁移复核通过：已应用 ${applied}"
-              }
-
-              # 启动栈：先确保 compose 网络存在，再 up。
-              # 已知故障：若 echat 的默认网络被删（docker system prune / network prune 都会清掉
-              # "没有被运行中的容器使用"的网络），残留容器仍持有旧网络 ID，up 在 start 阶段直接报
-              #   failed to set up container networking: network <id> not found
-              # 且 compose 不一定会重建这些容器（配置哈希未变），于是整个部署卡死。
-              # 这里做两级兜底：先 --force-recreate 让所有容器按当前网络重建；
-              # 仍失败则 down（不带 -v，命名卷保留，数据不丢）后重新 up，网络与容器全部重建。
-              up_stack() {
-                if docker compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans; then
-                  return 0
-                fi
-
-                echo "WARN: docker compose up failed, retrying with --force-recreate..."
-                if docker compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans --force-recreate; then
-                  return 0
-                fi
-
-                echo "WARN: still failing, recreating project networks and containers..."
-                echo "--- docker networks for diagnosis ---"
-                docker network ls || true
-                echo "-------------------------------------"
-                docker compose --env-file .env -f docker-compose.prod.yml down --remove-orphans --timeout 30 || true
-                docker compose --env-file .env -f docker-compose.prod.yml up -d --remove-orphans
-              }
-
-              # 第一次拉取成功：先应用迁移，再重启服务
-              if pull_images; then
-                migrate_db || return 1
-                up_stack
-                return 0
-              fi
-
-              # 第一次失败：清理悬空镜像层后重试一次。
-              # 注意：这里必须用 docker image prune，不能用 docker system prune。
-              # system prune 会连带删除"未被运行中容器使用"的网络和已停止的容器，
-              # 本项目网络一旦被删，随后 up 就会报 network not found（正是本次故障根因）。
-              # 只 prune 悬空镜像（不加 -a），既腾出层缓存空间，又不删正在使用的旧镜像（回滚更快）。
-              echo "WARN: first pull failed (registry=${registry}), cleaning dangling layers and retrying once..."
-              docker image prune -f || true
-
-              if pull_images; then
-                migrate_db || return 1
-                up_stack
-                return 0
-              fi
-
-              # 两次都失败才判定该 registry 不可用，并打印服务器 Docker 环境信息便于定位
-              # （存储驱动不是 overlay2、磁盘/inode 写满，都会让层"拆包"失败）
-              echo "ERROR: docker compose pull failed twice (registry=${registry})."
-              echo "--- docker env for diagnosis ---"
-              docker version || true
-              docker info 2>/dev/null | grep -i -A2 "Storage Driver" || true
-              df -h /var/lib/docker || true
-              echo "--------------------------------"
-              return 1
-            }
-
-            acr_ok="${{ needs.build-and-push.outputs.acr_ok }}"
-            ghcr_ok="${{ needs.build-and-push.outputs.ghcr_ok }}"
-
-            deployed=false
-
-            if [ "$acr_ok" = "true" ]; then
-              if try_deploy acr; then
-                deployed=true
-                echo "Deployed successfully from ACR."
-              else
-                echo "ACR pull failed, will try GHCR as fallback."
-              fi
-            fi
-
-            if [ "$deployed" = false ] && [ "$ghcr_ok" = "true" ]; then
-              if try_deploy ghcr; then
-                deployed=true
-                echo "Deployed successfully from GHCR."
-              else
-                echo "GHCR pull also failed."
-              fi
-            fi
-
-            if [ "$deployed" = false ]; then
-              echo "ERROR: Failed to deploy from any registry."
-              exit 1
-            fi
+            set -eu
+            # 配置仓 checkout（由 scripts/bootstrap.sh 建立）；deploy.sh 自身会再 git pull --ff-only
+            cd "${{ secrets.DEPLOY_CONFIG_PATH || '/srv/echat/config' }}"
+            IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}" \
+            BACKEND_IMAGE="${{ needs.build-and-push.outputs.acr_backend_image }}" \
+            FRONTEND_IMAGE="${{ needs.build-and-push.outputs.acr_frontend_image }}" \
+            AGENT_IMAGE="${{ needs.build-and-push.outputs.acr_agent_image }}" \
+            GHCR_BACKEND="${{ needs.build-and-push.outputs.backend_image }}" \
+            GHCR_FRONTEND="${{ needs.build-and-push.outputs.frontend_image }}" \
+            GHCR_AGENT="${{ needs.build-and-push.outputs.agent_image }}" \
+            ACR_OK="${{ needs.build-and-push.outputs.acr_ok }}" \
+            GHCR_OK="${{ needs.build-and-push.outputs.ghcr_ok }}" \
+            ACR_REGISTRY="${{ env.ACR_REGISTRY }}" \
+            ACR_USERNAME="${{ secrets.ACR_USERNAME }}" \
+            ACR_PASSWORD="${{ secrets.ACR_PASSWORD }}" \
+            GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
+            GHCR_USERNAME="${{ github.actor }}" \
+            ./projects/echat/deploy.sh

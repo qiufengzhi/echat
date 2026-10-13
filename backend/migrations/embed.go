@@ -2,12 +2,13 @@
 //
 // 迁移文件在编译期打进二进制，运行时不再依赖当前工作目录或镜像里是否存在
 // migrations 目录，避免容器/systemd 下路径漂移导致启动装配失败。
+// atlas.sum 一并内嵌（checksum 校验由 migrate-apply 子命令执行时读取），
 // store.Migrate 只做「代码 schema 与 DB 日记表」漂移校验，因此仅需文件名列表。
 package migrations
 
 import "embed"
 
-// FS 暴露本目录下所有版本化迁移 SQL（文件名形如 20260903_000000_initial.sql）
+// FS 暴露本目录下所有版本化迁移 SQL 与 checksum 文件（文件名形如 20260903_000000_initial.sql）
 //
-//go:embed *.sql
+//go:embed *.sql atlas.sum
 var FS embed.FS

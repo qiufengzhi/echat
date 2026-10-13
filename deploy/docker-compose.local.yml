@@ -1,0 +1,191 @@
+# eChat 本地一键「镜像化全栈」Docker Compose
+#
+# 与 docker-compose.dev.yml（只起基础设施，业务进程在宿主机原生跑）不同，
+# 本文件把 基础设施 + backend + frontend + agent 全部容器化，模拟生产拓扑。
+#
+# 一键使用（在仓库根目录执行）：
+#   docker compose -f deploy/docker-compose.local.yml up -d --build
+#
+# 或直接跑配套脚本（推荐）：
+#   .\deploy\local-up.ps1               # 构建镜像并启动全部容器
+#   .\deploy\local-up.ps1 -OnlyStart    # 镜像已存在时只启动，不重建
+#   .\deploy\local-up.ps1 -Down         # 停止并移除容器
+#   .\deploy\local-up.ps1 -Down -Volumes# 停止并连数据卷一起清掉（重置数据库）
+#   .\deploy\local-up.ps1 -Logs         # 跟踪容器日志
+#
+# 端口可用环境变量覆盖，避免与本机原生 dev 进程冲突：
+#   LOCAL_FRONTEND_PORT  (默认 8081)  前端静态站点 + /api /ws 反代入口
+#   LOCAL_BACKEND_HTTP   (默认 8082)  后端 HTTP/WebSocket 直连
+#   LOCAL_WT_UDP         (默认 4433)  WebTransport/QUIC UDP
+#   LOCAL_MEDIA_UDP      (默认 50000-50100) WebRTC 媒体流 UDP 段
+#   LOCAL_NAT_IP         (默认 127.0.0.1) ICE 候选里对外宣告的地址，本机联调保持默认
+#
+# 注意：
+# - backend / agent 的 config.yaml 均不进镜像，由本文件以只读卷挂载本地仓库文件
+#   （backend/config.yaml、agent/config.yaml 都在根 .gitignore 里）。
+# - backend 启动期只「校验」Atlas 迁移是否已应用；本文件的一次性 migrate 服务
+#   用后端镜像跑内嵌迁移（`./server migrate`），建好 postgres 后 apply，backend 等其成功才启动。
+# - 若本机同时在跑原生 dev（backend.exe 占 8080/4433/50000-50100、nats-server.exe 占 4222），
+#   建议先停掉，或用环境变量改掉上面前四个端口。
+name: echat-local
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: echat        # 本地统一用 echat / echat，与仓库 config.yaml 一致
+      POSTGRES_PASSWORD: echat
+      POSTGRES_DB: echat
+    volumes:
+      - echat_local_pgdata:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro # 首次建卷自动创建 echat_spicedb 附属库
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U echat -d echat"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nats:
+    image: nats:2-alpine
+    restart: unless-stopped
+    command: ["-js", "-m", "8222", "-sd", "/data"] # JetStream + 8222 监控；-sd 指定事件流落盘到 /data 卷（默认 /tmp，重建即丢）
+    volumes:
+      - echat_local_natsdata:/data
+
+  redis:
+    image: docker.m.daocloud.io/library/redis:7-alpine # 与 dev compose 一致的本地加速镜像路径
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]   # 本地无密码，与 backend config.yaml 一致
+    volumes:
+      - echat_local_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # 一次性迁移：随后端镜像内嵌 SQL（方案 A，与 prod 同一路径），不再用 atlas CLI
+  migrate:
+    image: echat-local-backend:latest # local 构建出的后端镜像，跑 ./server migrate
+    restart: "no"
+    command: ["./server", "migrate"]
+    environment:
+      # 与 backend 服务同口径：config.yaml 里 127.0.0.1 直连地址改指向 compose 内部服务名
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: echat
+      DB_PASSWORD: echat
+      DB_NAME: echat
+    volumes:
+      - ../backend/config.yaml:/app/config.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # SpiceDB(Zanzibar)：关系元组复用 postgres 的 echat_spicedb 库
+  spicedb-migrate: # 一次性迁移：serve 不自动建表，先 migrate head 建好关系元组表
+    image: ghcr.io/authzed/spicedb:latest
+    restart: "no"
+    command: ["migrate", "head"]
+    environment:
+      SPICEDB_DATASTORE_ENGINE: postgres
+      SPICEDB_DATASTORE_CONN_URI: postgres://echat:echat@postgres:5432/echat_spicedb?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  spicedb:
+    image: ghcr.io/authzed/spicedb:latest
+    restart: unless-stopped
+    command: ["serve"]
+    environment:
+      SPICEDB_GRPC_PRESHARED_KEY: dev-secret-local # 与 backend config.yaml 的 spicedb.preshared_key 一致
+      SPICEDB_DATASTORE_ENGINE: postgres
+      SPICEDB_DATASTORE_CONN_URI: postgres://echat:echat@postgres:5432/echat_spicedb?sslmode=disable
+      SPICEDB_DATASTORE_REVISION_QUANTIZATION: 1s
+      SPICEDB_LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      spicedb-migrate:
+        condition: service_completed_successfully # 元组表迁移落库后才 serve，否则 WriteSchema 报 datastore 内部错误
+
+  # 后端信令服务：HTTP/WebSocket 8080 + WebTransport/QUIC UDP 4433 + WebRTC UDP 50000-50100
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+      args:
+        REG: docker.m.daocloud.io/library # 本地绕 docker.io：基础镜像走 DaoCloud 加速
+    image: echat-local-backend:latest
+    restart: unless-stopped
+    environment:
+      # 把 config.yaml 里 127.0.0.1 的本地直连地址改指向 compose 内部服务名
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: echat
+      DB_PASSWORD: echat
+      DB_NAME: echat
+      NATS_URL: "nats:4222"
+      REDIS_ADDR: "redis:6379"
+      SPICEDB_GRPC_ADDR: "spicedb:50051"
+      LLM_GRPC_ADDR: "agent:50053"                 # LLM Agent 容器服务名
+      WT_ADDR: ":4433"                             # QUIC 绑 0.0.0.0，容器外才可达
+      SFU_NAT1_TO_1_IP: "${LOCAL_NAT_IP:-127.0.0.1}" # 本机联调对外宣告 127.0.0.1
+      AUTH_VERIFY_BASE_URL: "http://localhost:${LOCAL_FRONTEND_PORT:-8081}/verify"
+      AUTH_RESET_BASE_URL: "http://localhost:${LOCAL_FRONTEND_PORT:-8081}/reset"
+      LOG_ENABLE_FILE: "false"                     # 日志只走 stdout，方便 docker logs
+    volumes:
+      - ../backend/config.yaml:/app/config.yaml:ro # 唯一配置源（ASR/TTS/密钥），不进镜像
+      - ../backend/certs:/app/certs:ro             # WebTransport/QUIC 自签证书（镜像未内置）
+    ports:
+      - "${LOCAL_BACKEND_HTTP:-8082}:8080"              # HTTP/WebSocket（调试用，前端走内网）
+      - "${LOCAL_WT_UDP:-4433}:4433/udp"                # WebTransport/QUIC 信令
+      - "${LOCAL_MEDIA_UDP:-50000-50100}:50000-50100/udp" # WebRTC 媒体流
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_started
+      spicedb:
+        condition: service_started
+      agent:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully # 先迁移成功再启动，避免 Migrate 校验失败退出
+
+  # 前端静态站点 + 内部 Nginx 反代：/api /ws -> backend:8080（镜像内 nginx.conf 已写死服务名）
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        REG: docker.m.daocloud.io/library # 本地绕 docker.io：基础镜像走 DaoCloud 加速
+    image: echat-local-frontend:latest
+    restart: unless-stopped
+    ports:
+      - "${LOCAL_FRONTEND_PORT:-8081}:80"
+    depends_on:
+      - backend
+
+  # LLM Agent gRPC 服务（监听 50053，仅内网，由 backend 调用）
+  agent:
+    build:
+      context: ../agent
+      dockerfile: Dockerfile
+      args:
+        REG: docker.m.daocloud.io/library # 本地绕 docker.io：基础镜像走 DaoCloud 加速
+    image: echat-local-agent:latest
+    restart: unless-stopped
+    volumes:
+      - ../agent/config.yaml:/app/agent/config.yaml:ro # LLM 密钥等配置，不进镜像
+    expose:
+      - "50053"
+
+volumes:
+  echat_local_pgdata:
+  echat_local_natsdata:
+  echat_local_redisdata:

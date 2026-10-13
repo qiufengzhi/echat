@@ -6,7 +6,11 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"net/url"
+	"os"
+	"strconv"
 	"time"
 
 	"echat-backend/agentcli"
@@ -16,6 +20,7 @@ import (
 	"echat-backend/config"
 	"echat-backend/global"
 	"echat-backend/logging"
+	"echat-backend/migrations"
 	"echat-backend/observability"
 	"echat-backend/outbox"
 	"echat-backend/projection"
@@ -31,6 +36,13 @@ import (
 
 // main 组装根进程：配置 → 日志 → App → 后台子系统 → 监听
 func main() {
+	// 子命令分派：migrate 只做「内嵌迁移 apply + 漂移复核」，不启动服务
+	// （供 compose 的 migrate 服务与本地 `go run . migrate` 调用，方案 A）
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		runMigrate()
+		return
+	}
+
 	cfg, err := config.Load("config.yaml")
 	if err != nil {
 		logging.L().Fatalw("加载配置失败", "error", err)
@@ -109,6 +121,39 @@ func main() {
 	// 启动留痕 span 在进入长生命周期监听前收尾：boot 段 = 准备耗时，监听本身不属于启动
 	bootSpan.End()
 	serve(cfg, root.Handler())
+}
+
+// runMigrate 执行内嵌迁移 apply：加载配置 → 组装 DSN → apply 并复核，失败即非零退出
+func runMigrate() {
+	cfg, err := config.Load("config.yaml")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "加载配置失败:", err)
+		os.Exit(1)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	if err := migrations.Apply(ctx, databaseURL(cfg.Database)); err != nil {
+		fmt.Fprintln(os.Stderr, "迁移失败:", err)
+		os.Exit(1)
+	}
+	fmt.Println("迁移完成：数据库已与内嵌迁移一致")
+}
+
+// databaseURL 由数据库配置拼出 postgres URL（Atlas 驱动与 pgx 均以 URL 形式连接）
+//
+// cfg 数据库段配置（取自 config.yaml 的 database 段）
+// 返回 postgres://user:pass@host:port/db?sslmode=disable，用户名与密码做 URL 转义
+func databaseURL(cfg config.DatabaseConfig) string {
+	u := url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(cfg.User, cfg.Password),
+		Host:   cfg.Host + ":" + strconv.Itoa(cfg.Port),
+		Path:   "/" + cfg.Name,
+	}
+	q := url.Values{}
+	q.Set("sslmode", "disable")
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 // initAgentClient 初始化每轮一次 RPC 的 Agent 客户端
