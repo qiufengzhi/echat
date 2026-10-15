@@ -26,6 +26,7 @@ type Config struct {
 	Room          RoomConfig          `yaml:"room"`          // 房间与 WebSocket 配置
 	Database      DatabaseConfig      `yaml:"database"`      // PostgreSQL 持久层配置
 	Auth          AuthConfig          `yaml:"auth"`          // 用户系统认证与密码哈希配置
+	Mail          MailConfig          `yaml:"mail"`          // 邮件发送配置（验证/绑定/重置邮件）
 	Uploads       UploadsConfig       `yaml:"uploads"`       // 上传文件本地存储配置
 	Log           LogConfig           `yaml:"log"`           // 日志配置
 	Observability ObservabilityConfig `yaml:"observability"` // 可观测性（OTel 三信号）配置
@@ -201,6 +202,37 @@ type Argon2Config struct {
 	KeyLength   uint32 `yaml:"key_length"`  // 派生密钥字节数，默认 32
 }
 
+// MailConfig 邮件发送配置，provider 决定具体服务商实现
+//
+// 含密钥，仅从 config.yaml 读取，不支持环境变量覆盖
+type MailConfig struct {
+	// Provider 服务商："console"（打印日志，开发默认）| "tencent"（腾讯云 SES 邮件推送）
+	Provider string `yaml:"provider"`
+	// FromAddress 发件人邮箱地址，须为已在服务商侧验证的发信域名下的地址
+	FromAddress string `yaml:"from_address"`
+	// FromAlias 发件人显示名，为空则只显示地址
+	FromAlias string `yaml:"from_alias"`
+	// ReplyTo 回复地址，为空则不设置回复地址
+	ReplyTo string `yaml:"reply_to"`
+	// Tencent 腾讯云 SES 专用配置，provider=tencent 时必填
+	Tencent TencentMailConf `yaml:"tencent"`
+}
+
+// TencentMailConf 腾讯云 SES（邮件推送）配置
+type TencentMailConf struct {
+	// SecretID 腾讯云 API 密钥 SecretId
+	SecretID string `yaml:"secret_id"`
+	// SecretKey 腾讯云 API 密钥 SecretKey
+	SecretKey string `yaml:"secret_key"`
+	// Region 地域，如 ap-guangzhou
+	Region string `yaml:"region"`
+	// Endpoint SES 接口域名，默认 ses.tencentcloudapi.com
+	Endpoint string `yaml:"endpoint"`
+	// TemplateIDs 邮件用途到控制台模板 ID 的映射，键取值 verify_email / bind_email / reset_password
+	// 命中且非 0 时该用途走控制台模板发送，否则把内联 HTML 装入 Simple 发送
+	TemplateIDs map[string]uint64 `yaml:"template_ids"`
+}
+
 // UploadsConfig 上传文件本地存储配置
 type UploadsConfig struct {
 	// Dir 上传文件落盘目录（相对后端工作目录或绝对路径），默认 "data/uploads"
@@ -337,6 +369,13 @@ func DefaultConfig() *Config {
 			EnableConsole: true,
 			EnableFile:    true,
 			FileDir:       "logs",
+		},
+		Mail: MailConfig{
+			Provider: "console",
+			Tencent: TencentMailConf{
+				Region:   "ap-guangzhou",
+				Endpoint: "ses.tencentcloudapi.com",
+			},
 		},
 		Uploads: UploadsConfig{
 			Dir: "data/uploads",

@@ -23,6 +23,8 @@ require (
 	github.com/quic-go/quic-go v0.62.0
 	github.com/quic-go/webtransport-go v0.13.0
 	github.com/redis/go-redis/v9 v9.22.0
+	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.3.136
+	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/ses v1.3.136
 	go.uber.org/zap v1.28.0
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12

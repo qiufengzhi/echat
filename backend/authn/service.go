@@ -13,6 +13,7 @@ import (
 	"echat-backend/ent/authtoken"
 	"echat-backend/ent/identity"
 	"echat-backend/ent/user"
+	"echat-backend/mailer"
 
 	"github.com/google/uuid"
 )
@@ -26,8 +27,8 @@ type Service struct {
 	client *ent.Client
 	// authCfg 认证配置（argon2 参数、JWT 密钥、各令牌有效期）
 	authCfg config.AuthConfig
-	// mailer 邮件发送抽象
-	mailer Mailer
+	// mailer 邮件发送抽象（provider 由配置决定：console 打印日志 / tencent 走腾讯云 SES）
+	mailer mailer.Mailer
 	// verifyBaseURL 前端验证页 URL 前缀，用于拼接一次性链接
 	verifyBaseURL string
 	// limiter 登录失败限流（默认进程内实现，可整体换成 Redis）
@@ -36,7 +37,7 @@ type Service struct {
 
 // NewService 构造认证服务
 // client 持久层客户端，authCfg 认证配置，mailer 邮件发送器，verifyBaseURL 前端验证页前缀
-func NewService(client *ent.Client, authCfg config.AuthConfig, mailer Mailer, verifyBaseURL string) *Service {
+func NewService(client *ent.Client, authCfg config.AuthConfig, mailer mailer.Mailer, verifyBaseURL string) *Service {
 	return &Service{
 		client:        client,
 		authCfg:       authCfg,
@@ -188,8 +189,12 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*RegisterR
 
 	// 邮件在事务提交后再发：发送失败不回滚账户，验证链接可由用户重新索取
 	if verifyToken != "" {
-		if err := s.mailer.Send(context.Background(), email, "验证你的 eChat 邮箱",
-			"点击链接完成验证："+verificationLink(s.verifyBaseURL, verifyToken)); err != nil {
+		msg := mailer.Message{
+			To:   email,
+			Kind: mailer.KindVerifyEmail,
+			Vars: mailVars(username, verificationLink(s.verifyBaseURL, verifyToken)),
+		}
+		if err := s.mailer.Send(context.Background(), msg); err != nil {
 			return nil, ErrInternal
 		}
 	}
@@ -304,6 +309,15 @@ func (s *Service) RequestEmailBind(ctx context.Context, userID uuid.UUID, req Bi
 		return ErrConflict
 	}
 
+	// 取用户名用于邮件称呼
+	u, err := s.client.User.Query().
+		Where(user.ID(userID)).
+		Select(user.FieldUsername).
+		Only(ctx)
+	if err != nil {
+		return ErrInternal
+	}
+
 	tok, err := randomToken()
 	if err != nil {
 		return ErrInternal
@@ -328,8 +342,12 @@ func (s *Service) RequestEmailBind(ctx context.Context, userID uuid.UUID, req Bi
 		return ErrInternal
 	}
 
-	if err := s.mailer.Send(context.Background(), email, "绑定你的 eChat 邮箱",
-		"点击链接完成绑定："+verificationLink(s.verifyBaseURL, tok)); err != nil {
+	msg := mailer.Message{
+		To:   email,
+		Kind: mailer.KindBindEmail,
+		Vars: mailVars(u.Username, verificationLink(s.verifyBaseURL, tok)),
+	}
+	if err := s.mailer.Send(context.Background(), msg); err != nil {
 		return ErrInternal
 	}
 	return nil

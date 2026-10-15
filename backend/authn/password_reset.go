@@ -12,6 +12,7 @@ import (
 	"echat-backend/ent/identity"
 	"echat-backend/ent/session"
 	"echat-backend/ent/user"
+	"echat-backend/mailer"
 
 	"github.com/google/uuid"
 )
@@ -64,8 +65,12 @@ func (s *Service) RequestPasswordReset(ctx context.Context, req PasswordResetReq
 		return ErrInternal
 	}
 
-	if err := s.mailer.Send(context.Background(), email, "重置你的 eChat 密码",
-		"点击链接重置密码（30 分钟内有效）："+verificationLink(s.authCfg.ResetBaseURL, tok)); err != nil {
+	msg := mailer.Message{
+		To:   email,
+		Kind: mailer.KindResetPassword,
+		Vars: mailVars(u.Username, verificationLink(s.authCfg.ResetBaseURL, tok)),
+	}
+	if err := s.mailer.Send(context.Background(), msg); err != nil {
 		return ErrInternal
 	}
 	return nil

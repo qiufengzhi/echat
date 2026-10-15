@@ -15,6 +15,7 @@ import (
 	"echat-backend/config"
 	"echat-backend/handlers"
 	"echat-backend/logging"
+	"echat-backend/mailer"
 	"echat-backend/profile"
 	"echat-backend/room/api"
 	"echat-backend/room/projection"
@@ -61,8 +62,13 @@ func New(cfg *config.Config) (*App, error) {
 		return nil, err
 	}
 
-	// 3. 认证域服务与 HTTP 处理器
-	authSvc := authn.NewService(st.Ent(), cfg.Auth, authn.ConsoleMailer{}, cfg.Auth.VerifyBaseURL)
+	// 3. 邮件发送器（provider 由配置决定：console 打印日志 / tencent 走腾讯云 SES）、认证域服务与 HTTP 处理器
+	mailSender, err := mailer.New(cfg.Mail)
+	if err != nil {
+		st.Close()
+		return nil, err
+	}
+	authSvc := authn.NewService(st.Ent(), cfg.Auth, mailSender, cfg.Auth.VerifyBaseURL)
 
 	// 4. Redis：优先分布式登录限流与在线热状态；连不上降级进程内实现，不阻断启动
 	rdb := redis.NewClient(&redis.Options{Addr: cfg.Redis.Addr, Password: cfg.Redis.Password})
