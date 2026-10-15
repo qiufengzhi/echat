@@ -228,8 +228,8 @@ type TencentMailConf struct {
 	Region string `yaml:"region"`
 	// Endpoint SES 接口域名，默认 ses.tencentcloudapi.com
 	Endpoint string `yaml:"endpoint"`
-	// TemplateIDs 邮件用途到控制台模板 ID 的映射，键取值 verify_email / bind_email / reset_password
-	// 命中且非 0 时该用途走控制台模板发送，否则把内联 HTML 装入 Simple 发送
+	// TemplateIDs 邮件用途到控制台模板 ID 的映射，三种用途均必填
+	// 键取值 verify_email / bind_email / reset_password，正文在腾讯云控制台模板里维护
 	TemplateIDs map[string]uint64 `yaml:"template_ids"`
 }
 

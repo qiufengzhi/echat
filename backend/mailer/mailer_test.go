@@ -2,58 +2,54 @@ package mailer
 
 import (
 	"context"
-	"encoding/base64"
 	"strings"
 	"testing"
 
 	"echat-backend/config"
 )
 
-// allKinds 覆盖全部邮件用途，供表驱动用例遍历
-var allKinds = []Kind{KindVerifyEmail, KindBindEmail, KindResetPassword}
-
-// TestRenderReplacesAllPlaceholders 校验三套模板都能把变量全部替换且不残留占位符
-func TestRenderReplacesAllPlaceholders(t *testing.T) {
-	vars := map[string]string{
-		"username":       "alice",
-		"action_url":     "http://localhost:5173/verify?token=abc",
+// testVars 构造一份完整的模板变量
+func testVars() map[string]string {
+	return map[string]string{
+		"username":       "bob",
+		"action_url":     "http://x/verify?token=t",
 		"expire_minutes": "30",
 	}
-	for _, kind := range allKinds {
-		subject, html, err := render(kind, vars)
-		if err != nil {
-			t.Fatalf("render(%s) 出错: %v", kind, err)
-		}
-		if subject == "" {
-			t.Errorf("render(%s) 主题为空", kind)
-		}
-		if strings.Contains(html, "{{") {
-			t.Errorf("render(%s) 残留未替换占位符", kind)
-		}
-		if !strings.Contains(html, "alice") {
-			t.Errorf("render(%s) 未注入 username", kind)
-		}
-		if !strings.Contains(html, "token=abc") {
-			t.Errorf("render(%s) 未注入 action_url", kind)
-		}
+}
+
+// testTemplateIDs 构造三种用途齐全的模板 ID 映射
+func testTemplateIDs() map[string]uint64 {
+	return map[string]uint64{
+		string(KindVerifyEmail):   11,
+		string(KindBindEmail):     22,
+		string(KindResetPassword): 33,
 	}
 }
 
-// TestRenderInjectsYear 校验未显式传 year 时自动补齐当前年份
-func TestRenderInjectsYear(t *testing.T) {
-	_, html, err := render(KindVerifyEmail, map[string]string{})
-	if err != nil {
-		t.Fatalf("render 出错: %v", err)
+// TestSubjectOf 校验已知用途有主题、未知用途报错
+func TestSubjectOf(t *testing.T) {
+	for _, kind := range kinds {
+		if subject, err := subjectOf(kind); err != nil || subject == "" {
+			t.Errorf("subjectOf(%s) 应有非空主题，得到 %q err=%v", kind, subject, err)
+		}
 	}
-	if strings.Contains(html, "{{") {
-		t.Error("year 未自动补齐")
-	}
-}
-
-// TestRenderUnknownKind 校验未知用途返回错误
-func TestRenderUnknownKind(t *testing.T) {
-	if _, _, err := render(Kind("nope"), nil); err == nil {
+	if _, err := subjectOf(Kind("nope")); err == nil {
 		t.Fatal("未知用途应返回错误")
+	}
+}
+
+// TestWithYear 校验缺省补年份、已有年份不被覆盖、且不修改入参
+func TestWithYear(t *testing.T) {
+	vars := map[string]string{"username": "bob"}
+	got := withYear(vars)
+	if got["year"] == "" {
+		t.Error("应补齐 year")
+	}
+	if _, ok := vars["year"]; ok {
+		t.Error("不应修改入参")
+	}
+	if got := withYear(map[string]string{"year": "1999"}); got["year"] != "1999" {
+		t.Errorf("已有年份不应被覆盖，得到 %q", got["year"])
 	}
 }
 
@@ -73,23 +69,26 @@ func TestNewSelectsProvider(t *testing.T) {
 	}
 }
 
-// TestNewTencentRequiresConfig 校验腾讯云 provider 的必填项校验
+// TestNewTencentRequiresConfig 校验腾讯云 provider 的必填项逐项校验
 func TestNewTencentRequiresConfig(t *testing.T) {
-	if _, err := New(config.MailConfig{Provider: "tencent"}); err == nil {
-		t.Fatal("缺密钥与发件人应返回错误")
-	}
-	if _, err := New(config.MailConfig{
-		Provider: "tencent",
-		Tencent:  config.TencentMailConf{SecretID: "id", SecretKey: "key", Region: "ap-guangzhou"},
-	}); err == nil {
-		t.Fatal("缺发件人应返回错误")
-	}
-	if _, err := New(config.MailConfig{
+	full := config.MailConfig{
 		Provider:    "tencent",
 		FromAddress: "noreply@mail.example.com",
-		Tencent:     config.TencentMailConf{SecretID: "id", SecretKey: "key", Region: "ap-guangzhou"},
-	}); err != nil {
+		Tencent:     config.TencentMailConf{SecretID: "id", SecretKey: "key", Region: "ap-guangzhou", TemplateIDs: testTemplateIDs()},
+	}
+	if _, err := New(full); err != nil {
 		t.Fatalf("配置齐全应构造成功: %v", err)
+	}
+
+	cases := map[string]config.MailConfig{
+		"缺密钥":    {Provider: "tencent", FromAddress: "a@b.c", Tencent: config.TencentMailConf{TemplateIDs: testTemplateIDs()}},
+		"缺发件人":   {Provider: "tencent", Tencent: config.TencentMailConf{SecretID: "id", SecretKey: "key", TemplateIDs: testTemplateIDs()}},
+		"缺模板 ID": {Provider: "tencent", FromAddress: "a@b.c", Tencent: config.TencentMailConf{SecretID: "id", SecretKey: "key"}},
+	}
+	for name, cfg := range cases {
+		if _, err := New(cfg); err == nil {
+			t.Errorf("%s 应返回错误", name)
+		}
 	}
 }
 
@@ -103,18 +102,9 @@ func TestFromAddress(t *testing.T) {
 	}
 }
 
-// testVars 构造一份完整的模板变量
-func testVars() map[string]string {
-	return map[string]string{
-		"username":       "bob",
-		"action_url":     "http://x/verify?token=t",
-		"expire_minutes": "30",
-	}
-}
-
-// TestTencentBuildRequestInlineHTML 校验未配模板 ID 时走内联 HTML 且 base64 编码
-func TestTencentBuildRequestInlineHTML(t *testing.T) {
-	m := &TencentMailer{from: "eChat <noreply@mail.example.com>"}
+// TestTencentBuildRequest 校验请求走控制台模板并携带变量
+func TestTencentBuildRequest(t *testing.T) {
+	m := &TencentMailer{from: "eChat <noreply@mail.example.com>", templateIDs: testTemplateIDs()}
 	req, subject, err := m.buildRequest(Message{To: "bob@example.com", Kind: KindVerifyEmail, Vars: testVars()})
 	if err != nil {
 		t.Fatalf("buildRequest 出错: %v", err)
@@ -122,42 +112,31 @@ func TestTencentBuildRequestInlineHTML(t *testing.T) {
 	if subject == "" {
 		t.Error("主题为空")
 	}
-	if req.Template != nil {
-		t.Error("未配模板 ID 时不应走模板发送")
+	if req.Template == nil {
+		t.Fatal("应走控制台模板发送")
 	}
-	if req.Simple == nil || req.Simple.Html == nil {
-		t.Fatal("应走内联 HTML")
+	if *req.Template.TemplateID != 11 {
+		t.Errorf("模板 ID 不符: %d", *req.Template.TemplateID)
 	}
-	decoded, err := base64.StdEncoding.DecodeString(*req.Simple.Html)
-	if err != nil {
-		t.Fatalf("Simple.Html 应为 base64: %v", err)
+	if !strings.Contains(*req.Template.TemplateData, "bob") {
+		t.Error("模板变量未包含 username")
 	}
-	if !strings.Contains(string(decoded), "token=t") {
-		t.Error("内联 HTML 未包含 action_url")
+	if !strings.Contains(*req.Template.TemplateData, "year") {
+		t.Error("模板变量未补齐 year")
 	}
 	if got := *req.Destination[0]; got != "bob@example.com" {
 		t.Errorf("收件人不符: %s", got)
 	}
+	if got := *req.FromEmailAddress; got != "eChat <noreply@mail.example.com>" {
+		t.Errorf("发件人不符: %s", got)
+	}
 }
 
-// TestTencentBuildRequestTemplate 校验配了模板 ID 时走控制台模板并携带变量
-func TestTencentBuildRequestTemplate(t *testing.T) {
-	m := &TencentMailer{from: "eChat <noreply@mail.example.com>", templateIDs: map[string]uint64{string(KindVerifyEmail): 42}}
-	req, _, err := m.buildRequest(Message{To: "bob@example.com", Kind: KindVerifyEmail, Vars: testVars()})
-	if err != nil {
-		t.Fatalf("buildRequest 出错: %v", err)
-	}
-	if req.Template == nil {
-		t.Fatal("配了模板 ID 应走模板发送")
-	}
-	if *req.Template.TemplateID != 42 {
-		t.Errorf("模板 ID 不符: %d", *req.Template.TemplateID)
-	}
-	if req.Simple != nil {
-		t.Error("模板发送不应设置 Simple")
-	}
-	if !strings.Contains(*req.Template.TemplateData, "bob") {
-		t.Error("模板变量未包含 username")
+// TestTencentBuildRequestMissingTemplate 校验缺模板 ID 时组装请求报错
+func TestTencentBuildRequestMissingTemplate(t *testing.T) {
+	m := &TencentMailer{from: "a@b.c", templateIDs: map[string]uint64{}}
+	if _, _, err := m.buildRequest(Message{To: "bob@example.com", Kind: KindVerifyEmail, Vars: testVars()}); err == nil {
+		t.Fatal("缺模板 ID 应返回错误")
 	}
 }
 

@@ -119,6 +119,7 @@ auth:
 
 # 邮件发送(注册验证 / 绑定邮箱 / 找回密码)
 # 换服务商只改 provider:console 只打印日志,tencent 走腾讯云 SES 邮件推送
+# 邮件正文(HTML 模板)在腾讯云控制台维护,源码版本化在 designs/email-templates/
 mail:
   provider: "tencent"          # 服务商:console（打印日志）| tencent（腾讯云 SES）
   from_address: "noreply@mail.echat.qxbnx.cn"  # 发件人地址,须为腾讯云已验证发信域名下的地址
@@ -129,10 +130,10 @@ mail:
     secret_key: "REPLACE_WITH_TENCENT_SECRET_KEY"  # 腾讯云 API 密钥 SecretKey
     region: "ap-guangzhou"     # 地域,须与 SES 控制台所选地域一致
     endpoint: "ses.tencentcloudapi.com"  # SES 接口域名
-    template_ids:              # 用途 → 控制台模板 ID,命中且非 0 走模板发送,留空走内联 HTML
-      # verify_email: 0        # 注册验证邮件
-      # bind_email: 0          # 绑定邮箱邮件
-      # reset_password: 0      # 找回密码邮件
+    template_ids:              # 用途 → 控制台模板 ID,三者均必填
+      verify_email: 0          # 注册验证邮件,正文见 designs/email-templates/verify-email.html
+      bind_email: 0            # 绑定邮箱邮件,正文见 designs/email-templates/bind-email.html
+      reset_password: 0        # 找回密码邮件,正文见 designs/email-templates/reset-password.html
 
 webtransport:
   enabled: true                # 启用 WebTransport/QUIC 信令端点,不支持时自动降级 WebSocket
