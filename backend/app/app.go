@@ -68,7 +68,7 @@ func New(cfg *config.Config) (*App, error) {
 		st.Close()
 		return nil, err
 	}
-	authSvc := authn.NewService(st.Ent(), cfg.Auth, mailSender, cfg.Auth.VerifyBaseURL)
+	authSvc := authn.NewService(st.Ent(), cfg.Auth, mailSender)
 
 	// 4. Redis：优先分布式登录限流与在线热状态；连不上降级进程内实现，不阻断启动
 	rdb := redis.NewClient(&redis.Options{Addr: cfg.Redis.Addr, Password: cfg.Redis.Password})

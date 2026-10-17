@@ -68,7 +68,7 @@ func (s *Service) RequestPasswordReset(ctx context.Context, req PasswordResetReq
 	msg := mailer.Message{
 		To:   email,
 		Kind: mailer.KindResetPassword,
-		Vars: mailVars(u.Username, verificationLink(s.authCfg.ResetBaseURL, tok)),
+		Vars: mailVars(u.Username, tok),
 	}
 	if err := s.mailer.Send(context.Background(), msg); err != nil {
 		return ErrInternal

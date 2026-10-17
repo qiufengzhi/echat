@@ -29,21 +29,19 @@ type Service struct {
 	authCfg config.AuthConfig
 	// mailer 邮件发送抽象（provider 由配置决定：console 打印日志 / tencent 走腾讯云 SES）
 	mailer mailer.Mailer
-	// verifyBaseURL 前端验证页 URL 前缀，用于拼接一次性链接
-	verifyBaseURL string
 	// limiter 登录失败限流（默认进程内实现，可整体换成 Redis）
 	limiter LoginLimiter
 }
 
 // NewService 构造认证服务
-// client 持久层客户端，authCfg 认证配置，mailer 邮件发送器，verifyBaseURL 前端验证页前缀
-func NewService(client *ent.Client, authCfg config.AuthConfig, mailer mailer.Mailer, verifyBaseURL string) *Service {
+// client 持久层客户端，authCfg 认证配置，mailer 邮件发送器
+// 验证链接的域名与路径写死在邮件模板里（SES 审核要求固定域名），后端只传 token 变量
+func NewService(client *ent.Client, authCfg config.AuthConfig, mailer mailer.Mailer) *Service {
 	return &Service{
-		client:        client,
-		authCfg:       authCfg,
-		mailer:        mailer,
-		verifyBaseURL: verifyBaseURL,
-		limiter:       NewMemLoginLimiter(),
+		client:  client,
+		authCfg: authCfg,
+		mailer:  mailer,
+		limiter: NewMemLoginLimiter(),
 	}
 }
 
@@ -192,7 +190,7 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*RegisterR
 		msg := mailer.Message{
 			To:   email,
 			Kind: mailer.KindVerifyEmail,
-			Vars: mailVars(username, verificationLink(s.verifyBaseURL, verifyToken)),
+			Vars: mailVars(username, verifyToken),
 		}
 		if err := s.mailer.Send(context.Background(), msg); err != nil {
 			return nil, ErrInternal
@@ -345,7 +343,7 @@ func (s *Service) RequestEmailBind(ctx context.Context, userID uuid.UUID, req Bi
 	msg := mailer.Message{
 		To:   email,
 		Kind: mailer.KindBindEmail,
-		Vars: mailVars(u.Username, verificationLink(s.verifyBaseURL, tok)),
+		Vars: mailVars(u.Username, tok),
 	}
 	if err := s.mailer.Send(context.Background(), msg); err != nil {
 		return ErrInternal

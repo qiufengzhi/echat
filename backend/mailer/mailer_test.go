@@ -12,7 +12,7 @@ import (
 func testVars() map[string]string {
 	return map[string]string{
 		"username":       "bob",
-		"action_url":     "http://x/verify?token=t",
+		"token":          "t",
 		"expire_minutes": "30",
 	}
 }

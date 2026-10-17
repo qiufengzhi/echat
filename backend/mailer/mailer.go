@@ -29,7 +29,8 @@ type Message struct {
 	To string
 	// Kind 邮件用途，决定主题与模板
 	Kind Kind
-	// Vars 模板变量，键为模板占位符名，取值 username / action_url / expire_minutes
+	// Vars 模板变量，键为模板占位符名，取值 username / token / expire_minutes
+	// 链接域名与路径写死在腾讯云控制台的模板正文里（SES 审核要求固定域名），后端只提供 token
 	Vars map[string]string
 }
 

@@ -29,6 +29,6 @@ func (m *ConsoleMailer) Send(_ context.Context, msg Message) error {
 		"to", msg.To,
 		"kind", string(msg.Kind),
 		"subject", subject,
-		"action_url", msg.Vars["action_url"])
+		"token", msg.Vars["token"])
 	return nil
 }

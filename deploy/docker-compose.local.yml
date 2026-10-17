@@ -70,8 +70,6 @@ services:
       LLM_GRPC_ADDR: "agent:50053"                 # LLM Agent 容器服务名
       WT_ADDR: ":4433"                             # QUIC 绑 0.0.0.0，容器外才可达
       SFU_NAT1_TO_1_IP: "${LOCAL_NAT_IP:-127.0.0.1}" # 本机联调对外宣告 127.0.0.1
-      AUTH_VERIFY_BASE_URL: "http://localhost:${LOCAL_FRONTEND_PORT:-8081}/verify"
-      AUTH_RESET_BASE_URL: "http://localhost:${LOCAL_FRONTEND_PORT:-8081}/reset"
       LOG_ENABLE_FILE: "false"                     # 日志只走 stdout，方便 docker logs
     volumes:
       - ../backend/config.yaml:/app/config.yaml:ro # 唯一配置源（ASR/TTS/密钥），不进镜像
