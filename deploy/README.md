@@ -140,6 +140,15 @@ IMAGE_TAG=<当前tag> BACKEND_IMAGE=<后端镜像> FRONTEND_IMAGE=<前端镜像>
 ACR_OK=true ACR_REGISTRY=<acr地址> ACR_USERNAME=<用户> ACR_PASSWORD=<密码> ./deploy.sh
 ```
 
+不走完整部署、只做日常查看/拉镜像/重启时，用同目录的 `ops.sh`（自动带 `--env-file /etc/echat/.env` 与 `-p echat`；直接敲 `docker compose -f docker-compose.prod.yml ...` 会因镜像变量为空报 `invalid reference format`）：
+
+```bash
+./ops.sh ps -a            # 容器状态
+./ops.sh pull             # 拉镜像（可观测性镜像 502 后重试）
+./ops.sh logs -f backend  # 跟看日志
+./ops.sh restart gateway  # 换证书后重启网关
+```
+
 后端日志若出现 `数据库已应用迁移 <旧> 落后于最新 <新>`，说明所部署镜像落后于库里 schema——用当前镜像 tag 重跑上面的 `deploy.sh` 即可。
 
 ## 基础设施两个易踩的点

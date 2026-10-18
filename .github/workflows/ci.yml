@@ -180,6 +180,17 @@ jobs:
           src="${{ steps.image-vars.outputs.backend_image }}:${{ steps.image-vars.outputs.image_tag }}"
           dst="${{ steps.image-vars.outputs.acr_backend_image }}"
           tag="${{ steps.image-vars.outputs.image_tag }}"
+          # ---- 幂等短路：ACR 已有该 tag 时秒级跳过 ----
+          # 原理：docker manifest inspect 只向 registry 查询 manifest（镜像元数据清单），
+          # 不下载任何镜像层，跨境查询通常 1~2 秒；查得到 = ACR 已经有这个 tag，同步必然是重复劳动。
+          # 适用场景：同一次 push 触发的 workflow re-run、手动 workflow_dispatch 重跑等。
+          # 注意：image_tag 是 GITHUB_SHA（每个新提交都不同），所以正常流程里每次新提交
+          # 都会「查不到」而走完整同步——这正是预期行为：只有首次/版本升级才真正拉推。
+          # inspect 失败（含网络抖动导致的假阴性）不会中断，只会落到下面的完整同步，语义安全。
+          if docker manifest inspect "${dst}:${tag}" > /dev/null 2>&1; then
+            echo "SKIP: ACR already has ${dst}:${tag} (idempotent short-circuit), no pull/push needed"
+            exit 0
+          fi
           # ACR 在 GitHub 海外 Runner 上不稳定，日志里常见单层 "Retrying in N seconds"。
           # 单次失败不代表镜像有问题，整步重试 3 次，避免一次抖动就丢掉这个 registry。
           for attempt in 1 2 3; do
@@ -229,6 +240,11 @@ jobs:
           src="${{ steps.image-vars.outputs.frontend_image }}:${{ steps.image-vars.outputs.image_tag }}"
           dst="${{ steps.image-vars.outputs.acr_frontend_image }}"
           tag="${{ steps.image-vars.outputs.image_tag }}"
+          # ---- 幂等短路：ACR 已有该 tag 时秒级跳过（原理见 backend 同步步骤注释）----
+          if docker manifest inspect "${dst}:${tag}" > /dev/null 2>&1; then
+            echo "SKIP: ACR already has ${dst}:${tag} (idempotent short-circuit), no pull/push needed"
+            exit 0
+          fi
           for attempt in 1 2 3; do
             if docker pull "${src}" \
               && docker tag "${src}" "${dst}:${tag}" \
@@ -276,6 +292,11 @@ jobs:
           src="${{ steps.image-vars.outputs.agent_image }}:${{ steps.image-vars.outputs.image_tag }}"
           dst="${{ steps.image-vars.outputs.acr_agent_image }}"
           tag="${{ steps.image-vars.outputs.image_tag }}"
+          # ---- 幂等短路：ACR 已有该 tag 时秒级跳过（原理见 backend 同步步骤注释）----
+          if docker manifest inspect "${dst}:${tag}" > /dev/null 2>&1; then
+            echo "SKIP: ACR already has ${dst}:${tag} (idempotent short-circuit), no pull/push needed"
+            exit 0
+          fi
           for attempt in 1 2 3; do
             if docker pull "${src}" \
               && docker tag "${src}" "${dst}:${tag}" \
@@ -298,6 +319,8 @@ jobs:
           echo "acr=${{ steps.sync-agent-acr.outcome }}" >> "$GITHUB_OUTPUT"
 
       # ---- 校验：每个服务至少有一个 registry 推送成功 ----
+      # 注：spicedb 基础设施镜像不在此同步，由运维手动从 ghcr.io 搬运到 ACR 一次即可
+      # （本地能通 ghcr.io 时执行；版本升级时需手动重搬，与 compose.prod.yml 的 tag 保持一致）。
 
       - name: Verify at least one registry succeeded # 检查各镜像推送结果，并输出可用 registry 标志。
         id: verify-pushes
@@ -330,6 +353,8 @@ jobs:
           fi
 
           # 判断每个 registry 是否全部镜像都推送成功
+          # spicedb 不在 CI 同步范围（运维手动搬运），其缺失由服务器侧
+          # deploy.sh 的严格拉取（dc pull ... spicedb）暴露。
           ghcr_ok=false
           acr_ok=false
           if [ "$b_ghcr" = "success" ] && [ "$f_ghcr" = "success" ] && [ "$a_ghcr" = "success" ]; then
@@ -345,7 +370,7 @@ jobs:
 
   deploy: # 镜像推送完成后，一次 SSH 到服务器触发配置仓内的部署脚本（见 docs/deploy-config-repo.md）
     needs: build-and-push # 依赖镜像构建完成（至少一个 registry 推送成功）。
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') # 仅 main 分支和 tag 触发部署，其他分支不触发。
+    if: github.ref == 'refs/heads/main' # 仅 main 分支触发部署；on.push 只配了 branches，tag 推送根本不会触发本 workflow，无需 tag 判断。
     runs-on: ubuntu-latest
     # 本 job 只发一次 SSH，服务器本地完成「拉配置仓 / 解密密钥 / 拉镜像 / 迁移 / 起栈」。
     # 旧链路 7 次跨境建连（每次 3.5~5 分钟，含服务端 sshd 反向 DNS 反查）是超时根因；
@@ -380,3 +405,13 @@ jobs:
             GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
             GHCR_USERNAME="${{ github.actor }}" \
             ./projects/echat/deploy.sh
+            # 双保险：deploy.sh 内部已 verify_stack，这里在 CI 侧再做一次硬校验，
+            # 不信任任何「部署成功」的输出——以容器实际运行状态为准（2026-10-17 事故教训）。
+            for c in echat-postgres echat-nats echat-redis echat-spicedb echat-gateway echat-backend echat-frontend echat-agent; do
+              state="$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo missing)" # 与 deploy.sh 兜底一致：容器不存在时得 missing 而非中断，保证下方 ERROR 日志能打印出来
+              if [ "$state" != "running" ]; then
+                echo "ERROR: 容器 $c 状态为 $state（期望 running）"
+                exit 1
+              fi
+            done
+            docker ps
