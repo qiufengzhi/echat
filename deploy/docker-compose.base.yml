@@ -24,7 +24,7 @@ services:
       retries: 10
 
   nats: # 事件骨干：事务性 Outbox 向 JetStream 投递的落点
-    image: nats:2-alpine
+    image: nats:2-alpine # Docker Hub 直连本机可用（实测 postgres 直连成功），仅 ghcr.io 需要加速
     restart: unless-stopped
     command: ["-js", "-m", "8222", "-sd", "/data"] # -sd 指定事件流落盘到 /data 卷（默认 /tmp，重建即丢）
     volumes:
@@ -61,7 +61,7 @@ services:
         condition: service_healthy
 
   spicedb-migrate: # 一次性迁移：serve 不自动建表，先 migrate head 建好关系元组表
-    image: ghcr.io/authzed/spicedb:v1.56.2 # 版本必须与 spicedb 一致：迁移单向，只能向前不能降级
+    image: ghcr.nju.edu.cn/authzed/spicedb:v1.56.2 # 版本必须与 spicedb 一致：迁移单向，只能向前不能降级；ghcr.io 国内直连不通，走南大镜像加速（DaoCloud ghcr 通道已 502）
     restart: "no"
     command: ["migrate", "head"]
     environment:
@@ -74,7 +74,7 @@ services:
         condition: service_completed_successfully # echat_spicedb 库幂等补建后再迁移
 
   spicedb: # 对象级授权（Zanzibar）：关系元组复用 postgres 的 echat_spicedb 库
-    image: ghcr.io/authzed/spicedb:v1.56.2 # 与 spicedb-migrate 同版本
+    image: ghcr.nju.edu.cn/authzed/spicedb:v1.56.2 # 与 spicedb-migrate 同版本（走南大 ghcr 镜像加速）
     restart: unless-stopped
     command: ["serve"]
     environment:
@@ -96,7 +96,7 @@ services:
   # 配置来自配置仓（多项目单一份），以 OBS_DIR 指向配置仓克隆，默认 app 仓上级的 deploy-config/projects/echat
   otel-collector:
     profiles: ["observability"]
-    image: docker.m.daocloud.io/otel/opentelemetry-collector-contrib:latest
+    image: otel/opentelemetry-collector-contrib:0.163.1
     command: ["--config", "/etc/otel/config.yaml"]
     volumes:
       - ${OBS_DIR:-../../deploy-config/projects/echat}/otel/collector-config.yaml:/etc/otel/config.yaml:ro
@@ -111,7 +111,7 @@ services:
 
   tempo:
     profiles: ["observability"]
-    image: docker.m.daocloud.io/grafana/tempo:latest
+    image: grafana/tempo:3.1.0
     command: ["-config.file=/etc/tempo.yaml"]
     volumes:
       - ${OBS_DIR:-../../deploy-config/projects/echat}/otel/tempo.yaml:/etc/tempo.yaml:ro
@@ -122,7 +122,7 @@ services:
 
   prometheus:
     profiles: ["observability"]
-    image: docker.m.daocloud.io/prom/prometheus:latest
+    image: prom/prometheus:v3.15.0
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=1d"]
     volumes:
       - ${OBS_DIR:-../../deploy-config/projects/echat}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
@@ -132,7 +132,7 @@ services:
 
   loki:
     profiles: ["observability"]
-    image: docker.m.daocloud.io/grafana/loki:latest
+    image: grafana/loki:3.7.8
     command: ["-config.file=/etc/loki/local-config.yaml"]
     volumes:
       - ${OBS_DIR:-../../deploy-config/projects/echat}/otel/loki-config.yaml:/etc/loki/local-config.yaml:ro
@@ -143,7 +143,7 @@ services:
 
   grafana:
     profiles: ["observability"]
-    image: docker.m.daocloud.io/grafana/grafana:latest
+    image: grafana/grafana:12.4.13
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
@@ -160,11 +160,11 @@ services:
   # 资源层：宿主机/容器 CPU、内存、网络指标（Prometheus 直接抓，不经 Collector）
   node-exporter:
     profiles: ["observability"]
-    image: docker.m.daocloud.io/prom/node-exporter:latest
+    image: prom/node-exporter:v1.12.1 # Docker Hub 直连（DaoCloud 对部分仓库返回 No such image / EOF）
     command: ["--path.rootfs=/host"]
     pid: host
     volumes:
-      - /:/host:ro,rslave
+      - /:/host:ro
     ports:
       - "9100:9100"
     restart: unless-stopped
