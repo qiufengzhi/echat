@@ -743,6 +743,8 @@ type queuedFrame struct {
 	payload []byte
 	// turn 该帧编码时的有效轮次，用于播放态记录
 	turn string
+	// sentence 该帧编码时所在的轮内句子序号，用于播出前缀裁剪
+	sentence int32
 }
 
 // drainFrames 丢弃队列里尚未发出的帧，返回丢弃帧数
@@ -779,6 +781,7 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 	var totalPCM int          // 累计收到的 TTS PCM 字节数（16kHz 原始）
 	var framesEncoded int     // 累计编码发送的 Opus 帧数
 	var lastTurn string       // 最近输出过音频的轮次，轮次切换即本轮首个音频块
+	var curSentence int32     // 最近音频块所在的轮内句子序号，随音频事件刷新
 	var pendingTurn string    // 首个编码帧尚未记录的轮次
 	var turnAudioAt time.Time // 该轮首块音频到达时刻，用于 first_audio_encode
 
@@ -860,7 +863,7 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 						}
 					}
 					// 刷新播放态：只要 pacer 还在按 20ms 节拍发帧，AI 就视为「在出声」
-					playback.markSent(qf.turn)
+					playback.markSent(qf.turn, qf.sentence)
 				default:
 					// 队列为空，等待下一次 tick
 				}
@@ -905,7 +908,7 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 				logger.Warnw("Opus编码失败", "source", acr.clientId[:8], "error", encErr)
 				continue
 			}
-			frameQueue <- queuedFrame{payload: opusPayload, turn: lastTurn}
+			frameQueue <- queuedFrame{payload: opusPayload, turn: lastTurn, sentence: curSentence}
 			framesEncoded++
 			// 本轮首个编码帧：记录首块音频 → 首帧 RTP 的间隔
 			if pendingTurn != "" {
@@ -975,6 +978,8 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 			pendingTurn = ev.TurnID
 			observability.MarkFirstAudio(ev.TurnID)
 		}
+		// 句子游标：后续编码帧都按该序号记入播放态，回答「用户听到了第几句」
+		curSentence = ev.SentenceSeq
 		// AudioData：重置空闲计时
 		if !idleTimer.Stop() {
 			select {
@@ -999,7 +1004,7 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 		padded := make([]int16, opusEncoderFrameSamples)
 		copy(padded, pcmBuf)
 		if opusPayload, err := enc.Encode(padded); err == nil {
-			frameQueue <- queuedFrame{payload: opusPayload, turn: lastTurn}
+			frameQueue <- queuedFrame{payload: opusPayload, turn: lastTurn, sentence: curSentence}
 			framesEncoded++
 		} else {
 			logger.Warnw("尾部残帧编码失败", "source", acr.clientId[:8], "error", err)

@@ -53,8 +53,8 @@ func TestEndpointInterruptEventFollowsInFlightAudio(t *testing.T) {
 	ep.beginTurn("t1")
 	ep.attach(sp)
 
-	ep.publishFrom(sp, []byte{1})
-	ep.publishFrom(sp, []byte{2})
+	ep.publishFrom(sp, synthChunk{pcm: []byte{1}})
+	ep.publishFrom(sp, synthChunk{pcm: []byte{2}})
 	ep.interrupt()
 
 	want := []AudioEventKind{AudioData, AudioData, AudioInterrupt}
@@ -88,8 +88,8 @@ func TestEndpointDropsAudioPublishedAfterInterrupt(t *testing.T) {
 	}
 
 	before := staleSegmentDropped.Value()
-	ep.publishFrom(sp, []byte{1})
-	ep.publishFrom(sp, []byte{2})
+	ep.publishFrom(sp, synthChunk{pcm: []byte{1}})
+	ep.publishFrom(sp, synthChunk{pcm: []byte{2}})
 
 	if got := staleSegmentDropped.Value() - before; got != 2 {
 		t.Fatalf("期望计数增加 2，实际增加 %d", got)
@@ -109,7 +109,7 @@ func TestEndpointResumesOnNextTurn(t *testing.T) {
 	first := &SessionPipeline{}
 	ep.beginTurn("t1")
 	ep.attach(first)
-	ep.publishFrom(first, []byte{1})
+	ep.publishFrom(first, synthChunk{pcm: []byte{1}})
 	ep.interrupt()
 	if !ep.isDead("t1") {
 		t.Fatal("被打断的轮次应被标为作废")
@@ -118,7 +118,7 @@ func TestEndpointResumesOnNextTurn(t *testing.T) {
 	second := &SessionPipeline{}
 	ep.beginTurn("t2")
 	ep.attach(second)
-	ep.publishFrom(second, []byte{2})
+	ep.publishFrom(second, synthChunk{pcm: []byte{2}})
 
 	// 依次应读到：t1 的音频、打断事件、t2 的音频
 	kinds := []AudioEventKind{AudioData, AudioInterrupt, AudioData}
@@ -157,12 +157,12 @@ func TestEndpointDropsAudioFromReplacedExecutor(t *testing.T) {
 	}
 
 	before := staleSegmentDropped.Value()
-	ep.publishFrom(old, []byte{9})
+	ep.publishFrom(old, synthChunk{pcm: []byte{9}})
 	if got := staleSegmentDropped.Value() - before; got != 1 {
 		t.Fatalf("旧执行器的输出应被丢弃并计数，实际增加 %d", got)
 	}
 
-	ep.publishFrom(current, []byte{7})
+	ep.publishFrom(current, synthChunk{pcm: []byte{7}})
 	ev, ok := ep.Next()
 	if !ok || ev.Kind != AudioData || !bytes.Equal(ev.PCM, []byte{7}) {
 		t.Fatalf("当前执行器的输出应正常入队，得到 %+v（ok=%v）", ev, ok)

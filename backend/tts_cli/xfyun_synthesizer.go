@@ -198,8 +198,8 @@ func (s *XfyunSynthesizer) CreateSession(sessionID string) *SessionPipeline {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sp := &SessionPipeline{
-		sentenceCh: make(chan string, defaultSentenceBufSize),
-		audioOutCh: make(chan []byte, defaultAudioBufSize),
+		sentenceCh: make(chan taggedSentence, defaultSentenceBufSize),
+		audioOutCh: make(chan synthChunk, defaultAudioBufSize),
 		ctx:        ctx,
 		cancel:     cancel,
 		isActive:   true,
@@ -242,17 +242,17 @@ func (s *XfyunSynthesizer) runSession(sp *SessionPipeline, sessionID string) {
 		close(sp.audioOutCh)
 	}()
 
-	var sentenceSeq int // 句子序号，用于跨日志关联音频块归属
+	var totalSentences int // 已合成句子数，仅用于日志
 	for {
 		select {
-		case sentence, ok := <-sp.sentenceCh:
+		case sent, ok := <-sp.sentenceCh:
 			if !ok {
-				logger.Infow("句子通道已关闭", "sessionID", sessionID, "totalSentences", sentenceSeq)
+				logger.Infow("句子通道已关闭", "sessionID", sessionID, "totalSentences", totalSentences)
 				return
 			}
-			sentenceSeq++
-			logger.Infow("开始合成句子", "sessionID", sessionID, "seq", sentenceSeq, "sentence", sentence)
-			s.synthesizeSentence(sp, sentence, sessionID, sentenceSeq)
+			totalSentences++
+			logger.Infow("开始合成句子", "sessionID", sessionID, "seq", sent.seq, "sentence", sent.text)
+			s.synthesizeSentence(sp, sent, sessionID)
 		case <-sp.ctx.Done():
 			logger.Infow("会话已取消", "sessionID", sessionID)
 			return
@@ -266,9 +266,9 @@ func (s *XfyunSynthesizer) runSession(sp *SessionPipeline, sessionID string) {
 // 服务端合成完毕后会主动关闭连接，协议不支持在同一连接上发送多个独立文本请求。
 // 因此一句文本 = 一条 WebSocket 连接 = 一次完整合成生命周期
 // 发送合成请求后流式读取音频块写入管道
-// sentenceSeq 是句子序号，用于跨日志关联音频块归属，方便排查丢失
-func (s *XfyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence string, sessionID string, sentenceSeq int) {
-	sentence = strings.TrimSpace(sentence)
+// sent 携带句子文本与轮内序号，序号随音频块透传到播放侧
+func (s *XfyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sent taggedSentence, sessionID string) {
+	sentence := strings.TrimSpace(sent.text)
 	// 清理非法 UTF-8 字节：LLM 流式输出可能把多字节字符（如中文）拆在两个 gRPC 消息里，
 	// 导致首尾出现无效字节，讯飞收到无法合成，产出噪音
 	sentence = strings.ToValidUTF8(sentence, "")
@@ -286,7 +286,7 @@ func (s *XfyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence stri
 		observability.AddTTSRequest("xfyun", status)
 	}()
 
-	logger.Debugw("讯飞合成开始", "sessionID", sessionID, "seq", sentenceSeq, "sentence", sentence)
+	logger.Debugw("讯飞合成开始", "sessionID", sessionID, "seq", sent.seq, "sentence", sentence)
 
 	// 构建鉴权 URL
 	wsURL, err := s.buildAuthURL()
@@ -333,7 +333,7 @@ func (s *XfyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence stri
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) ||
 				strings.Contains(err.Error(), "close 1000") {
 				ok = true
-				logger.Infow("合成完成", "sessionID", sessionID, "seq", sentenceSeq, "totalBytes", totalBytes)
+				logger.Infow("合成完成", "sessionID", sessionID, "seq", sent.seq, "totalBytes", totalBytes)
 				return
 			}
 			logger.Warnw("读取响应失败", "sessionID", sessionID, "error", err)
@@ -366,7 +366,7 @@ func (s *XfyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence stri
 			if len(audio) > 0 {
 				totalBytes += len(audio)
 				select {
-				case sp.audioOutCh <- audio:
+				case sp.audioOutCh <- synthChunk{sentenceSeq: sent.seq, pcm: audio}:
 				case <-sp.ctx.Done():
 					logger.Infow("合成被取消", "sessionID", sessionID)
 					return
@@ -379,7 +379,7 @@ func (s *XfyunSynthesizer) synthesizeSentence(sp *SessionPipeline, sentence stri
 		// status=2 合成结束
 		if resp.Data.Status == 2 {
 			ok = true
-			logger.Infow("合成完成(status=2)", "sessionID", sessionID, "seq", sentenceSeq, "totalBytes", totalBytes)
+			logger.Infow("合成完成(status=2)", "sessionID", sessionID, "seq", sent.seq, "totalBytes", totalBytes)
 			return
 		}
 	}

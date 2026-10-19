@@ -70,6 +70,25 @@ type sentenceBuffer struct {
 	turnID string
 	// sp 本轮关联的 TTS 合成执行器
 	sp *SessionPipeline
+	// sentenceSeq 已成功送入合成的句子数，也是下一句的轮内序号
+	sentenceSeq int32
+	// sentences 已成功送入合成的句子文本，按下标与 sentenceSeq 对齐，
+	// 打断时据此取「已播出的完整句前缀」写入历史
+	sentences []string
+}
+
+// dispatch 给句子分配轮内序号并送入合成，成功才记入 sentences
+//
+// 返回 false 表示合成队列已满、句子被丢弃：不计序号，
+// 保证序号与实际合成/播出的句子一一对应
+func (sb *sentenceBuffer) dispatch(sentence string) bool {
+	sb.sentenceSeq++
+	if sb.sp.SendSentence(sb.sentenceSeq, sentence) {
+		sb.sentences = append(sb.sentences, sentence)
+		return true
+	}
+	sb.sentenceSeq--
+	return false
 }
 
 // GlobalTTSService 全局 TTS 服务实例，init() 自动初始化
@@ -133,8 +152,8 @@ func (ss *Service) getOrCreate(resp *llm.TurnResponse, ep *endpoint) *sentenceBu
 // 执行器随轮次销毁重建而端点不变：泵随执行器退出，下一轮为新执行器重新挂泵
 // ep: 目标端点；sp: 本轮合成执行器
 func pumpPipeline(ep *endpoint, sp *SessionPipeline) {
-	for pcm := range sp.AudioCh() {
-		ep.publishFrom(sp, pcm)
+	for chunk := range sp.AudioCh() {
+		ep.publishFrom(sp, chunk)
 	}
 }
 
@@ -170,7 +189,7 @@ func (ss *Service) ProcessText(resp *llm.TurnResponse) {
 
 		// 将完整句子送入 TTS（synthesizeSentence 里还会再做 ToValidUTF8 兜底）
 		if strings.TrimSpace(sentence) != "" {
-			if sb.sp.SendSentence(sentence) {
+			if sb.dispatch(sentence) {
 				observability.MarkFirstSentence(resp.TurnId)
 				logger.Infow("送入 TTS", "sessionID", sessionID, "sentence", sentence)
 			} else {
@@ -186,7 +205,7 @@ func (ss *Service) ProcessText(resp *llm.TurnResponse) {
 	// LLM 回复结束，将剩余文本作为最后一句送入 TTS
 	if resp.IsFinal {
 		if strings.TrimSpace(sb.text.String()) != "" {
-			if sb.sp.SendSentence(sb.text.String()) {
+			if sb.dispatch(sb.text.String()) {
 				observability.MarkFirstSentence(resp.TurnId)
 				logger.Infow("最后一句送入 TTS", "sessionID", sessionID, "sentence", sb.text.String())
 			} else {
@@ -200,6 +219,29 @@ func (ss *Service) ProcessText(resp *llm.TurnResponse) {
 		ss.mu.Unlock()
 		logger.Infow("会话结束，清理缓冲区", "sessionID", sessionID)
 	}
+}
+
+// PlayedPrefix 返回当前轮已送入合成的第 1..n 句文本拼接，供打断时裁剪历史
+//
+// n 为用户完整听到的句子数；超过已送句数时按实际句数截断；
+// 当前轮没有文本缓冲（轮已收尾或尚未送句）时返回空串
+// sessionID: 会话标识；n: 完整播出的句子数
+func (ss *Service) PlayedPrefix(sessionID string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	ss.mu.RLock()
+	sb := ss.buffer[sessionID]
+	ss.mu.RUnlock()
+	if sb == nil {
+		return ""
+	}
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	if n > len(sb.sentences) {
+		n = len(sb.sentences)
+	}
+	return strings.Join(sb.sentences[:n], "")
 }
 
 // Interrupt 用户打断（barge-in）：结束当前轮

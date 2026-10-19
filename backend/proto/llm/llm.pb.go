@@ -76,16 +76,19 @@ func (HealthCheckResponse_ServingStatus) EnumDescriptor() ([]byte, []int) {
 
 // TurnRequest 一轮对话的请求
 type TurnRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"` // 会话 ID，同一会话的轮次在 Agent 侧串行处理
-	RoomId        string                 `protobuf:"bytes,2,opt,name=room_id,json=roomId,proto3" json:"room_id,omitempty"`          // 房间 ID
-	ClientId      string                 `protobuf:"bytes,3,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`    // 客户端 ID，与房间 ID 组成会话 ID
-	UserText      string                 `protobuf:"bytes,4,opt,name=user_text,json=userText,proto3" json:"user_text,omitempty"`    // 用户输入文本，取自 ASR 句末结果
-	TurnId        string                 `protobuf:"bytes,5,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`          // 轮次 ID，跨 Go、Agent、TTS 关联同一轮
-	Seq           int64                  `protobuf:"varint,6,opt,name=seq,proto3" json:"seq,omitempty"`                             // 轮次序号，同一会话内由调用方递增
-	UserId        string                 `protobuf:"bytes,7,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`          // 说话用户的业务 ID，预留做个性化
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"` // 会话 ID，同一会话的轮次在 Agent 侧串行处理
+	RoomId    string                 `protobuf:"bytes,2,opt,name=room_id,json=roomId,proto3" json:"room_id,omitempty"`          // 房间 ID
+	ClientId  string                 `protobuf:"bytes,3,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`    // 客户端 ID，与房间 ID 组成会话 ID
+	UserText  string                 `protobuf:"bytes,4,opt,name=user_text,json=userText,proto3" json:"user_text,omitempty"`    // 用户输入文本，取自 ASR 句末结果
+	TurnId    string                 `protobuf:"bytes,5,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`          // 轮次 ID，跨 Go、Agent、TTS 关联同一轮
+	Seq       int64                  `protobuf:"varint,6,opt,name=seq,proto3" json:"seq,omitempty"`                             // 轮次序号，同一会话内由调用方递增
+	UserId    string                 `protobuf:"bytes,7,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`          // 说话用户的业务 ID，预留做个性化
+	// 上一轮被打断时用户实际听到的回复句前缀，仅在上一轮被硬打断时携带；
+	// Agent 据此把历史里被打断的半句裁剪为实际播出的部分，空串表示什么都没播出
+	PlayedReplyPrefix *string `protobuf:"bytes,8,opt,name=played_reply_prefix,json=playedReplyPrefix,proto3,oneof" json:"played_reply_prefix,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *TurnRequest) Reset() {
@@ -163,6 +166,13 @@ func (x *TurnRequest) GetSeq() int64 {
 func (x *TurnRequest) GetUserId() string {
 	if x != nil {
 		return x.UserId
+	}
+	return ""
+}
+
+func (x *TurnRequest) GetPlayedReplyPrefix() string {
+	if x != nil && x.PlayedReplyPrefix != nil {
+		return *x.PlayedReplyPrefix
 	}
 	return ""
 }
@@ -524,7 +534,7 @@ var File_llm_proto protoreflect.FileDescriptor
 
 const file_llm_proto_rawDesc = "" +
 	"\n" +
-	"\tllm.proto\x12\x03llm\"\xc3\x01\n" +
+	"\tllm.proto\x12\x03llm\"\x90\x02\n" +
 	"\vTurnRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +
@@ -533,7 +543,9 @@ const file_llm_proto_rawDesc = "" +
 	"\tuser_text\x18\x04 \x01(\tR\buserText\x12\x17\n" +
 	"\aturn_id\x18\x05 \x01(\tR\x06turnId\x12\x10\n" +
 	"\x03seq\x18\x06 \x01(\x03R\x03seq\x12\x17\n" +
-	"\auser_id\x18\a \x01(\tR\x06userId\"\x93\x03\n" +
+	"\auser_id\x18\a \x01(\tR\x06userId\x123\n" +
+	"\x13played_reply_prefix\x18\b \x01(\tH\x00R\x11playedReplyPrefix\x88\x01\x01B\x16\n" +
+	"\x14_played_reply_prefix\"\x93\x03\n" +
 	"\fTurnResponse\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +
@@ -621,6 +633,7 @@ func file_llm_proto_init() {
 	if File_llm_proto != nil {
 		return
 	}
+	file_llm_proto_msgTypes[0].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

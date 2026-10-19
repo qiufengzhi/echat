@@ -23,14 +23,17 @@ type playbackState struct {
 	lastSentAt time.Time
 	// playedTurn 最近发出的帧所属轮次
 	playedTurn string
+	// playedSentence 最近发出的帧在该轮内的句子序号（从 1 计），用于播出前缀裁剪
+	playedSentence int32
 }
 
 // markSent 记录一帧音频已发出
-func (p *playbackState) markSent(turn string) {
+func (p *playbackState) markSent(turn string, sentence int32) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.lastSentAt = time.Now()
 	p.playedTurn = turn
+	p.playedSentence = sentence
 }
 
 // speaking 返回该会话的 AI 音频是否仍在播出
@@ -43,11 +46,16 @@ func (p *playbackState) speaking() bool {
 	return time.Since(p.lastSentAt) <= speakingGrace
 }
 
-// played 返回最近播出的帧是否属于指定轮次
-func (p *playbackState) played(turn string) bool {
+// played 返回指定轮次已播到的句子序号；轮次不符时返回 0
+//
+// 方法名不与字段 playedSentence 重名，返回值按「已播到的句子序号」语义命名
+func (p *playbackState) played(turn string) int32 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.playedTurn == turn
+	if p.playedTurn != turn {
+		return 0
+	}
+	return p.playedSentence
 }
 
 // playbackTable sessionID -> 播放态，随 TTS 循环建立、随循环退出移除
@@ -77,11 +85,11 @@ func playbackSpeaking(sessionID string) bool {
 	return v.(*playbackState).speaking()
 }
 
-// playbackPlayed 查询会话指定轮次最近播出的轮次是否匹配；未登记返回 false
-func playbackPlayed(sessionID, turnID string) bool {
+// playbackPlayed 查询会话指定轮次已播到的句子序号；未登记或轮次不符返回 0
+func playbackPlayed(sessionID, turnID string) int32 {
 	v, ok := playbackTable.Load(sessionID)
 	if !ok {
-		return false
+		return 0
 	}
 	return v.(*playbackState).played(turnID)
 }

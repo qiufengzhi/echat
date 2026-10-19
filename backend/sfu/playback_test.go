@@ -12,15 +12,15 @@ func TestPlaybackSpeaking(t *testing.T) {
 		t.Fatalf("从未发过帧，不应视为在播")
 	}
 
-	ps.markSent("turn-1")
+	ps.markSent("turn-1", 3)
 	if !ps.speaking() {
 		t.Fatalf("刚发过帧，应视为在播")
 	}
-	if !ps.played("turn-1") {
-		t.Fatalf("最近播出的帧属于 turn-1")
+	if got := ps.played("turn-1"); got != 3 {
+		t.Fatalf("turn-1 已播到第 3 句，实际 %d", got)
 	}
-	if ps.played("turn-2") {
-		t.Fatalf("turn-2 从未播出，不应匹配")
+	if got := ps.played("turn-2"); got != 0 {
+		t.Fatalf("turn-2 从未播出，应返回 0，实际 %d", got)
 	}
 
 	// 时间回拨超过宽限期：视为停播
@@ -48,13 +48,19 @@ func TestPlaybackRegistry(t *testing.T) {
 		t.Fatalf("同一会话重复登记应返回同一实例")
 	}
 
-	a.markSent("turn-9")
+	a.markSent("turn-9", 1)
 	if !playbackSpeaking(sessionID) {
 		t.Fatalf("登记并发帧后应视为在播")
+	}
+	if got := playbackPlayed(sessionID, "turn-9"); got != 1 {
+		t.Fatalf("已播句子序号应为 1，实际 %d", got)
 	}
 
 	unregisterPlayback(sessionID)
 	if playbackSpeaking(sessionID) {
 		t.Fatalf("注销后不应再视为在播")
+	}
+	if got := playbackPlayed(sessionID, "turn-9"); got != 0 {
+		t.Fatalf("注销后已播句子序号应返回 0，实际 %d", got)
 	}
 }

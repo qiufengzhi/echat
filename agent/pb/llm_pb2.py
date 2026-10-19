@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\tllm.proto\x12\x03llm\"\x87\x01\n\x0bTurnRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0f\n\x07room_id\x18\x02 \x01(\t\x12\x11\n\tclient_id\x18\x03 \x01(\t\x12\x11\n\tuser_text\x18\x04 \x01(\t\x12\x0f\n\x07turn_id\x18\x05 \x01(\t\x12\x0b\n\x03seq\x18\x06 \x01(\x03\x12\x0f\n\x07user_id\x18\x07 \x01(\t\"\x8b\x02\n\x0cTurnResponse\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0f\n\x07room_id\x18\x02 \x01(\t\x12\x11\n\tclient_id\x18\x03 \x01(\t\x12\x0f\n\x07turn_id\x18\x04 \x01(\t\x12\x15\n\rresponse_text\x18\x05 \x01(\t\x12\x10\n\x08is_final\x18\x06 \x01(\x08\x12\x0b\n\x03seq\x18\x07 \x01(\x03\x12\x12\n\nerror_code\x18\x08 \x01(\t\x12\x12\n\nevent_type\x18\t \x01(\t\x12\x14\n\x0ctool_call_id\x18\n \x01(\t\x12\x11\n\ttool_name\x18\x0b \x01(\t\x12\x16\n\x0etool_arguments\x18\x0c \x01(\t\x12\x13\n\x0btool_result\x18\r \x01(\t\"9\n\x13\x43loseSessionRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0e\n\x06reason\x18\x02 \x01(\t\"&\n\x14\x43loseSessionResponse\x12\x0e\n\x06\x63losed\x18\x01 \x01(\x08\"%\n\x12HealthCheckRequest\x12\x0f\n\x07service\x18\x01 \x01(\t\"\xdf\x01\n\x13HealthCheckResponse\x12\x36\n\x06status\x18\x01 \x01(\x0e\x32&.llm.HealthCheckResponse.ServingStatus\x12\x17\n\x0f\x61\x63tive_sessions\x18\x02 \x01(\x05\x12\x15\n\rprovider_name\x18\x03 \x01(\t\x12\x16\n\x0euptime_seconds\x18\x04 \x01(\x01\"H\n\rServingStatus\x12\x0b\n\x07UNKNOWN\x10\x00\x12\x0b\n\x07SERVING\x10\x01\x12\x0f\n\x0bNOT_SERVING\x10\x02\x12\x0c\n\x08\x44\x45GRADED\x10\x03\x32\xc6\x01\n\nLLMService\x12\x31\n\x08Generate\x12\x10.llm.TurnRequest\x1a\x11.llm.TurnResponse0\x01\x12\x43\n\x0c\x43loseSession\x12\x18.llm.CloseSessionRequest\x1a\x19.llm.CloseSessionResponse\x12@\n\x0bHealthCheck\x12\x17.llm.HealthCheckRequest\x1a\x18.llm.HealthCheckResponseB\x13Z\x11\x62\x61\x63kend/proto/llmb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\tllm.proto\x12\x03llm\"\xc1\x01\n\x0bTurnRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0f\n\x07room_id\x18\x02 \x01(\t\x12\x11\n\tclient_id\x18\x03 \x01(\t\x12\x11\n\tuser_text\x18\x04 \x01(\t\x12\x0f\n\x07turn_id\x18\x05 \x01(\t\x12\x0b\n\x03seq\x18\x06 \x01(\x03\x12\x0f\n\x07user_id\x18\x07 \x01(\t\x12 \n\x13played_reply_prefix\x18\x08 \x01(\tH\x00\x88\x01\x01\x42\x16\n\x14_played_reply_prefix\"\x8b\x02\n\x0cTurnResponse\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0f\n\x07room_id\x18\x02 \x01(\t\x12\x11\n\tclient_id\x18\x03 \x01(\t\x12\x0f\n\x07turn_id\x18\x04 \x01(\t\x12\x15\n\rresponse_text\x18\x05 \x01(\t\x12\x10\n\x08is_final\x18\x06 \x01(\x08\x12\x0b\n\x03seq\x18\x07 \x01(\x03\x12\x12\n\nerror_code\x18\x08 \x01(\t\x12\x12\n\nevent_type\x18\t \x01(\t\x12\x14\n\x0ctool_call_id\x18\n \x01(\t\x12\x11\n\ttool_name\x18\x0b \x01(\t\x12\x16\n\x0etool_arguments\x18\x0c \x01(\t\x12\x13\n\x0btool_result\x18\r \x01(\t\"9\n\x13\x43loseSessionRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0e\n\x06reason\x18\x02 \x01(\t\"&\n\x14\x43loseSessionResponse\x12\x0e\n\x06\x63losed\x18\x01 \x01(\x08\"%\n\x12HealthCheckRequest\x12\x0f\n\x07service\x18\x01 \x01(\t\"\xdf\x01\n\x13HealthCheckResponse\x12\x36\n\x06status\x18\x01 \x01(\x0e\x32&.llm.HealthCheckResponse.ServingStatus\x12\x17\n\x0f\x61\x63tive_sessions\x18\x02 \x01(\x05\x12\x15\n\rprovider_name\x18\x03 \x01(\t\x12\x16\n\x0euptime_seconds\x18\x04 \x01(\x01\"H\n\rServingStatus\x12\x0b\n\x07UNKNOWN\x10\x00\x12\x0b\n\x07SERVING\x10\x01\x12\x0f\n\x0bNOT_SERVING\x10\x02\x12\x0c\n\x08\x44\x45GRADED\x10\x03\x32\xc6\x01\n\nLLMService\x12\x31\n\x08Generate\x12\x10.llm.TurnRequest\x1a\x11.llm.TurnResponse0\x01\x12\x43\n\x0c\x43loseSession\x12\x18.llm.CloseSessionRequest\x1a\x19.llm.CloseSessionResponse\x12@\n\x0bHealthCheck\x12\x17.llm.HealthCheckRequest\x1a\x18.llm.HealthCheckResponseB\x13Z\x11\x62\x61\x63kend/proto/llmb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -33,19 +33,19 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'Z\021backend/proto/llm'
   _globals['_TURNREQUEST']._serialized_start=19
-  _globals['_TURNREQUEST']._serialized_end=154
-  _globals['_TURNRESPONSE']._serialized_start=157
-  _globals['_TURNRESPONSE']._serialized_end=424
-  _globals['_CLOSESESSIONREQUEST']._serialized_start=426
-  _globals['_CLOSESESSIONREQUEST']._serialized_end=483
-  _globals['_CLOSESESSIONRESPONSE']._serialized_start=485
-  _globals['_CLOSESESSIONRESPONSE']._serialized_end=523
-  _globals['_HEALTHCHECKREQUEST']._serialized_start=525
-  _globals['_HEALTHCHECKREQUEST']._serialized_end=562
-  _globals['_HEALTHCHECKRESPONSE']._serialized_start=565
-  _globals['_HEALTHCHECKRESPONSE']._serialized_end=788
-  _globals['_HEALTHCHECKRESPONSE_SERVINGSTATUS']._serialized_start=716
-  _globals['_HEALTHCHECKRESPONSE_SERVINGSTATUS']._serialized_end=788
-  _globals['_LLMSERVICE']._serialized_start=791
-  _globals['_LLMSERVICE']._serialized_end=989
+  _globals['_TURNREQUEST']._serialized_end=212
+  _globals['_TURNRESPONSE']._serialized_start=215
+  _globals['_TURNRESPONSE']._serialized_end=482
+  _globals['_CLOSESESSIONREQUEST']._serialized_start=484
+  _globals['_CLOSESESSIONREQUEST']._serialized_end=541
+  _globals['_CLOSESESSIONRESPONSE']._serialized_start=543
+  _globals['_CLOSESESSIONRESPONSE']._serialized_end=581
+  _globals['_HEALTHCHECKREQUEST']._serialized_start=583
+  _globals['_HEALTHCHECKREQUEST']._serialized_end=620
+  _globals['_HEALTHCHECKRESPONSE']._serialized_start=623
+  _globals['_HEALTHCHECKRESPONSE']._serialized_end=846
+  _globals['_HEALTHCHECKRESPONSE_SERVINGSTATUS']._serialized_start=774
+  _globals['_HEALTHCHECKRESPONSE_SERVINGSTATUS']._serialized_end=846
+  _globals['_LLMSERVICE']._serialized_start=849
+  _globals['_LLMSERVICE']._serialized_end=1047
 # @@protoc_insertion_point(module_scope)

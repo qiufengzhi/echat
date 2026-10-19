@@ -25,7 +25,9 @@ message TurnRequest {
   string turn_id = 5;    // 轮次 ID，跨 Go、Agent、TTS 关联同一轮
   int64 seq = 6;         // 轮次序号，同一会话内由调用方递增
   string user_id = 7;    // 说话用户的业务 ID，预留做个性化
-}
+  // 上一轮被打断时用户实际听到的回复句前缀，仅在上一轮被硬打断时携带；
+  // Agent 据此把历史里被打断的半句裁剪为实际播出的部分，空串表示什么都没播出
+  optional string played_reply_prefix = 8;}
 
 // TurnResponse 一轮对话的响应事件，同一轮的所有事件共享 turn_id
 message TurnResponse {

@@ -179,9 +179,16 @@ func handleASRResult(res *asrpb.TranscriptAudioChunk) {
 	// LLM 流已结束、TTS 仍在播尾巴的窗口里，若不打断，新回答会排在旧尾巴后面播出
 	// 在途轮次：取消该轮 RPC 并结束当前轮的音频输出
 	// 尾巴窗口（无在途轮次但音频在播）：只停播，供新轮次音频干净地顶上
+	var playedPrefix *string
 	if runningTurn, inFlight := agentcli.Global.TurnID(res.SessionId); inFlight {
 		logger.Infow("用户插话，打断在途轮次",
 			"roomID", res.RoomId, "clientID", res.ClientId, "runningTurn", runningTurn)
+		// 被打断半句的历史裁剪：取用户完整听到的句前缀。
+		// 正在播的那句只听了一部分，不计入；一句都没播出时前缀为空串，
+		// Agent 据此把被打断的半句从历史里裁掉，模型下轮不再重复
+		played := playbackPlayed(res.SessionId, runningTurn)
+		prefix := tts_cli.GlobalTTSService.PlayedPrefix(res.SessionId, int(played)-1)
+		playedPrefix = &prefix
 		agentcli.Global.CancelTurn(res.SessionId)
 		tts_cli.GlobalTTSService.Interrupt(res.SessionId)
 		observability.MarkInterruptRequest(res.SessionId)
@@ -194,14 +201,19 @@ func handleASRResult(res *asrpb.TranscriptAudioChunk) {
 	// 每个句末结果发起一轮对话：建 turn 根 span，随 SendTurn ctx 传播到 Python
 	turnID := fmt.Sprintf("%s-%d", res.SessionId, turnSeq.Add(1))
 	turnCtx := observability.StartTurn(context.Background(), turnID, res.SessionId, res.RoomId)
-	if err := agentcli.Global.SendTurn(turnCtx, &llmpb.TurnRequest{
+	req := &llmpb.TurnRequest{
 		SessionId: res.SessionId,
 		RoomId:    res.RoomId,
 		ClientId:  res.ClientId,
 		UserText:  res.Text,
 		TurnId:    turnID,
 		Seq:       res.Seq,
-	}); err != nil {
+	}
+	// 仅在上一轮被硬打断时携带播出前缀：Agent 只裁剪标记过的被打断半句
+	if playedPrefix != nil {
+		req.PlayedReplyPrefix = playedPrefix
+	}
+	if err := agentcli.Global.SendTurn(turnCtx, req); err != nil {
 		logger.Warnw("发起对话轮次失败", "roomID", res.RoomId, "clientID", res.ClientId, "turnID", turnID, "error", err)
 	}
 }

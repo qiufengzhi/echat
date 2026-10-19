@@ -31,6 +31,9 @@ type AudioEvent struct {
 	Kind AudioEventKind
 	// TurnID 该片段发布时的有效轮次，Kind 为 AudioInterrupt 时为空
 	TurnID string
+	// SentenceSeq 该片段所属的轮内句子序号（从 1 计），Kind 为 AudioInterrupt 时为 0；
+	// 播放侧据此回答「用户实际听到了第几句」，供被打断半句的历史裁剪
+	SentenceSeq int32
 	// PCM 合成音频的 PCM16 小端字节，Kind 为 AudioInterrupt 时为空
 	PCM []byte
 }
@@ -177,8 +180,8 @@ func (e *endpoint) attach(sp *SessionPipeline) bool {
 //
 // 满足任一条件即丢弃并计数：轮次已被打断、或数据来自已被换代的执行器。
 // 取消 RPC 与销毁执行器都是尽力而为，在途音频一定会有一小段晚于打断到达
-// sp: 产出该音频的合成执行器；pcm: PCM16 小端字节
-func (e *endpoint) publishFrom(sp *SessionPipeline, pcm []byte) {
+// sp: 产出该音频的合成执行器；chunk: PCM16 小端字节，带句子序号
+func (e *endpoint) publishFrom(sp *SessionPipeline, chunk synthChunk) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -186,7 +189,7 @@ func (e *endpoint) publishFrom(sp *SessionPipeline, pcm []byte) {
 		staleSegmentDropped.Drop("endpoint", e.events.Name())
 		return
 	}
-	e.events.Push(AudioEvent{Kind: AudioData, TurnID: e.turn, PCM: pcm})
+	e.events.Push(AudioEvent{Kind: AudioData, TurnID: e.turn, SentenceSeq: chunk.sentenceSeq, PCM: chunk.pcm})
 }
 
 // interrupt 打断当前轮：标废当前轮、标记失效、投递打断事件

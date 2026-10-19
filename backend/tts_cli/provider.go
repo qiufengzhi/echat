@@ -48,12 +48,31 @@ const (
 	defaultAudioBufSize    = 256 // 音频缓冲大小：容纳合成中的音频块，避免播放卡顿和讯飞WS阻塞
 )
 
+// taggedSentence 带轮内序号的待合成句子
+//
+// 序号由断句层按「成功送入合成」的顺序分配（从 1 计），
+// 随音频一路带到播放侧，用于回答「用户实际听到了第几句」
+type taggedSentence struct {
+	// seq 轮内句子序号，从 1 计
+	seq int32
+	// text 句子文本
+	text string
+}
+
+// synthChunk 带句子序号的合成音频块
+type synthChunk struct {
+	// sentenceSeq 产出该音频块的句子序号，与 taggedSentence.seq 对应
+	sentenceSeq int32
+	// pcm PCM16 小端音频数据
+	pcm []byte
+}
+
 // SessionPipeline 每个会话的独立 TTS 管道
 // 包含句子输入通道、音频输出通道和取消上下文
 // 由各 Provider 的 CreateSession 创建，由 RemoveSession 销毁
 type SessionPipeline struct {
-	sentenceCh chan string        // 输入：断句后的完整句子，缓冲通道，非阻塞写入
-	audioOutCh chan []byte        // 输出：TTS 合成的 PCM 音频块，缓冲通道
+	sentenceCh chan taggedSentence // 输入：断句后的完整句子（带序号），缓冲通道，非阻塞写入
+	audioOutCh chan synthChunk     // 输出：TTS 合成的 PCM 音频块（带句子序号），缓冲通道
 	ctx        context.Context    // 用于取消正在进行的合成请求
 	cancel     context.CancelFunc // 取消函数
 	isActive   bool               // 管道是否活跃
@@ -63,9 +82,10 @@ type SessionPipeline struct {
 // SendSentence 向管道发送一句待合成文本
 //
 // 非阻塞：队列满时返回 false，调用方自行决定丢弃或重试
-func (sp *SessionPipeline) SendSentence(sentence string) bool {
+// seq: 轮内句子序号，随音频输出一路透传
+func (sp *SessionPipeline) SendSentence(seq int32, sentence string) bool {
 	select {
-	case sp.sentenceCh <- sentence:
+	case sp.sentenceCh <- taggedSentence{seq: seq, text: sentence}:
 		return true
 	default:
 		return false
@@ -73,7 +93,7 @@ func (sp *SessionPipeline) SendSentence(sentence string) bool {
 }
 
 // AudioCh 返回音频输出通道，供调用方读取合成后的 PCM 音频块
-func (sp *SessionPipeline) AudioCh() <-chan []byte {
+func (sp *SessionPipeline) AudioCh() <-chan synthChunk {
 	return sp.audioOutCh
 }
 
