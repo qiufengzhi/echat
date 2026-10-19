@@ -175,8 +175,10 @@ func handleASRResult(res *asrpb.TranscriptAudioChunk) {
 	logger.Infow("收到识别结果", "userID", res.ClientId, "text", res.Text, "isFinal", res.IsFinal, "seq", res.Seq)
 	// 本地判停 → ASR 句末延迟（用最近一帧有效语音时刻近似）
 	observability.MarkASRFinal(res.SessionId)
-	// 用户再次开口即打断在途轮次：取消该轮 RPC 并结束当前轮的音频输出，避免两轮音频叠着播
-	// 完整的确认打断状态机（最小打断时长、误打断恢复）属 D1 范围，这里只做「新语音即打断」
+	// 用户再次开口即打断：判定锚点是「AI 是否在出声」而不是「LLM RPC 是否在途」——
+	// LLM 流已结束、TTS 仍在播尾巴的窗口里，若不打断，新回答会排在旧尾巴后面播出
+	// 在途轮次：取消该轮 RPC 并结束当前轮的音频输出
+	// 尾巴窗口（无在途轮次但音频在播）：只停播，供新轮次音频干净地顶上
 	if runningTurn, inFlight := agentcli.Global.TurnID(res.SessionId); inFlight {
 		logger.Infow("用户插话，打断在途轮次",
 			"roomID", res.RoomId, "clientID", res.ClientId, "runningTurn", runningTurn)
@@ -184,6 +186,10 @@ func handleASRResult(res *asrpb.TranscriptAudioChunk) {
 		tts_cli.GlobalTTSService.Interrupt(res.SessionId)
 		observability.MarkInterruptRequest(res.SessionId)
 		observability.EndTurn(runningTurn, "interrupted")
+	} else if playbackSpeaking(res.SessionId) {
+		logger.Infow("用户插话，打断播放尾巴",
+			"roomID", res.RoomId, "clientID", res.ClientId)
+		tts_cli.GlobalTTSService.Interrupt(res.SessionId)
 	}
 	// 每个句末结果发起一轮对话：建 turn 根 span，随 SendTurn ctx 传播到 Python
 	turnID := fmt.Sprintf("%s-%d", res.SessionId, turnSeq.Add(1))

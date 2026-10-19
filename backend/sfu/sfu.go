@@ -741,6 +741,8 @@ func (r *SFURoom) deliverToASR(sourceID string, sessionID string, queue *datapla
 type queuedFrame struct {
 	// payload 编码后的 Opus 数据
 	payload []byte
+	// turn 该帧编码时的有效轮次，用于播放态记录
+	turn string
 }
 
 // drainFrames 丢弃队列里尚未发出的帧，返回丢弃帧数
@@ -798,6 +800,11 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 	const rawResampleThreshold = 6400 // 200ms @ 16kHz mono int16
 	var totalResampledBytes int       // 重采样后输出的总字节数（48kHz PCM）
 
+	// 登记播放态：pacer 每帧发出时刷新，识别结果分发侧据此判定「AI 是否在出声」
+	// 会话的 TTS 循环退出时一并移除登记
+	playback := registerPlayback(acr.sessionID)
+	defer unregisterPlayback(acr.sessionID)
+
 	// 空闲超时 timer：2s 无新音频到达视为句子间自然停顿，刷新累积的 rawBuf
 	// 使用 time.NewTimer + Reset 而非 time.After，避免每次迭代创建新 timer 导致泄漏
 	idleTimer := time.NewTimer(2 * time.Second)
@@ -852,6 +859,8 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 							logger.Warnw("写入AI TTS轨失败", "dest", destID[:8], "error", err)
 						}
 					}
+					// 刷新播放态：只要 pacer 还在按 20ms 节拍发帧，AI 就视为「在出声」
+					playback.markSent(qf.turn)
 				default:
 					// 队列为空，等待下一次 tick
 				}
@@ -896,7 +905,7 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 				logger.Warnw("Opus编码失败", "source", acr.clientId[:8], "error", encErr)
 				continue
 			}
-			frameQueue <- queuedFrame{payload: opusPayload}
+			frameQueue <- queuedFrame{payload: opusPayload, turn: lastTurn}
 			framesEncoded++
 			// 本轮首个编码帧：记录首块音频 → 首帧 RTP 的间隔
 			if pendingTurn != "" {
@@ -990,7 +999,7 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 		padded := make([]int16, opusEncoderFrameSamples)
 		copy(padded, pcmBuf)
 		if opusPayload, err := enc.Encode(padded); err == nil {
-			frameQueue <- queuedFrame{payload: opusPayload}
+			frameQueue <- queuedFrame{payload: opusPayload, turn: lastTurn}
 			framesEncoded++
 		} else {
 			logger.Warnw("尾部残帧编码失败", "source", acr.clientId[:8], "error", err)
