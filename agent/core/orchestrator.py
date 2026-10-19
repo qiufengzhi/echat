@@ -171,18 +171,24 @@ class ChatOrchestrator:
         session_id: str,
         user_text: str,
         room_id: str = "",
+        played_reply_prefix: Optional[str] = None,
     ) -> AsyncIterator[StreamEvent]:
         """接收用户文本，选择策略，产出事件流
 
         session_id: 会话标识，不存在则自动创建
         user_text: 用户输入文本，作为本轮 user 消息
         room_id: 会话所属房间 ID，仅首次创建会话时生效
+        played_reply_prefix: 上一轮被打断时用户实际听到的回复句前缀，None 表示请求未携带；
+            仅当上一轮写入了被打断半句时生效，据此把半句裁剪为实际播出的部分
         return: StreamEvent 异步事件流，含文本、工具调用、结果、错误与结束事件
         """
 
         session = await self.get_or_create_session(session_id, room_id)
         # 惰性淘汰过期会话
         await self._evict_expired_sessions()
+
+        # 上一轮被打断的半句：按本轮请求携带的实际播出前缀裁剪
+        self._apply_played_prefix(session, played_reply_prefix)
 
         # 拼装 messages = [system] + history + [user]
         messages: list = [
@@ -229,11 +235,13 @@ class ChatOrchestrator:
         finally:
             session.mark_idle()
 
-        # 写回历史：user 消息 + assistant 完整回复
+        # 写回历史：user 消息 + assistant 回复
         session.add_message(ChatMessage(role="user", content=user_text))
         reply_text = "".join(reply_parts).strip()
-        # 中断的半句回复不写入历史；工具中间消息也不写
-        if reply_text and not cancelled:
+        # 工具中间消息不写历史；被打断的半句先整句写入并标记待裁剪——
+        # 用户听到了它的开头，模型不该当作什么都没说过；下一轮请求携带
+        # 「实际播出前缀」后由 _apply_played_prefix 把它替换为播出的部分
+        if reply_text:
             session.add_message(
                 ChatMessage(
                     role="assistant",
@@ -241,6 +249,8 @@ class ChatOrchestrator:
                     reasoning_content=assistant_reasoning,
                 )
             )
+            if cancelled:
+                session.pending_played_prefix = True
 
         # 异步保存记忆，不阻塞回复流
         try:
@@ -248,6 +258,30 @@ class ChatOrchestrator:
             loop.create_task(self._save_memory(session))
         except Exception:
             logger.exception("调度异步保存记忆失败")
+
+    def _apply_played_prefix(self, session: Session, played_reply_prefix: Optional[str]) -> None:
+        """把被打断的半句裁剪为用户实际听到的句前缀
+
+        session: 目标会话，仅当上一轮写入了被打断半句（pending_played_prefix）时才生效
+        played_reply_prefix: Go 侧打断时算出的已播出句前缀；None 表示本轮请求未携带，
+            此时保留半句原样、标记留给下一轮再裁
+        """
+        if not session.pending_played_prefix:
+            return
+        if played_reply_prefix is None:
+            logger.debug("会话 {} 待裁剪但请求未携带播出前缀，保留被打断半句", session.session_id)
+            return
+        session.pending_played_prefix = False
+        if session.history and session.history[-1].role == "assistant":
+            session.history.pop()
+        prefix = played_reply_prefix.strip()
+        if prefix:
+            session.add_message(ChatMessage(role="assistant", content=prefix))
+        logger.info(
+            "会话 {} 被打断半句已按播出前缀裁剪 prefix_chars={}",
+            session.session_id,
+            len(prefix),
+        )
 
     async def _save_memory(self, session: Session) -> None:
         """在线程池里保存会话记忆，不阻塞事件循环

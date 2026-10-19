@@ -518,6 +518,92 @@ class TestOrchestrator:
 
         run(inner())
 
+    def test_cancelled_partial_marked_pending(self):
+        """被打断的半句写入历史并标记待裁剪，供下一轮按播出前缀修正"""
+
+        async def inner():
+            """cancel 脚本产出半句回复后取消，断言半句入历史且标记置位"""
+            cfg = make_config()
+            reg = await make_fake_registry()
+            prov = FakeProvider([("cancel",)])
+            orch = ChatOrchestrator(prov, reg, InMemoryMemory(), cfg)
+            [e async for e in orch.handle_message("s-cancel", "你好")]
+            sess = orch._sessions["s-cancel"]
+            msgs = sess.get_messages()
+            assert msgs[-1].role == "assistant"
+            assert msgs[-1].content == "半句回复"
+            assert sess.pending_played_prefix is True
+
+        run(inner())
+
+    def test_played_prefix_trims_partial(self):
+        """下一轮携带播出前缀时，被打断半句被替换为实际播出的部分"""
+
+        async def inner():
+            """先取消产出半句，再带前缀发起下一轮，断言历史被裁剪"""
+            cfg = make_config()
+            reg = await make_fake_registry()
+            prov = FakeProvider([("cancel",), ("echo", "新回复")])
+            orch = ChatOrchestrator(prov, reg, InMemoryMemory(), cfg)
+            [e async for e in orch.handle_message("s-trim", "你好")]
+            sess = orch._sessions["s-trim"]
+
+            # 只听到了半个字：半句替换为前缀
+            [e async for e in orch.handle_message("s-trim", "换个话题", played_reply_prefix="半")]
+            sess = orch._sessions["s-trim"]
+            msgs = sess.get_messages()
+            assert sess.pending_played_prefix is False
+            assert msgs[-3].role == "assistant"
+            assert msgs[-3].content == "半"
+            assert msgs[-2].role == "user" and msgs[-2].content == "换个话题"
+            assert msgs[-1].role == "assistant"
+            assert msgs[-1].content == "新回复"
+
+        run(inner())
+
+    def test_played_prefix_empty_removes_partial(self):
+        """播出前缀为空串（什么都没听到）时，被打断半句从历史移除"""
+
+        async def inner():
+            """先取消产出半句，再带空前缀发起下一轮，断言半句被移除"""
+            cfg = make_config()
+            reg = await make_fake_registry()
+            prov = FakeProvider([("cancel",), ("echo", "新回复")])
+            orch = ChatOrchestrator(prov, reg, InMemoryMemory(), cfg)
+            [e async for e in orch.handle_message("s-empty", "你好")]
+            sess = orch._sessions["s-empty"]
+
+            [e async for e in orch.handle_message("s-empty", "再说一遍", played_reply_prefix="")]
+            sess = orch._sessions["s-empty"]
+            msgs = sess.get_messages()
+            contents = [m.content for m in msgs]
+            assert "半句回复" not in contents, "没播出的半句不应留在历史里"
+            assert msgs[-2].role == "user" and msgs[-2].content == "再说一遍"
+            assert msgs[-1].content == "新回复"
+
+        run(inner())
+
+    def test_played_prefix_ignored_without_partial(self):
+        """上一轮正常完成（无待裁剪标记）时，携带的播出前缀不生效"""
+
+        async def inner():
+            """正常回复后带前缀发起下一轮，断言完整回复原样保留"""
+            cfg = make_config()
+            reg = await make_fake_registry()
+            prov = FakeProvider([("echo", "完整回复"), ("echo", "新回复")])
+            orch = ChatOrchestrator(prov, reg, InMemoryMemory(), cfg)
+            [e async for e in orch.handle_message("s-keep", "你好")]
+            sess = orch._sessions["s-keep"]
+            assert sess.pending_played_prefix is False
+
+            [e async for e in orch.handle_message("s-keep", "接着说", played_reply_prefix="截断")]
+            sess = orch._sessions["s-keep"]
+            contents = [m.content for m in sess.get_messages()]
+            assert "完整回复" in contents, "正常完成的回复不应被播出前缀裁剪"
+            assert sess.pending_played_prefix is False
+
+        run(inner())
+
 
 # =============================================================================
 # 6. 每轮一次 RPC 的服务实现（真实起一个 aio server + client）

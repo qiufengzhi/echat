@@ -89,6 +89,7 @@ class BaseStrategy(ABC):
             tool_calls: List[ToolCallEvent] = []
             llm_finished = False
             round_reasoning = ""  # 本轮 LLM 的思考内容，随 assistant 消息一起回传
+            round_cancelled = False  # 本轮是否被取消：收尾事件必须原样带回，否则被打断半句会被当成完整回复
 
             try:
                 async for event in provider.chat_stream(working, tools, cancel_event):
@@ -100,6 +101,7 @@ class BaseStrategy(ABC):
                         yield event
                     elif isinstance(event, DoneEvent):
                         llm_finished = True
+                        round_cancelled = event.cancelled
                         round_reasoning = event.reasoning_content  # 记录本轮思考内容
                         # 结束事件暂不转发，等工具执行完或确认无工具后统一发
                     elif isinstance(event, ErrorEvent):
@@ -142,7 +144,11 @@ class BaseStrategy(ABC):
 
             # 没有工具调用，说明 LLM 直接给出了最终回复
             if llm_finished:
-                yield DoneEvent(finish_reason="stop", reasoning_content=round_reasoning)
+                yield DoneEvent(
+                    cancelled=round_cancelled,
+                    finish_reason="cancelled" if round_cancelled else "stop",
+                    reasoning_content=round_reasoning,
+                )
                 return
             # 没有 DoneEvent 也没有 tool_call：异常兜底
             yield DoneEvent(finish_reason="error")

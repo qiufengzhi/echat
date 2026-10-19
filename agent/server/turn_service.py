@@ -88,6 +88,13 @@ class TurnServiceServicer(llm_pb2_grpc.LLMServiceServicer):
         """
         session_id = request.session_id
         user_text = request.user_text.strip() if request.user_text else ""
+        # 上一轮被打断时用户实际听到的句前缀：仅在请求显式携带时转发，
+        # 空串是合法取值（表示什么都没播出，半句应从历史移除）
+        played_prefix = (
+            request.played_reply_prefix
+            if request.HasField("played_reply_prefix")
+            else None
+        )
 
         # 空文本或缺失会话：直接回结束事件，避免调用方等到超时
         if not user_text or not session_id:
@@ -106,7 +113,10 @@ class TurnServiceServicer(llm_pb2_grpc.LLMServiceServicer):
             saw_final = False
             try:
                 async for event in self._orchestrator.handle_message(
-                    session_id, user_text, room_id=request.room_id
+                    session_id,
+                    user_text,
+                    room_id=request.room_id,
+                    played_reply_prefix=played_prefix,
                 ):
                     resp = self._event_to_response(event, request)
                     if resp.is_final:

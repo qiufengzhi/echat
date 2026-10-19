@@ -40,6 +40,9 @@ class Session:
         self.history: Deque[ChatMessage] = deque(maxlen=max_history)  # 历史消息队列
         self.cancel_event = asyncio.Event()  # 取消信号事件
         self.metadata: Dict[str, str] = {}  # 附加元数据
+        # 上一轮是否写入了被打断的半句（待下一轮按实际播出前缀裁剪）
+        # True 表示历史末尾的 assistant 消息尚未确认为「用户听到过的内容」
+        self.pending_played_prefix = False
         self._ttl_seconds = ttl_seconds  # 过期秒数
         self._generation_count = 0  # 当前正生成的回复数（用于并发控制）
 
