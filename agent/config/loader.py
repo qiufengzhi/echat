@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +130,34 @@ class ObservabilityConfig(BaseModel):
     synthetic_latency_ms: int = 0  # LLM 首包前人为延迟毫秒，观测验收用（0=不注入）
 
 
+class QuotaConfig(BaseModel):
+    """真实冒烟配额硬上限（次），红线见 docs/loadtest-task-prompt.md 3.2"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    llm: int = 1000  # LLM 调用次数上限（一轮一次计数，不按 token 复算）
+    asr: int = 100  # ASR 调用次数上限（backend 侧钩子落地，此处预留口径一致）
+    tts: int = 100  # TTS 调用次数上限（backend 侧钩子落地，此处预留口径一致）
+
+
+class RealSmokeConfig(BaseModel):
+    """真实上游冒烟开关：默认关闭；开启后真实调用受配额硬上限强制约束"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False  # 默认关闭，仅 smoke 场景（单会话、串行、分钟级）允许开启
+    counter_path: str = "loadtest/results/real_smoke_quota.json"  # 计数持久化路径，重启不重置
+    quota: QuotaConfig = Field(default_factory=QuotaConfig)  # 各上游配额上限
+
+
+class LoadtestConfig(BaseModel):
+    """压测联动配置（设计见 docs/loadtest.md §6）"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    real_smoke: RealSmokeConfig = Field(default_factory=RealSmokeConfig)  # 真实冒烟配额机制
+
+
 # ---------------------------------------------------------------------------
 # 环境变量 → 配置字段 的映射表（viper 风格：环境变量优先于配置文件）
 # ---------------------------------------------------------------------------
@@ -189,6 +217,7 @@ class Config(BaseModel):
     memory: MemoryConfig  # 记忆持久化配置
     logging: LoggingConfig  # 日志配置
     observability: Optional[ObservabilityConfig] = None  # 可观测性配置，缺省时禁用（兼容不含该段的旧配置与测试）
+    loadtest: Optional[LoadtestConfig] = None  # 压测联动配置，缺省时全部默认关闭（兼容旧配置）
 
     # ------------------------------------------------------------------
     # 加载

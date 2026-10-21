@@ -38,7 +38,9 @@ from agent.memory.sqlite_memory import SQLiteMemory
 from agent.observability import log_sink
 from agent.observability import setup as setup_observability
 from agent.pb import llm_pb2_grpc
+from agent.providers.mock import MockProvider
 from agent.providers.openai_compatible import OpenAICompatibleProvider
+from agent.providers.quota import QuotaProvider
 from agent.server.turn_service import TurnServiceServicer
 from agent.server.health import HealthService
 from agent.server.http_api import build_http_app
@@ -120,18 +122,41 @@ def build_orchestrator(cfg: Config) -> tuple[ChatOrchestrator, ToolRegistry]:
     cfg: 全局配置，据此构造各层对象
     return: (编排引擎, 工具注册表)，注册表待 serve 阶段异步注册工具
     """
-    provider = OpenAICompatibleProvider(
-        api_key=cfg.llm.api_key,
-        base_url=cfg.llm.base_url,
-        model=cfg.llm.model,
-        provider_name=cfg.llm.provider,
-        max_tokens=cfg.llm.max_tokens,
-        temperature=cfg.llm.temperature,
-        request_timeout=cfg.llm.request_timeout,
-        max_concurrency=cfg.llm.max_concurrency,
-        first_token_timeout=cfg.llm.first_token_timeout,
-        synthetic_latency_ms=(cfg.observability.synthetic_latency_ms if cfg.observability else 0),
-    )
+    # provider 装配三态：
+    #   llm.provider=mock → 纯 mock（压测 load/stress/soak 场景，零真实上游调用）
+    #   loadtest.real_smoke.enabled=true → 真实调用包配额守卫（先记账后调用，超限自动降级 mock）
+    #   默认 → 真实 provider（正常开发/生产路径，行为不变）
+    if cfg.llm.provider == "mock":
+        provider = MockProvider()
+        logger.info("LLM provider=mock，压测模式：不发起任何真实上游调用")
+    else:
+        real_provider = OpenAICompatibleProvider(
+            api_key=cfg.llm.api_key,
+            base_url=cfg.llm.base_url,
+            model=cfg.llm.model,
+            provider_name=cfg.llm.provider,
+            max_tokens=cfg.llm.max_tokens,
+            temperature=cfg.llm.temperature,
+            request_timeout=cfg.llm.request_timeout,
+            max_concurrency=cfg.llm.max_concurrency,
+            first_token_timeout=cfg.llm.first_token_timeout,
+            synthetic_latency_ms=(cfg.observability.synthetic_latency_ms if cfg.observability else 0),
+        )
+        real_smoke = cfg.loadtest.real_smoke if cfg.loadtest else None
+        if real_smoke and real_smoke.enabled:
+            provider = QuotaProvider(
+                real=real_provider,
+                fallback=MockProvider(),
+                counter_path=real_smoke.counter_path,
+                limit=real_smoke.quota.llm,
+            )
+            logger.warning(
+                "真实冒烟配额已启用（仅限 smoke 场景使用，LLM 上限 {} 次）；"
+                "load/stress/soak 场景必须使用 provider=mock，禁止开启此开关",
+                real_smoke.quota.llm,
+            )
+        else:
+            provider = real_provider
 
     tool_registry = ToolRegistry(default_timeout=cfg.tools.tool_timeout)
 
