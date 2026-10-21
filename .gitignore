@@ -45,6 +45,9 @@ agent/config.yaml
 # runtime uploads (头像等, config uploads.dir)
 backend/data/
 
+# Loadtest raw results（压测原始数据不入库，结论性报告在 docs/loadtest-report.md）
+loadtest/results/
+
 # Python / agent
 __pycache__/
 *.pyc
