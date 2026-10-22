@@ -73,8 +73,14 @@ type WSConn struct {
 func DialWS(base, token string) (*WSConn, float64, error) {
 	wsURL := strings.Replace(base, "http", "ws", 1) + "/ws?token=" + token
 	start := time.Now()
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
+		// 带上 HTTP 状态与响应体片段，便于区分 401（token 无效）与 403（Origin 校验）等
+		if resp != nil {
+			body := make([]byte, 256)
+			n, _ := resp.Body.Read(body)
+			return nil, 0, fmt.Errorf("websocket: bad handshake: http %d: %s", resp.StatusCode, string(body[:n]))
+		}
 		return nil, 0, err
 	}
 	return &WSConn{conn: conn}, float64(time.Since(start).Milliseconds()), nil
