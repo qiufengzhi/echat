@@ -68,7 +68,7 @@ room:
   idle_timeout: "5m"           # 空房间清理间隔
   ws_read_buffer: 1024         # WebSocket 读缓冲区字节数
   ws_write_buffer: 1024        # WebSocket 写缓冲区字节数
-  ws_check_origin: true        # 是否校验 WebSocket 来源
+  ws_check_origin: true        # 是否校验 WebSocket 握手来源（true 同源校验，false 放行任意来源，仅调试/压测用）
 
 log:
   level: info                  # 生产建议 info

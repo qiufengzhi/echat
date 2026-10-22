@@ -26,10 +26,17 @@ const wsAuthTimeout = 5 * time.Second
 func WebSocketHandler(authSvc *authn.Service) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg := config.Get().Room
+		// checkOrigin 按配置决定握手来源校验策略
+		// ws_check_origin=true 时保持 nil，走 gorilla 默认同源校验（无 Origin 头放行，Origin host 必须等于 Host）
+		// false 时显式放行任意来源，仅供本地调试与压测等受控环境使用
+		var checkOrigin func(r *http.Request) bool
+		if !cfg.WSCheckOrigin {
+			checkOrigin = func(r *http.Request) bool { return true }
+		}
 		upgrader := websocket.Upgrader{
 			ReadBufferSize:  cfg.WSReadBuffer,
 			WriteBufferSize: cfg.WSWriteBuffer,
-			CheckOrigin:     func(r *http.Request) bool { return cfg.WSCheckOrigin },
+			CheckOrigin:     checkOrigin,
 		}
 
 		authCtx, cancel := context.WithTimeout(r.Context(), wsAuthTimeout)

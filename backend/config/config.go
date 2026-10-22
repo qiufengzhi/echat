@@ -129,7 +129,7 @@ type RoomConfig struct {
 	IdleTimeout   string `yaml:"idle_timeout"`    // 空房间清理间隔
 	WSReadBuffer  int    `yaml:"ws_read_buffer"`  // WebSocket 读缓冲区大小（字节）
 	WSWriteBuffer int    `yaml:"ws_write_buffer"` // WebSocket 写缓冲区大小（字节）
-	WSCheckOrigin bool   `yaml:"ws_check_origin"` // 是否校验 WebSocket 来源
+	WSCheckOrigin bool   `yaml:"ws_check_origin"` // 是否校验 WebSocket 握手来源（true 同源校验，false 放行任意来源，仅本地调试/压测用）
 }
 
 // WTConfig WebTransport/QUIC 信令端点配置（QUIC 走 UDP，需独立 TLS 证书）
