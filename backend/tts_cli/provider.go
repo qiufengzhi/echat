@@ -151,6 +151,9 @@ func Init() {
 		initAliyun(cfg)
 	case "xfyun":
 		initXfyun(cfg)
+	case "mock":
+		// 压测钩子：mock 合成器产出静音音频，时序形态对齐真实合成（docs/loadtest.md §6）
+		initMockTTS(cfg)
 	default:
 		// provider 为空或未知值，禁用 TTS
 		logger.Warnw("TTS 未启用，支持 aliyun / xfyun", "provider", cfg.Provider)

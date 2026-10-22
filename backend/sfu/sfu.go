@@ -272,6 +272,9 @@ func (r *SFURoom) Join(clientID string) error {
 		connectedAt:    time.Now(),
 	}
 
+	// 压测钩子：mock 识别器在轨协商时即登记会话，不依赖音频解码路径（非 mock 模式为空操作）
+	asr_cli.NotifySession(peer.SessionID, r.ID, clientID)
+
 	// ICE Candidate 收集 -> 通知信令层转发给客户端
 	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
 		if candidate == nil {

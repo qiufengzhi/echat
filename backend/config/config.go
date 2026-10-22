@@ -55,9 +55,19 @@ type SFUConfig struct {
 
 // ASRConfig 语音识别配置
 type ASRConfig struct {
-	Provider string     `yaml:"provider"`  // 识别提供商："aliyun" | ""（禁用）
+	Provider string     `yaml:"provider"`  // 识别提供商："aliyun" | "mock"（压测） | ""（禁用）
 	Aliyun   AliyunConf `yaml:"aliyun"`    // 阿里云 NLS 配置
+	Mock     ASRMockConf `yaml:"mock"`     // mock 识别器参数，仅 provider=mock 时生效
 	GrpcAddr string     `yaml:"grpc_addr"` // gRPC ASR 地址（预留）
+}
+
+// ASRMockConf mock 识别器参数（压测钩子，见 docs/loadtest.md §6）
+//
+// mock 识别器不消费音频内容：按会话定时产出句末识别结果，驱动完整轮次链路
+type ASRMockConf struct {
+	FirstDelayMs int    `yaml:"first_delay_ms"` // 会话登记到第一句结果的延迟毫秒，默认 1000
+	IntervalMs   int    `yaml:"interval_ms"`    // 相邻两句结果的间隔毫秒，默认 4000
+	Corpus       string `yaml:"corpus"`         // 语料文件路径（每行一句），空则用内置句子
 }
 
 // AliyunConf 阿里云智能语音交互配置
@@ -86,11 +96,20 @@ type LLMConfig struct {
 
 // TTSConfig 语音合成配置
 type TTSConfig struct {
-	Provider   string     `yaml:"provider"`    // 合成提供商："aliyun" | "xfyun" | ""（禁用）
-	Aliyun     AliyunConf `yaml:"aliyun"`      // 阿里云语音合成配置（复用 ASR 的阿里云配置）
-	Xfyun      XfyunConf  `yaml:"xfyun"`       // 讯飞语音合成配置
-	Voice      string     `yaml:"voice"`       // 语音音色，默认 "Alicia"
-	SampleRate int        `yaml:"sample_rate"` // 采样率，默认 16000
+	Provider   string      `yaml:"provider"`    // 合成提供商："aliyun" | "xfyun" | "mock"（压测） | ""（禁用）
+	Aliyun     AliyunConf  `yaml:"aliyun"`      // 阿里云语音合成配置（复用 ASR 的阿里云配置）
+	Xfyun      XfyunConf   `yaml:"xfyun"`       // 讯飞语音合成配置
+	Mock       TTSMockConf `yaml:"mock"`        // mock 合成器参数，仅 provider=mock 时生效
+	Voice      string      `yaml:"voice"`       // 语音音色，默认 "Alicia"
+	SampleRate int         `yaml:"sample_rate"` // 采样率，默认 16000
+}
+
+// TTSMockConf mock 合成器参数（压测钩子，见 docs/loadtest.md §6）
+//
+// mock 合成器产出静音 PCM：按句长折算播出时长并按实时节奏输出，时序形态对齐真实合成
+type TTSMockConf struct {
+	TTFBMs    int `yaml:"ttfb_ms"`     // 首块音频前的延迟毫秒，默认 150
+	MsPerChar int `yaml:"ms_per_char"` // 每字符折算的播出毫秒数，默认 120
 }
 
 // XfyunConf 讯飞语音合成配置
@@ -309,6 +328,10 @@ func DefaultConfig() *Config {
 				MaxSentenceSilenceMs: 800,
 				SessionIdleTimeout:   "30s",
 			},
+			Mock: ASRMockConf{
+				FirstDelayMs: 1000,
+				IntervalMs:   4000,
+			},
 		},
 		VAD: VADConfig{
 			GrpcAddr: "127.0.0.1:50052",
@@ -322,6 +345,10 @@ func DefaultConfig() *Config {
 			Provider:   "aliyun",
 			Voice:      "Alicia",
 			SampleRate: 16000,
+			Mock: TTSMockConf{
+				TTFBMs:    150,
+				MsPerChar: 120,
+			},
 			Xfyun: XfyunConf{
 				Voice:    "xiaoyan",
 				Speed:    50,

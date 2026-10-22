@@ -47,6 +47,8 @@ backend/data/
 
 # Loadtest raw results（压测原始数据不入库，结论性报告在 docs/loadtest-report.md）
 loadtest/results/
+# Loadtest 运行环境（压测专用配置/二进制/日志，含构建产物）
+loadtest/env/
 
 # Python / agent
 __pycache__/

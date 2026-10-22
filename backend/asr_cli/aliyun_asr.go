@@ -160,11 +160,23 @@ var GlobalRecognizer *Recognizer
 // 必须在 config.Load() 之后调用
 func Init() {
 	cfg := config.Get().ASR
-	if cfg.Provider != "aliyun" {
+	switch cfg.Provider {
+	case "aliyun":
+		initAliyun(cfg)
+	case "mock":
+		// 压测钩子：mock 识别器按会话定时产出句末结果（docs/loadtest.md §6）
+		// 直接复用 mock 的双通道作为门面通道，Push/Results 无需感知差别
+		mockRec := startMockLoop(cfg.Mock)
+		GlobalRecognizer = &Recognizer{AudioIn: mockRec.AudioIn, AudioOut: mockRec.AudioOut}
+		mockActive = mockRec
+		logger.Warnw("ASR 已切换为 mock 识别器（压测模式，不发起真实云端识别）", "provider", cfg.Provider)
+	default:
 		logger.Warnw("ASR 未启用", "provider", cfg.Provider)
-		return
 	}
+}
 
+// initAliyun 初始化阿里云识别器（原 Init 主体）
+func initAliyun(cfg config.ASRConfig) {
 	aliyunCfg := DefaultConfig()
 	if cfg.Aliyun.AccessKeyID != "" {
 		aliyunCfg.AccessKeyID = cfg.Aliyun.AccessKeyID
