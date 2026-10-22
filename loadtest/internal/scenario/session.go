@@ -18,9 +18,12 @@ import (
 // 不进入识别路径——mock 模式下音频内容无关紧要，RTP 流只需保持活跃以启动 TTS 循环
 var dtxSilenceFrame = []byte{0xF8, 0xFF, 0xFE}
 
-// burstGapThreshold 两个 RTP 包间隔超过该值视为「AI 停止出声」，一次突发（burst）结束。
-// 取值需大于播放尾巴窗口（500ms）与帧间隔抖动，小于最小轮次间隔
-const burstGapThreshold = 1500 * time.Millisecond
+// DefaultBurstGapThreshold burst 判定阈值的默认值：两个 RTP 包间隔超过该值视为
+// 「AI 停止出声」，一次突发（burst）结束。
+// 取值依据：必须小于「轮次间隔 − 单句播放时长」的真实静音间隙。以默认 mock 参数为例：
+// ASR 间隔 4s、单句 26 字 × 120ms ≈ 3.12s，间隙 ≈ 0.88s——阈值 1.5s 时 burst 永不闭合
+// （教训见 docs/loadtest.md §7.4），600ms 留出抖动余量且仍高于帧间隔
+var DefaultBurstGapThreshold = 600 * time.Millisecond
 
 // SessionParams 会话层场景参数
 type SessionParams struct {
@@ -31,6 +34,7 @@ type SessionParams struct {
 	Ramp         time.Duration // 会话铺开时长（0 = 同时发起）
 	Hold         time.Duration // 每会话保持时长（期间 mock ASR 按间隔产出轮次）
 	ASRInterval  time.Duration // mock ASR 产出间隔（仅记录进报告，须与 backend 配置一致）
+	GapThreshold time.Duration // burst 判定阈值，0 取 DefaultBurstGapThreshold（须小于真实静音间隙）
 	StunServers  []string      // ICE STUN 服务器，本地压测留空（纯 host 候选）
 }
 
@@ -194,8 +198,12 @@ func runOneSession(
 		toggleAt     atomic.Int64
 	)
 
+	gapThreshold := p.GapThreshold
+	if gapThreshold <= 0 {
+		gapThreshold = DefaultBurstGapThreshold
+	}
 	collector := &burstCollector{
-		gap: burstGapThreshold, dur: burstDurMs, gapH: burstGapMs,
+		gap: gapThreshold, dur: burstDurMs, gapH: burstGapMs,
 		burstCount: burstTotal, pktCount: pktTotal,
 	}
 

@@ -26,6 +26,7 @@ func main() {
 		room       = flag.String("room", "LOADTEST", "smoke 场景房间号 / broadcast 房间号")
 		joinGap    = flag.Duration("join-gap", 500*time.Millisecond, "broadcast 场景相邻 join 间隔")
 		asrInterval = flag.Duration("asr-interval", 4*time.Second, "session/interrupt 场景 mock ASR 产出间隔（须与 backend 配置一致）")
+		burstGap   = flag.Duration("burst-gap", 600*time.Millisecond, "burst 判定阈值（须小于轮次间隔−单句播放时长的静音间隙）")
 		setup      = flag.Int("setup", 0, "只建号不压测：批量注册 N 个测试账号后退出")
 		userPrefix = flag.String("user-prefix", "loaduser_", "测试账号用户名前缀")
 		password   = flag.String("password", "Loadtest#2026", "测试账号密码")
@@ -70,24 +71,26 @@ func main() {
 		})
 	case "session":
 		rep = scenario.RunSession(scenario.SessionParams{
-			Base:        *base,
-			UserPrefix:  *userPrefix,
-			Password:    *password,
-			Sessions:    *users,
-			Ramp:        *ramp,
-			Hold:        *hold,
-			ASRInterval: *asrInterval,
+			Base:         *base,
+			UserPrefix:   *userPrefix,
+			Password:     *password,
+			Sessions:     *users,
+			Ramp:         *ramp,
+			Hold:         *hold,
+			ASRInterval:  *asrInterval,
+			GapThreshold: *burstGap,
 		})
 	case "interrupt":
 		rep = scenario.RunInterrupt(scenario.InterruptParams{
 			SessionParams: scenario.SessionParams{
-				Base:        *base,
-				UserPrefix:  *userPrefix,
-				Password:    *password,
-				Sessions:    *users,
-				Ramp:        *ramp,
-				Hold:        *hold,
-				ASRInterval: *asrInterval,
+				Base:         *base,
+				UserPrefix:   *userPrefix,
+				Password:     *password,
+				Sessions:     *users,
+				Ramp:         *ramp,
+				Hold:         *hold,
+				ASRInterval:  *asrInterval,
+				GapThreshold: *burstGap,
 			},
 		})
 	case "broadcast":
