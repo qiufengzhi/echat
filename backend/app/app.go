@@ -9,6 +9,9 @@ package app
 import (
 	"context"
 	"net/http"
+	"net/http/pprof"
+	"os"
+	"strconv"
 	"time"
 
 	"echat-backend/authn"
@@ -109,6 +112,23 @@ func (a *App) Mount() {
 	a.mountTransportEntry()
 	a.mountDataflowSnapshot()
 	a.mountHealthz()
+	a.mountPprof()
+}
+
+// mountPprof 按需挂载 pprof 诊断端点（ECHAT_PPROF=1 时启用）
+//
+// 压测定点用：goroutine/heap/CPU profile 是高负载归因的唯一现场手段。
+// 默认关闭——profile 端点可拖慢进程且属敏感信息，不进生产默认面
+func (a *App) mountPprof() {
+	if os.Getenv("ECHAT_PPROF") != "1" {
+		return
+	}
+	a.mux.HandleFunc("/debug/pprof/", pprof.Index)
+	a.mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	a.mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	a.mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	a.mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	logging.L().Warnw("pprof 诊断端点已启用（ECHAT_PPROF=1，仅限压测/诊断环境）")
 }
 
 // Handler 返回套好通用中间件链的根 http.Handler，供 main 交给 http.ListenAndServe
@@ -153,6 +173,8 @@ func (a *App) mountHealthz() {
 // handleHealthz 返回分项依赖健康状态与总体 alive
 //
 // 探测 DB 与 Redis（NATS/AuthZ 由各自子系统启动即连，此处不再阻塞）
+// 附带 pgxpool 实时统计：高负载握手 500 的头号嫌疑是连接池饱和，
+// waiting_acquires 持续 > 0 即坐实查询排队
 func (a *App) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	report := map[string]string{}
 	if err := a.store.Pool().Ping(r.Context()); err != nil {
@@ -165,6 +187,14 @@ func (a *App) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	} else {
 		report["redis"] = "up"
 	}
+	st := a.store.Pool().Stat()
+	report["db_pool_total"] = strconv.FormatInt(int64(st.TotalConns()), 10)
+	report["db_pool_acquired"] = strconv.FormatInt(int64(st.AcquiredConns()), 10)
+	report["db_pool_idle"] = strconv.FormatInt(int64(st.IdleConns()), 10)
+	report["db_pool_max"] = strconv.FormatInt(int64(st.MaxConns()), 10)
+	// EmptyAcquire 系列 = 连接池被打空后请求开始等待的次数与累计等待时长——池饱和的直接证据
+	report["db_pool_empty_wait_count"] = strconv.FormatInt(st.EmptyAcquireCount(), 10)
+	report["db_pool_empty_wait_ms"] = strconv.FormatInt(st.EmptyAcquireWaitTime().Milliseconds(), 10)
 	report["status"] = "ok"
 	transport.WriteJSON(w, http.StatusOK, report)
 }
