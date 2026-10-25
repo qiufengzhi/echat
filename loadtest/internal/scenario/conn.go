@@ -120,7 +120,7 @@ func RunConn(p ConnParams) *metrics.Report {
 
 			conn, hs, err := client.DialWS(p.Base, token)
 			if err != nil {
-				recordErr("dial")
+				recordErr("dial:" + err.Error())
 				return
 			}
 			defer conn.Close()
@@ -141,9 +141,9 @@ func RunConn(p ConnParams) *metrics.Report {
 			joinMs.Record(float64(time.Since(jt).Milliseconds()))
 			atomic.AddInt64(&joinOK, 1)
 
-			// 保持阶段：周期心跳；任何异常退出都计入错误分类
+			// 保持阶段：周期心跳；任何异常退出都计入错误分类（带原因，便于定位）
 			if err := holdConn(conn, room, p.Hold, p.PingGap); err != nil {
-				recordErr("hold")
+				recordErr("hold:" + err.Error())
 				return
 			}
 			atomic.AddInt64(&heldOK, 1)
@@ -165,27 +165,31 @@ func RunConn(p ConnParams) *metrics.Report {
 	return finish(rep, start)
 }
 
-// holdConn 保持连接：周期 ping/pong 直到 hold 时长结束
+// holdConn 保持连接：周期 ping/pong 直到 hold 时长结束。
+//
+// gorilla/websocket 契约：一条连接上任意一次读失败（含读超时）后不得再读，
+// 再次读会 panic "repeated read on failed websocket connection"。
+//
+// 结构说明：必须「发 ping → 等 pong → 睡到下个心跳时刻」严格配对。
+// 若把 ping 检查放在 Read 之前再阻塞式 Read，Read 会一直占住循环，
+// 下一个 ping 永远发不出去，读等待必然超时（教训：读操作内不能隐式等心跳）。
 func holdConn(conn *client.WSConn, room string, hold, pingGap time.Duration) error {
 	deadline := time.Now().Add(hold)
-	nextPing := time.Now().Add(pingGap)
 	for time.Now().Before(deadline) {
-		if time.Now().After(nextPing) {
-			if err := conn.Ping(room); err != nil {
-				return err
-			}
-			nextPing = time.Now().Add(pingGap)
-		}
-		conn.SetReadDeadline(time.Now().Add(pingGap + 5*time.Second))
-		msg, err := conn.Read()
-		if err != nil {
-			// 读超时但下次 ping 前连接仍可写时不算失败：直接重试
-			if ne, ok := err.(interface{ Timeout() bool }); ok && ne.Timeout() {
-				continue
-			}
+		// 1. 发心跳
+		if err := conn.Ping(room); err != nil {
 			return err
 		}
-		_ = msg // pong 及偶发广播一律跳过
+		sentAt := time.Now()
+		// 2. 等 pong（读窗口 = 心跳间隔 + 5s 宽限；正常 pong 毫秒级返回）
+		conn.SetReadDeadline(sentAt.Add(pingGap + 5*time.Second))
+		if _, err := conn.Read(); err != nil {
+			return err
+		}
+		// 3. 停到下个心跳时刻，避免 pong 秒回造成 ping 风暴
+		if d := sentAt.Add(pingGap).Sub(time.Now()); d > 0 {
+			time.Sleep(d)
+		}
 	}
 	return nil
 }
