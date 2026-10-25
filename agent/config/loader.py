@@ -131,13 +131,17 @@ class ObservabilityConfig(BaseModel):
 
 
 class QuotaConfig(BaseModel):
-    """真实冒烟配额硬上限（次），红线见 docs/loadtest-task-prompt.md 3.2"""
+    """真实冒烟配额硬上限（次），成本红线的强制执行层
+
+    默认 60 次的构成——校准 20 轮（单会话串行）+ 交叉验证 30 轮（5 会话 × 5~6 轮）+ 10 次重跑余量。
+    计数落盘、重启不重置；耗尽即自动降级 mock，确需扩量先人工删除计数文件。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    llm: int = 1000  # LLM 调用次数上限（一轮一次计数，不按 token 复算）
-    asr: int = 100  # ASR 调用次数上限（backend 侧钩子落地，此处预留口径一致）
-    tts: int = 100  # TTS 调用次数上限（backend 侧钩子落地，此处预留口径一致）
+    llm: int = 60  # LLM 调用次数上限（一轮一次计数，不按 token 复算）
+    asr: int = 60  # ASR 调用次数上限（backend 侧钩子落地，此处预留口径一致）
+    tts: int = 60  # TTS 调用次数上限（backend 侧钩子落地，此处预留口径一致）
 
 
 class RealSmokeConfig(BaseModel):
