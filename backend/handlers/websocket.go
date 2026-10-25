@@ -62,6 +62,8 @@ func WebSocketHandler(authSvc *authn.Service) http.HandlerFunc {
 }
 
 // writeUpgradeError 在升级前把鉴权失败写成 JSON，浏览器 WS 表现为握手失败
+// 非 *authn.Error（如 DB 超时/连接池饱和）会以 500 兜底——必须落日志留根因，
+// 否则高负载握手失败无法归因（压测 2 万档 1834 个 500 无从定位的教训）
 func writeUpgradeError(w http.ResponseWriter, err error) {
 	status := http.StatusUnauthorized
 	code := "TOKEN_INVALID"
@@ -70,6 +72,8 @@ func writeUpgradeError(w http.ResponseWriter, err error) {
 		status = ae.Status
 		code = ae.Code
 		message = ae.Message
+	} else {
+		logger.Warnw("ws upgrade auth failed（非领域错误，按 500 兜底）", "error", err)
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)

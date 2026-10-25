@@ -3,6 +3,8 @@ package transport
 import (
 	"encoding/json"
 	"net/http"
+
+	"echat-backend/logging"
 )
 
 // Error 可对外序列化的领域错误：任何领域返回该类型，统一由 WriteError 写成包络
@@ -42,9 +44,11 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 
 // WriteError 把错误写为统一错误包络；nil 或非 *Error 按内部错误处理
 // w 响应写入器，err 领域错误；断言 *Error 失败时兜底为内部错误，避免泄露内部细节
+// 兜底分支必须落日志：对外泛化但对内留根因，否则高负载下的 500 无法归因
 func WriteError(w http.ResponseWriter, err error) {
 	ae, ok := err.(*Error)
 	if !ok || ae == nil {
+		logging.L().Warnw("internal error fallback（非领域错误转 500）", "error", err)
 		ae = &Error{Code: "INTERNAL_ERROR", Message: "服务器开小差了，请稍后再试", Status: http.StatusInternalServerError}
 	}
 	if ae.Status == 0 {
