@@ -822,12 +822,99 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 	// 队列容量 2000 帧 = 40 秒缓冲，足以容纳最长 TTS 回复
 	frameQueue := make(chan queuedFrame, 2000)
 
+	// 预编码一帧静音（960 个 0 采样 @48kHz）：句间停顿/等待下一句时由 pacer 补发
+	// 若不补发，停顿期间无帧发出，RTP 时间戳（按 Duration 累加）随之冻结，
+	// 真实存在的几百毫秒静默在媒体时间轴上「不存在」，接收端会把前后两句话
+	// 无缝拼接在一起——听感表现为句子黏连、语速忽快
+	// 用独立编码器一次性编码后复用 payload：pacer 每 20ms 就要用一次，
+	// 预编码避免高频加锁访问共享编码器 enc；DTX 已在 preset 中关闭，
+	// 得到的是普通静音帧而非 DTX 标记包，接收端可稳定解码为静音
+	// 编码失败时置 nil，退化为旧行为（停顿期间不发包）
+	var silencePayload []byte
+	if silEnc, silErr := newOpusEncoderPreset(); silErr != nil {
+		logger.Warnw("创建静音帧编码器失败，句间停顿将不补发静音帧", "source", acr.clientId[:8], "error", silErr)
+	} else {
+		silencePayload, silErr = silEnc.Encode(make([]int16, opusEncoderFrameSamples))
+		_ = silEnc.Close()
+		if silErr != nil {
+			logger.Warnw("编码静音帧失败，句间停顿将不补发静音帧", "source", acr.clientId[:8], "error", silErr)
+			silencePayload = nil
+		}
+	}
+
 	// pacedSender 以实时速率从队列取帧并发送，避免 NetEq 缓冲区溢出
 	senderDone := make(chan struct{})
 	go func() {
 		defer close(senderDone)
+
+		// errLogCounts 按「消息|成员」累计同类错误次数，用于日志限流：
+		// writeAllPeers 由 pacer 每 20ms 调用一次，成员 PC 异常（写轨失败/音轨缺失）
+		// 时若无差别打日志，最坏每秒 50 条洪泛。规则：每个错误首次记明细，
+		// 之后每累计 100 次（约 2s）汇总一条带 count 的日志；对应操作成功一次
+		// 即清零计数，同一成员后续新发的错误仍能拿到首条明细
+		// map 只被 pacer 协程读写，无需加锁
+		errLogCounts := make(map[string]int)
+		logTrackErr := func(destID, msg string, err error) {
+			key := msg + "|" + destID
+			errLogCounts[key]++
+			if c := errLogCounts[key]; c == 1 || c%100 == 0 {
+				logger.Warnw(msg, "dest", destID[:8], "count", c, "error", err)
+			}
+		}
+		clearTrackErr := func(destID, msg string) {
+			delete(errLogCounts, msg+"|"+destID)
+		}
+
+		// writeAllPeers 把一帧 payload 写给房间内每个当前成员各自独立的 AI 音轨
+		// 每个成员音轨都是 TrackLocalStaticSample，WriteSample 由 pion packetizer/sequencer
+		// 维护单调连续的 seq/ts，播放端 jitter buffer 才能正常解码
+		// 若像之前那样混进说话者的麦克风中继轨，AI 帧的 seq/ts 与麦克风包各自起算，
+		// 会被浏览器当成已过期的旧包丢弃，导致只有说话者本人（独立 AI 轨）能听到
+		// 真实帧与静音帧走同一条写入路径，保证整个会话的 seq/ts 都在同一条时间轴上
+		writeAllPeers := func(payload []byte) {
+			r.lock.RLock()
+			recipients := make([]string, 0, len(r.peers))
+			for destID := range r.peers {
+				recipients = append(recipients, destID)
+			}
+			r.lock.RUnlock()
+
+			for _, destID := range recipients {
+				destTrack, err := r.getAITtsTrack(destID)
+				if err != nil {
+					logTrackErr(destID, "获取AI TTS音轨失败", err)
+					continue
+				}
+				clearTrackErr(destID, "获取AI TTS音轨失败")
+				if err := destTrack.WriteSample(media.Sample{
+					Data:               payload,
+					Duration:           20 * time.Millisecond,
+					PrevDroppedPackets: 0,
+				}); err != nil {
+					logTrackErr(destID, "写入AI TTS轨失败", err)
+				} else {
+					clearTrackErr(destID, "写入AI TTS轨失败")
+				}
+			}
+		}
+
 		sendTicker := time.NewTicker(20 * time.Millisecond)
 		defer sendTicker.Stop()
+		// started：是否已发出过真实音频帧。首帧之前不补静音，
+		// 避免 TTS 循环刚启动就提前触发 AI 音轨的懒创建与重协商
+		started := false
+
+		// 静音补发上界：自上一真实帧起最多补 10s（500 帧 × 20ms）
+		// 补发只服务「句间停顿/等待下一句」，现实中的间隔（LLM TTFB、分句间隙）
+		// 远小于 10s；超时仍未等到真实帧，大概率上游已卡死（TTS WS 挂住、LLM 断流）
+		// 无界补发的代价：CBR 32kbps 下每帧静音是满尺寸 payload，约 44kbps/成员
+		// 的持续带宽随房间人数放大，且包一直流动会掩盖上游故障（无错误、无日志）
+		// 触顶后停止补发、时间戳冻结是无害的：黏连 bug 只在接收端仍在播放流中途时
+		// 成立，此时对端 NetEq 缓冲早已播空、流在接收端视角已结束，后续真实帧
+		// 到达时 NetEq 会按到达时钟重新对齐，不会产生黏连
+		const maxSilenceFillFrames = 500
+		// silenceRun 连续补发的静音帧计数，发真实帧时清零
+		silenceRun := 0
 		for {
 			select {
 			case <-sendTicker.C:
@@ -837,38 +924,26 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 						// 队列已关闭且排空，发送完成
 						return
 					}
-
-					// 把 AI 音频写给房间内每个当前成员各自独立的 AI 音轨
-					// 每个成员音轨都是 TrackLocalStaticSample，WriteSample 由 pion packetizer/sequencer
-					// 维护单调连续的 seq/ts，播放端 jitter buffer 才能正常解码
-					// 若像之前那样混进说话者的麦克风中继轨，AI 帧的 seq/ts 与麦克风包各自起算，
-					// 会被浏览器当成已过期的旧包丢弃，导致只有说话者本人（独立 AI 轨）能听到
-					r.lock.RLock()
-					recipients := make([]string, 0, len(r.peers))
-					for destID := range r.peers {
-						recipients = append(recipients, destID)
-					}
-					r.lock.RUnlock()
-
-					for _, destID := range recipients {
-						destTrack, err := r.getAITtsTrack(destID)
-						if err != nil {
-							logger.Warnw("获取AI TTS音轨失败", "dest", destID[:8], "error", err)
-							continue
-						}
-						if err := destTrack.WriteSample(media.Sample{
-							Data:               qf.payload,
-							Duration:           20 * time.Millisecond,
-							PrevDroppedPackets: 0,
-						}); err != nil {
-							observability.AIWriteErrors.Add(context.Background(), 1)
-							logger.Warnw("写入AI TTS轨失败", "dest", destID[:8], "error", err)
-						}
-					}
+					started = true
+					silenceRun = 0
+					writeAllPeers(qf.payload)
 					// 刷新播放态：只要 pacer 还在按 20ms 节拍发帧，AI 就视为「在出声」
 					playback.markSent(qf.turn, qf.sentence)
 				default:
-					// 队列为空，等待下一次 tick
+					// 队列为空：真实音频已被实时播完，当前处于句间停顿或等待下一句
+					// 补发静音帧让 RTP 时间轴照常推进（作用见 silencePayload 注释）
+					// 注意：静音帧绝不调用 markSent——播放态必须只反映真实语音，
+					// 否则 speaking() 恒为真，「用户打断 AI」的判定会永久失效
+					if started && len(silencePayload) > 0 && silenceRun < maxSilenceFillFrames {
+						writeAllPeers(silencePayload)
+						silenceRun++
+						// 触顶只记一次日志：既是限流也是信号——该会话自上一真实帧起
+						// 已静默 10s 仍无新音频，可据此监控「TTS/LLM 上游疑似卡死」
+						if silenceRun == maxSilenceFillFrames {
+							logger.Warnw("静音补发达上限，疑似TTS上游卡死，停止补发",
+								"source", acr.clientId[:8], "maxSilenceMs", maxSilenceFillFrames*20)
+						}
+					}
 				}
 			}
 		}
