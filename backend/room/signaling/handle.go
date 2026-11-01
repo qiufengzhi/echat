@@ -275,6 +275,13 @@ func handleSFUOffer(client *gateway.Client, payload json.RawMessage) {
 
 	// 将 Answer SDP 通过 sfu_answer 发回客户端
 	sendToClient(client, MsgTypeSFUAnswer, SFUAnswerPayload{SDP: answerSDP}, client.RoomID)
+
+	// answer 入队后收口初始协商：置位 negotiated 并为晚加入者补建已有发布者的中继轨。
+	// 出站队列 FIFO，保证客户端必然先处理 sfu_answer 再收到补建触发的
+	// renegotiation_offer（顺序反了会触发浏览器 rollback，打乱初始协商）。
+	// 必须放在 sendToClient 之后，而不是 AcceptOffer 内部——那会让
+	// renegotiation_offer 与 sfu_answer 的入队顺序取决于 goroutine 赛跑
+	sfuRoom.CompleteInitialNegotiation(client.ConnID)
 }
 
 // handleRenegotiationAnswer 处理客户端对 renegotiation Offer 的 Answer，交回 SFU 引擎处理

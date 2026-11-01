@@ -95,6 +95,16 @@ type SFUPeer struct {
 	// 该客户端发布的音频远端音轨（由 SFU 的 OnTrack 收到）
 	publishedAudioTrack *webrtc.TrackRemote
 
+	// 初始协商（sfu_offer -> sfu_answer）是否已完成。
+	// 在此之前 PC 上没有任何 SDP，此时 AddTrack 会触发 pion 的 OnNegotiationNeeded
+	// （pion 对空描述 PC 的 checkNegotiationNeeded 判定为"需要协商"），导致
+	// renegotiation_offer 抢在初始协商前发出，打乱客户端信令状态机。
+	// 置位点在 CompleteInitialNegotiation（sfu_answer 已入队上线之后），
+	// 所有向 PC AddTrack 的路径都必须检查此标志；
+	// 未协商对端由它自己 CompleteInitialNegotiation 里的 addExistingRelays 补建，
+	// 不会漏轨
+	negotiated atomic.Bool
+
 	// 该客户端音频被转发给其他客户端时的本地中继音轨
 	// 键是订阅者（接收方）的 clientID，值是对应中继音轨，该房间内其他所有用户
 	outgoingRelays map[string]*webrtc.TrackLocalStaticRTP
@@ -388,14 +398,39 @@ func (r *SFURoom) AcceptOffer(clientID string, offerSDP string) (answerSDP strin
 	logger.Infow("接受 Offer 已回复 Answer", "clientID", clientID[:8])
 	logger.Debugw("Answer SDP 内容", "clientID", clientID[:8], "sdp", answer.SDP)
 
-	// 初始协商完成后，为晚加入者补建房间内已有发布者的中继音轨。
-	// 必须放在 SetLocalDescription 之后：此时信令状态回到 stable 且已有本地描述，
-	// AddTrack 才会触发 OnNegotiationNeeded，走 sfu.go 中已注册的 renegotiation 闭环
-	// （CreateOffer -> renegotiation_offer -> 客户端 renegotiation_answer）。
-	// 若客户端一直不开麦（自己的 OnTrack 永远不触发），没有这一步它将永远听不到先加入者。
-	r.addExistingRelays(clientID)
-
+	// 注意：此处故意不做 negotiated 置位、也不补建中继轨。
+	// sfu_answer 尚未由信令层发回客户端，若此时 AddTrack 触发 OnNegotiationNeeded，
+	// renegotiation_offer 可能在 sfu_answer 之前入队送达，客户端在 have-local-offer
+	// 状态先收到 offer 会导致浏览器隐式 rollback，随后迟到的 sfu_answer 失配，
+	// 初始协商被自己的补建动作打乱。两者统一收口在 CompleteInitialNegotiation，
+	// 由信令层在 sfu_answer 入队之后调用
 	return answer.SDP, nil
+}
+
+// CompleteInitialNegotiation 标记对端初始协商完成，并为晚加入者补建房间内
+// 已有发布者的中继音轨
+//
+// 调用时机（关键约束）：必须在该客户端的 sfu_answer 已经 Enqueue 上线之后。
+// 出站队列（Enqueue）按入队顺序 FIFO 发送，只要置位发生在 answer 入队之后，
+// 客户端必然先处理完 sfu_answer（回到 stable 态），再收到任何 renegotiation_offer。
+// 在此之前 negotiated 保持 false，startForwarding / getAITtsTrack 等所有
+// AddTrack 路径都会跳过该对端——这就把「一切 AddTrack 都发生在 sfu_answer
+// 上线之后」做成了结构性保证，而不是依赖各调用点的自觉。
+//
+// 若客户端一直不开麦（自己的 OnTrack 永远不触发），没有这里的补建它将
+// 永远听不到先加入者，因此补建是必要路径而非优化
+func (r *SFURoom) CompleteInitialNegotiation(clientID string) {
+	r.lock.RLock()
+	peer, ok := r.peers[clientID]
+	r.lock.RUnlock()
+	if !ok {
+		// 对端已离开（Leave 删除 peer），无事可做
+		return
+	}
+
+	// 置位后该对端对所有 AddTrack 路径可见；本方法内部的补建是第一笔
+	peer.negotiated.Store(true)
+	r.addExistingRelays(clientID)
 }
 
 // addExistingRelays 为刚完成初始协商的客户端补建房间内已有发布者的中继音轨
@@ -620,6 +655,16 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 		if subscriberID == sourceID {
 			continue
 		}
+		// 初始协商尚未完成的对端必须跳过：其 PC 上还没有任何 SDP，此时 AddTrack
+		// 会立即触发 OnNegotiationNeeded，renegotiation_offer 会抢在它自己的
+		// sfu_offer/sfu_answer 之前到达，打乱客户端信令状态机（浏览器会隐式
+		// rollback，随后迟到的 sfu_answer 与已回滚的 offer 对不上）。
+		// 这些对端不会漏轨：它完成初始协商时，addExistingRelays 会把 source
+		// 的音轨（此时 publishedAudioTrack 已就绪）补建给它
+		if !subscriber.negotiated.Load() {
+			logger.Debugw("跳过未完成初始协商的对端，待其协商完成后补建", "subscriber", subscriberID[:8])
+			continue
+		}
 
 		relayTrack, err := webrtc.NewTrackLocalStaticRTP(
 			remoteTrack.Codec().RTPCodecCapability,
@@ -697,6 +742,12 @@ func (r *SFURoom) getAITtsTrack(clientID string) (*webrtc.TrackLocalStaticSample
 	}
 	if peer.aiTtsTrack != nil {
 		return peer.aiTtsTrack, nil
+	}
+	// 对端初始协商未完成时不建轨：与 startForwarding 的理由相同，避免 AddTrack
+	// 在空描述 PC 上触发提前的 renegotiation_offer。writeAllPeers 每帧（20ms）都会
+	// 重试取轨，对端协商完成后的下一帧会自然建轨，音频只延迟不到一帧
+	if !peer.negotiated.Load() {
+		return nil, fmt.Errorf("getAITtsTrack: 客户端 %s 初始协商未完成", clientID[:8])
 	}
 
 	track, err := r.bindAITtsTrack(peer, clientID)
