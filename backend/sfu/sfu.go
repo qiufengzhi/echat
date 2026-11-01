@@ -43,6 +43,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gunter-q12/resample"
 	"github.com/pion/interceptor"
+	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 )
@@ -53,6 +54,12 @@ var logger = logging.New("sfu")
 //
 // 队列只吸收解码与投递的瞬时抖动，不承担积压：满了丢最老，语音以最新内容为准
 const asrQueueCapacity = 50
+
+// relayQueueCapacity 每个订阅者方向的 RTP 转发队列容量，50 包 × 20ms = 1 秒音频
+//
+// 发布者把包丢进队列就继续读下一包（Push 永不阻塞），队列满了挤掉最老的包。
+// 谁的网络慢，谁自己的队列积压、丢自己的包，与其他订阅者完全隔离
+const relayQueueCapacity = 50
 
 // ICECandidateCallback 是 SFU -> 信令层 的 ICE Candidate 回调
 // 信令层收到后通过 WebSocket 转发给对应客户端
@@ -105,9 +112,10 @@ type SFUPeer struct {
 	// 不会漏轨
 	negotiated atomic.Bool
 
-	// 该客户端音频被转发给其他客户端时的本地中继音轨
-	// 键是订阅者（接收方）的 clientID，值是对应中继音轨，该房间内其他所有用户
-	outgoingRelays map[string]*webrtc.TrackLocalStaticRTP
+	// 该客户端作为发布者时，向房间内其他客户端转发音频的管道表
+	// 键是订阅者（接收方）的 clientID，值是一条独立转发管道（有界队列 + 专属写协程），
+	// 每个订阅者一条：弱网订阅者只能拖满自己的队列，不会拖慢发布者和其他订阅者
+	outgoingRelays map[string]*relayPipe
 
 	// AI TTS 合成语音输出轨，写入后客户端通过 ontrack 收到
 	// 由 getAITtsTrack 首次使用时懒创建并 AddTrack 到 PC
@@ -281,7 +289,7 @@ func (r *SFURoom) Join(clientID string) error {
 		ClientID:       clientID,
 		SessionID:      newSessionID(),
 		PC:             pc,
-		outgoingRelays: make(map[string]*webrtc.TrackLocalStaticRTP),
+		outgoingRelays: make(map[string]*relayPipe),
 		stopRelay:      make(chan struct{}),
 		connectedAt:    time.Now(),
 	}
@@ -496,7 +504,7 @@ func (r *SFURoom) addExistingRelays(clientID string) {
 		// 第三步：写锁内把中继轨注册到发布者的 outgoingRelays。
 		// 注册后 forwardRtp 的每包循环会自动拾取，无需额外通知
 		r.lock.Lock()
-		p.peer.outgoingRelays[clientID] = relayTrack
+		p.peer.outgoingRelays[clientID] = r.newRelayPipe(p.id, clientID, relayTrack)
 		r.lock.Unlock()
 		logger.Infow("晚加入者中继已补建", "from", p.id[:8], "to", clientID[:8])
 	}
@@ -527,6 +535,13 @@ func (r *SFURoom) Leave(clientID string) {
 	}
 	delete(r.peers, clientID)
 	observability.RecordPeers(r.peerCountLocked())
+	// 该客户端作为发布者的转发管道全部关闭，唤醒对应写协程退出；
+	// 写协程只写自己的中继轨、不取房间锁，锁内关闭无死锁风险。
+	// peer 马上要从 r.peers 摘除，forwardRtp 退出时的 closeOutgoingRelays
+	// 将找不到它，所以必须在这里收口
+	for _, pipe := range peer.outgoingRelays {
+		pipe.queue.Close()
+	}
 	r.lock.Unlock()
 
 	logger.Infow("对端离开", "clientID", clientID[:8])
@@ -552,7 +567,11 @@ func (r *SFURoom) Leave(clientID string) {
 	// 从其他所有客户端的中继表中移除当前客户端的音轨
 	r.lock.Lock()
 	for _, otherPeer := range r.peers {
-		delete(otherPeer.outgoingRelays, clientID)
+		if pipe, ok := otherPeer.outgoingRelays[clientID]; ok {
+			delete(otherPeer.outgoingRelays, clientID)
+			// 订阅者走了，关掉这条管道，写协程随 Pop 排空 + Closed 退出
+			pipe.queue.Close()
+		}
 	}
 	empty := len(r.peers) == 0
 	r.lock.Unlock()
@@ -637,7 +656,8 @@ func (r *SFURoom) SessionIDOf(clientID string) string {
 //  2. 为房间内每个其他客户端创建一个 TrackLocalStaticRTP（中继音轨），
 //     添加到该客户端的 PeerConnection 中
 //  3. 同时也为 source 创建其他已有客户端的中继音轨，让 source 能听到其他人
-//  4. 启动协程持续读取 source 的 RTP 包并写入所有中继音轨
+//  4. 启动协程持续读取 source 的 RTP 包，投入各订阅者的转发队列，
+//     由每个订阅者的专属写协程写出，订阅者之间互不拖累
 func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemote) {
 	r.lock.Lock()
 
@@ -684,7 +704,7 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 		go r.readSenderRTCP(subscriberID, snd)
 
 		// 将房间内其他人的音轨通过中继轨加入 source
-		sourcePeer.outgoingRelays[subscriberID] = relayTrack
+		sourcePeer.outgoingRelays[subscriberID] = r.newRelayPipe(sourceID, subscriberID, relayTrack)
 		logger.Infow("中继已添加", "from", sourceID[:8], "to", subscriberID[:8])
 	}
 
@@ -719,7 +739,7 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 		go r.readSenderRTCP(sourceID, snd)
 
 		// 将 other 的音频转发给 source
-		otherPeer.outgoingRelays[sourceID] = relayTrack
+		otherPeer.outgoingRelays[sourceID] = r.newRelayPipe(otherID, sourceID, relayTrack)
 		logger.Infow("中继已添加(新对端)", "from", otherID[:8], "to", sourceID[:8])
 	}
 
@@ -827,11 +847,101 @@ func (r *SFURoom) rebuildAITtsTracks() {
 		"rebuilt", rebuilt, "peers", len(r.peers))
 }
 
+// relayPipe 一条「发布者 → 某个订阅者」的 RTP 转发管道
+//
+// 设计动机：若发布者协程串行地给每个订阅者 WriteRTP，任何一个写操作变慢
+// （例如对端瞬时拥塞）都会推迟同一包写给后续订阅者的时间，并反过来拖慢
+// 发布者的 ReadRTP 节奏，导致全房间音频抖动。把「写给谁」拆成独立协程后，
+// 订阅者之间完全解耦：弱网订阅者只能拖满自己这条队列，满后挤掉最老的包，
+// 丢的是它自己的音频，别人不受影响
+type relayPipe struct {
+	// queue 有界环形队列，单生产者（发布者转发协程）单消费者（本管道写协程），
+	// 满时挤掉最老元素——对实时语音来说，旧包过期作废，最新的才是能听懂的
+	queue *dataplane.Ring[*rtp.Packet]
+	// track 该订阅者的中继轨，仅由本管道的写协程写入，无并发
+	track *webrtc.TrackLocalStaticRTP
+}
+
+// newRelayPipe 创建转发管道并启动该订阅者专属的写协程
+//
+// 调用点（startForwarding / addExistingRelays）都持有房间写锁；
+// 启动协程本身不取房间锁，不会造成锁递归
+// sourceID: 发布者（音频来源）；subscriberID: 订阅者（接收方）；track: 订阅者的中继轨
+// return: 已挂上写协程的转发管道
+func (r *SFURoom) newRelayPipe(sourceID, subscriberID string, track *webrtc.TrackLocalStaticRTP) *relayPipe {
+	pipe := &relayPipe{
+		queue: dataplane.NewRing[*rtp.Packet]("sfu.relay."+sourceID+"."+subscriberID, relayQueueCapacity),
+		track: track,
+	}
+	go pipe.pumpRelay(sourceID, subscriberID)
+	return pipe
+}
+
+// pumpRelay 订阅者专属写协程：从管道取包写入中继轨，直到管道关闭
+//
+// 写失败（对端连接已关、PC 正在关闭等）只计数告警，不退出——
+// 协程的退出统一由队列 Close 驱动，避免两套退出条件打架
+// sourceID: 发布者；subscriberID: 订阅者
+func (p *relayPipe) pumpRelay(sourceID, subscriberID string) {
+	defer logger.Infow("中继写协程已停止", "source", sourceID[:8], "dest", subscriberID[:8])
+	for {
+		pkt, ok := p.queue.Pop()
+		if !ok {
+			if p.queue.Closed() {
+				return
+			}
+			<-p.queue.Wait()
+			continue
+		}
+		if err := p.track.WriteRTP(pkt); err != nil {
+			observability.RelayWriteErrors.Add(context.Background(), 1)
+			logger.Warnw("写入 RTP 失败", "source", sourceID[:8], "dest", subscriberID[:8], "error", err)
+		}
+	}
+}
+
+// closeOutgoingRelays 关闭发布者的全部转发管道，回收其写协程
+//
+// 在 forwardRtp 退出（读端结束）时调用，覆盖发布者离开、PC 断开等所有收尾路径；
+// 与 Leave 中按订阅者逐条关闭并发执行，Ring.Close 幂等，重复关闭安全
+// sourceID: 发布者
+func (r *SFURoom) closeOutgoingRelays(sourceID string) {
+	r.lock.RLock()
+	var pipes []*relayPipe
+	if peer, ok := r.peers[sourceID]; ok {
+		for _, pipe := range peer.outgoingRelays {
+			pipes = append(pipes, pipe)
+		}
+	}
+	r.lock.RUnlock()
+	for _, pipe := range pipes {
+		pipe.queue.Close()
+	}
+}
+
+// cloneRTPPacket 深拷贝一个 RTP 包
+//
+// forwardRtp 拿到的包，其 payload 底层缓冲会被下一次 ReadRTP 复用，
+// 包又要交给各订阅者的写协程异步消费，必须完整复制一份才能安全跨协程
+// src: 源包
+// return: 深拷贝出的新包
+func cloneRTPPacket(src *rtp.Packet) *rtp.Packet {
+	pkt := *src
+	// Extensions 是切片，值拷贝只复制了切片头，底层仍共享，须单独复制
+	pkt.Header.Extensions = append([]rtp.Extension(nil), src.Header.Extensions...)
+	pkt.Payload = append([]byte(nil), src.Payload...)
+	return &pkt
+}
+
 // forwardRtp 接收到客户端的语音包，从 remoteTrack 读取 RTP 包，转发给房间其他客户端，同时送阿里云 ASR 做语音识别
 // sessionID 由调用方从对端读取，保证同一会话在 ASR、LLM、TTS 三段用同一个标识
+// 转发采用「每订阅者一条管道」：本协程只负责读包、拷贝、入队（永不阻塞），
+// 实际写出由各订阅者的专属写协程完成，订阅者之间互不拖累
 func (r *SFURoom) forwardRtp(sourceID string, sessionID string, remoteTrack *webrtc.TrackRemote) {
 	logger.Infow("中继协程已启动", "source", sourceID[:8])
 	defer logger.Infow("中继协程已停止", "source", sourceID[:8])
+	// 读端结束时关闭本发布者的所有订阅者管道，唤醒对应写协程退出
+	defer r.closeOutgoingRelays(sourceID)
 	var ttsStarted atomic.Bool
 
 	// 待识别队列与投递协程：解码与送识别都在本发布者自己的协程里做
@@ -847,21 +957,23 @@ func (r *SFURoom) forwardRtp(sourceID string, sessionID string, remoteTrack *web
 			return
 		}
 
-		// 转发 RTP 给房间内所有客户端
+		// 转发 RTP 给房间内所有客户端：
+		// 读锁内只做一件事——把当前订阅者的管道快照出来，绝不在锁内写媒体；
+		// 之后逐条 Push 进各自的队列（Push 永不阻塞），本协程的每包耗时
+		// 与任何订阅者的网络状况彻底无关
 		r.lock.RLock()
-		forwardClient := make(map[string]*webrtc.TrackLocalStaticRTP)
+		var pipes []*relayPipe
 		if peer, ok := r.peers[sourceID]; ok {
-			for otherClintId, relay := range peer.outgoingRelays {
-				forwardClient[otherClintId] = relay
+			for _, pipe := range peer.outgoingRelays {
+				pipes = append(pipes, pipe)
 			}
 		}
 		r.lock.RUnlock()
 
-		for otherClintId, relay := range forwardClient {
-			if err = relay.WriteRTP(rtpPacket); err != nil {
-				observability.RelayWriteErrors.Add(context.Background(), 1)
-				logger.Warnw("写入 RTP 失败", "source", sourceID[:8], "dest", otherClintId, "error", err)
-			}
+		for _, pipe := range pipes {
+			// 每个订阅者独立深拷贝一份：包的底层缓冲会被下一次 ReadRTP 复用，
+			// 且各写协程并发消费各自那份，互不干扰
+			pipe.queue.Push(cloneRTPPacket(rtpPacket))
 		}
 
 		// 交给识别协程解码。payload 的底层缓冲会被下一次 ReadRTP 复用，必须拷贝后再入队
