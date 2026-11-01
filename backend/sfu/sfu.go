@@ -104,6 +104,10 @@ type SFUPeer struct {
 	// 使用 TrackLocalStaticSample（pion 自动管理 seq/ts/marker），而非手动构造 RTP 包
 	aiTtsTrack *webrtc.TrackLocalStaticSample
 
+	// aiTtsTrack 绑定的 RTPSender：时间轴冻结跨越回绕周期时，
+	// rebuildAITtsTracks 需要先经它 RemoveTrack 旧轨再挂新轨
+	aiTtsSender *webrtc.RTPSender
+
 	// 停止中继转发协程的信号，在客户端离开或断连时关闭
 	stopRelay chan struct{}
 
@@ -681,7 +685,7 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 }
 
 // getAITtsTrack 懒初始化 AI TTS 输出轨，返回该客户端的 AI 语音播放通道
-// 首次调用时创建 TrackLocalStaticRTP 并 AddTrack 到 PeerConnection，触发重协商
+// 首次调用时创建 TrackLocalStaticSample 并 AddTrack 到 PeerConnection，触发重协商
 // 后续调用直接复用已创建的 track
 func (r *SFURoom) getAITtsTrack(clientID string) (*webrtc.TrackLocalStaticSample, error) {
 	r.lock.Lock()
@@ -695,28 +699,81 @@ func (r *SFURoom) getAITtsTrack(clientID string) (*webrtc.TrackLocalStaticSample
 		return peer.aiTtsTrack, nil
 	}
 
-	track, err := webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
-		"audio",
-		"audio_ai_"+clientID, // label 标示 AI 合成语音来源
-	)
+	track, err := r.bindAITtsTrack(peer, clientID)
 	if err != nil {
-		return nil, fmt.Errorf("getAITtsTrack: 创建 AI TTS 音轨失败: %w", err)
+		return nil, fmt.Errorf("getAITtsTrack: %w", err)
 	}
-	snd, err := peer.PC.AddTrack(track)
-	if err != nil {
-		return nil, fmt.Errorf("getAITtsTrack: 添加 AI TTS 音轨到 PC 失败: %w", err)
-	}
-	// 读该出流的 RTCP，采集浏览器侧下行抖动与丢包
-	go r.readSenderRTCP(clientID, snd)
-
-	peer.aiTtsTrack = track
 	logger.Infow("AI TTS 音轨已创建", "clientID", clientID[:8])
 
 	// AddTrack 已自动触发 OnNegotiationNeeded 回调（见 CreateSFUPeerConn 中的注册）
 	// 该回调内完成 CreateOffer + SetLocalDescription + 信令通知，此处无需重复处理
 
 	return track, nil
+}
+
+// bindAITtsTrack 为 peer 创建一条全新的 AI TTS 音轨并 AddTrack 到其 PC，
+// 替换 peer 上可能存在的旧轨引用（调用方须先自行摘除旧轨）。
+// 供 getAITtsTrack（首次懒创建）与 rebuildAITtsTracks（跨回绕重建）复用：
+// 两者差异只在「是否先 RemoveTrack 旧轨」，建轨与绑定流程完全一致
+// 调用方必须持有 r.lock
+func (r *SFURoom) bindAITtsTrack(peer *SFUPeer, clientID string) (*webrtc.TrackLocalStaticSample, error) {
+	track, err := webrtc.NewTrackLocalStaticSample(
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
+		"audio",
+		"audio_ai_"+clientID, // label 标示 AI 合成语音来源
+	)
+	if err != nil {
+		return nil, fmt.Errorf("创建 AI TTS 音轨失败: %w", err)
+	}
+	snd, err := peer.PC.AddTrack(track)
+	if err != nil {
+		return nil, fmt.Errorf("添加 AI TTS 音轨到 PC 失败: %w", err)
+	}
+	// 读该出流的 RTCP，采集浏览器侧下行抖动与丢包
+	go r.readSenderRTCP(clientID, snd)
+
+	peer.aiTtsTrack = track
+	peer.aiTtsSender = snd
+	return track, nil
+}
+
+// rebuildAITtsTracks 重建房间内所有成员的 AI TTS 音轨：
+// 旧轨从 PC 摘除（RemoveTrack），换上全新的 TrackLocalStaticSample——
+// 新 RTPSender、新 SSRC、新时间轴，触发一次重协商
+//
+// 用途：AI 音轨时间轴冻结跨越 32 位 RTP 时间戳一个回绕周期（48kHz 下约 24.85h）后，
+// 任何「前跳」增量取模后落点不可预测，同一 SSRC 的时间轴在数学上已无法接续，
+// 接收端会持续判过期丢弃。重建是唯一出路：新 SSRC 对接收端是全新流，无播放历史
+// 包袱，第一帧到达即恢复播放。前端 ontrack 对同一 streamId（audio_ai_<clientID>）
+// 走「移除旧轨、挂新轨」的替换分支（useVoiceRoom.ts），客户端无需协议改动
+//
+// 调用方不得持有 r.lock（内部加写锁）
+func (r *SFURoom) rebuildAITtsTracks() {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+
+	rebuilt := 0
+	for clientID, peer := range r.peers {
+		if peer.aiTtsTrack == nil {
+			// 从未创建过 AI 轨的成员没有冻结的时间轴，无需重建
+			continue
+		}
+		// 先摘旧轨：不摘的话旧轨永远留在 SDP 里，重协商后新旧两条 AI 轨并存
+		if peer.aiTtsSender != nil {
+			if err := peer.PC.RemoveTrack(peer.aiTtsSender); err != nil {
+				logger.Warnw("摘除旧AI TTS音轨失败", "clientID", clientID[:8], "error", err)
+			}
+			peer.aiTtsSender = nil
+		}
+		peer.aiTtsTrack = nil
+		if _, err := r.bindAITtsTrack(peer, clientID); err != nil {
+			logger.Warnw("重建AI TTS音轨失败", "clientID", clientID[:8], "error", err)
+			continue
+		}
+		rebuilt++
+	}
+	logger.Infow("AI TTS 音轨已重建（时间轴冻结跨越回绕周期，换新SSRC恢复）",
+		"rebuilt", rebuilt, "peers", len(r.peers))
 }
 
 // forwardRtp 接收到客户端的语音包，从 remoteTrack 读取 RTP 包，转发给房间其他客户端，同时送阿里云 ASR 做语音识别
@@ -1021,11 +1078,22 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 					// 先补写一帧大 Duration 的静音帧把时间轴前跳到墙上时钟再发真实帧：
 					// 「静默期不发包、恢复时时间戳前跳」正是 DTX 的原生语义，接收端按
 					// 静音间隙处理并立即恢复播放。停发时无法预知冻结时长，因此该动作
-					// 只能放在恢复时刻。gap 封顶 32 位 RTP 时间戳的回绕周期（48kHz 下
-					// 约 24.8h）——正常会话远达不到，超过视为会话已死、不再补救
+					// 只能放在恢复时刻。语音房长挂场景下连接可存活超过一天，
+					// 冻结也可能跨越回绕周期，此时走重建分支换新时间轴
 					if silenceRun >= maxSilenceFillFrames && !lastMediaAt.IsZero() {
-						if gap := time.Since(lastMediaAt) - 20*time.Millisecond; gap > 0 && gap < 24*time.Hour {
+						gap := time.Since(lastMediaAt) - 20*time.Millisecond
+						switch {
+						case gap > 0 && gap < 24*time.Hour:
+							// 常规恢复：跳时帧把时间轴前跳到墙上时钟，真实帧落在 now+20ms
 							writeAllPeers(silencePayload, gap+20*time.Millisecond)
+						case gap >= 24*time.Hour:
+							// 冻结跨越 32 位时间戳回绕周期（48kHz 下约 24.85h）：任何前跳
+							// 增量取模后落点不可预测，同 SSRC 时间轴无法接续，跳时反而更糟。
+							// 重建音轨换新 SSRC/新时间轴，接收端当全新流处理（语音房长挂
+							// 一天后 AI 再次开口的真实场景），重建失败则退化为不补救
+							logger.Warnw("AI音轨时间轴冻结超过回绕周期，重建音轨恢复",
+								"source", acr.clientId[:8], "gapHours", int(gap/time.Hour))
+							r.rebuildAITtsTracks()
 						}
 					}
 					silenceRun = 0
