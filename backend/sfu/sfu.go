@@ -61,6 +61,22 @@ const asrQueueCapacity = 50
 // 谁的网络慢，谁自己的队列积压、丢自己的包，与其他订阅者完全隔离
 const relayQueueCapacity = 50
 
+// renegotiation 建Offer 的有界重试参数
+//
+// pion 的 negotiation-needed 标志在触发 OnNegotiationNeeded 回调之前就被置位，
+// 此后只有两种情况会清除：判定"不再需要协商"，或信令状态回到 stable（answer
+// 应用成功）。若 CreateOffer / SetLocalDescription 失败后直接放弃，且该 PC 恰好
+// 再没有 answer 回来（没有已发出的 offer 就没有 answer），标志将永久卡死——
+// 之后该 PC 上所有重协商请求都会被 pion 的 4.7.3.2.5 检查吞掉，表现为新轨
+// 永远协商不上（某人开麦了但对方听不见 / AI 无声），且仅留一条 warn 日志。
+// 因此失败必须有界重试，给瞬时错误（如 SDP 生成抖动）自愈机会
+const (
+	// renegotiationMaxAttempts 建 Offer 的最大尝试次数（首次 + 2 次重试）
+	renegotiationMaxAttempts = 3
+	// renegotiationRetryDelay 第 n 次重试前的基础等待，实际等待 = n × 该值
+	renegotiationRetryDelay = 100 * time.Millisecond
+)
+
 // ICECandidateCallback 是 SFU -> 信令层 的 ICE Candidate 回调
 // 信令层收到后通过 WebSocket 转发给对应客户端
 type ICECandidateCallback func(clientID string, candidate webrtc.ICECandidateInit)
@@ -313,23 +329,54 @@ func (r *SFURoom) Join(clientID string) error {
 	})
 
 	// 当 AddTrack 被调用后，pion 会触发 OnNegotiationNeeded，此时需要向客户端发送 renegotiation Offer
+	//
+	// 并发与失败语义（依据 pion v4 源码 peerconnection.go / operations.go）：
+	//  1. 本回调在 pion 每个 PC 一条的 ops 操作链 goroutine 上串行执行，
+	//     两个 AddTrack 近同时触发时回调不会并发交错，无需额外互斥；
+	//  2. offer 在途（have-local-offer）期间新增的协商请求会被 pion 挂起，
+	//     并在 answer 使状态回到 stable 时自动重触发，因此这里不需要、也
+	//     不应该对非 stable 态强行建 Offer；
+	//  3. 唯一需要兜底的是建 Offer 失败：negotiation-needed 标志在回调触发前
+	//     已置位，若失败即放弃且此后再无 answer 回来，标志永久卡死、该 PC 的
+	//     后续协商全部被吞（详见 renegotiationMaxAttempts 处注释），故有界重试
 	pc.OnNegotiationNeeded(func() {
 		if r.onRenegotiation == nil {
 			logger.Warnw("renegotiation 触发但无回调", "clientID", clientID[:8])
 			return
 		}
-		offer, err := pc.CreateOffer(nil)
-		if err != nil {
-			logger.Warnw("创建 renegotiation Offer 失败", "clientID", clientID[:8], "error", err)
-			return
+		for attempt := 1; attempt <= renegotiationMaxAttempts; attempt++ {
+			// pion 仅在 stable 态触发本回调，但重试退避期间状态可能被并发迁移
+			// （如客户端主动 sfu_offer 抢先、触发隐式 rollback），非 stable 时
+			// 放弃本轮，交给状态回到 stable 后 pion 的自动重触发兜底
+			if state := pc.SignalingState(); state != webrtc.SignalingStateStable {
+				logger.Warnw("renegotiation 状态非 stable，放弃本轮建 Offer",
+					"clientID", clientID[:8], "state", state.String())
+				return
+			}
+			offer, err := pc.CreateOffer(nil)
+			if err != nil {
+				logger.Warnw("创建 renegotiation Offer 失败",
+					"clientID", clientID[:8], "attempt", attempt, "error", err)
+			} else if err = pc.SetLocalDescription(offer); err != nil {
+				logger.Warnw("设置 renegotiation Offer 失败",
+					"clientID", clientID[:8], "attempt", attempt, "error", err)
+			} else {
+				logger.Debugw("renegotiation Offer 已创建", "clientID", clientID[:8])
+				observability.IncRenegotiation()
+				r.onRenegotiation(clientID, offer.SDP)
+				return
+			}
+			if attempt < renegotiationMaxAttempts {
+				// 线性退避后重试。回调运行在 ops 链 goroutine 上，退避会短暂
+				// 排队同 PC 的后续 ops（此刻 offer 未发出、无 answer 在途，
+				// 排队的只有 startRTP 之类的媒体启动操作），开销可接受；
+				// 不另起 goroutine 重试，是为了避免重试与下一轮协商并发执行、
+				// 重新引入 pion 已串行化掉的 SetLocalDescription 交错竞态
+				time.Sleep(time.Duration(attempt) * renegotiationRetryDelay)
+			}
 		}
-		if err = pc.SetLocalDescription(offer); err != nil {
-			logger.Warnw("设置 renegotiation Offer 失败", "clientID", clientID[:8], "error", err)
-			return
-		}
-		logger.Debugw("renegotiation Offer 已创建", "clientID", clientID[:8])
-		observability.IncRenegotiation()
-		r.onRenegotiation(clientID, offer.SDP)
+		logger.Warnw("renegotiation 建 Offer 连续失败，放弃本轮（等待下次触发或 answer 回 stable 后由 pion 重试）",
+			"clientID", clientID[:8], "attempts", renegotiationMaxAttempts)
 	})
 
 	// ICE 连接状态日志
