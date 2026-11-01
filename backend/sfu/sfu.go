@@ -383,7 +383,84 @@ func (r *SFURoom) AcceptOffer(clientID string, offerSDP string) (answerSDP strin
 
 	logger.Infow("接受 Offer 已回复 Answer", "clientID", clientID[:8])
 	logger.Debugw("Answer SDP 内容", "clientID", clientID[:8], "sdp", answer.SDP)
+
+	// 初始协商完成后，为晚加入者补建房间内已有发布者的中继音轨。
+	// 必须放在 SetLocalDescription 之后：此时信令状态回到 stable 且已有本地描述，
+	// AddTrack 才会触发 OnNegotiationNeeded，走 sfu.go 中已注册的 renegotiation 闭环
+	// （CreateOffer -> renegotiation_offer -> 客户端 renegotiation_answer）。
+	// 若客户端一直不开麦（自己的 OnTrack 永远不触发），没有这一步它将永远听不到先加入者。
+	r.addExistingRelays(clientID)
+
 	return answer.SDP, nil
+}
+
+// addExistingRelays 为刚完成初始协商的客户端补建房间内已有发布者的中继音轨
+//
+// 背景：startForwarding 由发布者的 OnTrack 事件驱动，且只遍历"当下"房间内的对端。
+// 若客户端 C 在 A、B 已发布音频之后才加入，且 C 自己永不开麦（没有 OnTrack），
+// 原实现中不会有任何事件再触发 startForwarding，C 的 PeerConnection 上将没有任何
+// 下行音轨——C 成为"聋子"。本方法在 C 的初始协商完成后主动扫一遍房间，
+// 把每个已有发布者的音轨以中继轨的形式 AddTrack 到 C 的 PC 上，补上这条缺失的通路。
+//
+// 并发与锁的考虑：
+//  1. AddTrack 可能触发 ICE / negotiation 回调（见 OnTrack 处的注释），
+//     因此绝不能在持有房间写锁时调用 AddTrack——先在读锁内做快照，锁外执行 AddTrack；
+//  2. forwardRtp 每个包都会在读锁内遍历 outgoingRelays，所以中继轨注册必须拿写锁，
+//     且注册放在 AddTrack 成功之后，保证"先有轨、再入表"，不会写入空转发的轨道；
+//  3. 幂等：若目标中继已存在（例如信令层重发了 Offer），直接跳过，避免同一来源的
+//     音轨被重复 AddTrack 导致客户端收到重复的媒体描述。
+func (r *SFURoom) addExistingRelays(clientID string) {
+	// 第一步：读锁内做快照——加入者的 peer、所有"已发布且尚未为本人建过中继"的对端
+	r.lock.RLock()
+	peer, ok := r.peers[clientID]
+	if !ok {
+		r.lock.RUnlock()
+		return
+	}
+	type publisher struct {
+		id    string
+		peer  *SFUPeer
+		track *webrtc.TrackRemote
+	}
+	var publishers []publisher
+	for otherID, otherPeer := range r.peers {
+		if otherID == clientID || otherPeer.publishedAudioTrack == nil {
+			continue
+		}
+		// 该对端已经在为自己转发音频（正常发布事件路径已覆盖），无需重复建轨
+		if _, exists := otherPeer.outgoingRelays[clientID]; exists {
+			continue
+		}
+		publishers = append(publishers, publisher{id: otherID, peer: otherPeer, track: otherPeer.publishedAudioTrack})
+	}
+	r.lock.RUnlock()
+
+	// 第二步：锁外为每个已有发布者创建中继轨并 AddTrack 到本人的 PC。
+	// 这与 startForwarding 第二个循环的建轨方式完全一致：
+	// 编码能力沿用发布者实际使用的 codec，label 保持 "audio_<userId>" 格式，
+	// 前端据此识别声音来源
+	for _, p := range publishers {
+		relayTrack, err := webrtc.NewTrackLocalStaticRTP(
+			p.track.Codec().RTPCodecCapability,
+			"audio",
+			"audio_"+p.id,
+		)
+		if err != nil {
+			logger.Warnw("晚加入者补建中继轨失败", "clientID", clientID[:8], "source", p.id[:8], "error", err)
+			continue
+		}
+		if _, err = peer.PC.AddTrack(relayTrack); err != nil {
+			logger.Warnw("晚加入者补建中继添加失败", "clientID", clientID[:8], "source", p.id[:8], "error", err)
+			continue
+		}
+
+		// 第三步：写锁内把中继轨注册到发布者的 outgoingRelays。
+		// 注册后 forwardRtp 的每包循环会自动拾取，无需额外通知
+		r.lock.Lock()
+		p.peer.outgoingRelays[clientID] = relayTrack
+		r.lock.Unlock()
+		logger.Infow("晚加入者中继已补建", "from", p.id[:8], "to", clientID[:8])
+	}
 }
 
 // AcceptICECandidate 处理客户端发来的 ICE Candidate
@@ -563,8 +640,15 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 	}
 
 	// 为当前 source 创建其他已有客户端的中继音轨，让 source 能听到其他人
+	// 注意：若 source 是"晚加入"的客户端，其下行中继轨可能已由 addExistingRelays
+	// 在初始协商后补建过（甚至 first loop 也可能已覆盖），此处必须检查幂等，
+	// 否则会把同一来源的音轨重复 AddTrack 到 source 的 PC 上
 	for otherID, otherPeer := range r.peers {
 		if otherID == sourceID || otherPeer.publishedAudioTrack == nil {
+			continue
+		}
+		// 该对端的音频已在转发给 source，跳过，避免重复建轨
+		if _, exists := otherPeer.outgoingRelays[sourceID]; exists {
 			continue
 		}
 
