@@ -871,7 +871,9 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 		// 若像之前那样混进说话者的麦克风中继轨，AI 帧的 seq/ts 与麦克风包各自起算，
 		// 会被浏览器当成已过期的旧包丢弃，导致只有说话者本人（独立 AI 轨）能听到
 		// 真实帧与静音帧走同一条写入路径，保证整个会话的 seq/ts 都在同一条时间轴上
-		writeAllPeers := func(payload []byte) {
+		// dur 为该帧在媒体时间轴上占据的时长，正常帧恒为 20ms，
+		// 仅恢复重锚定时用大 Duration 让时间轴前跳（见下方恢复分支注释）
+		writeAllPeers := func(payload []byte, dur time.Duration) {
 			r.lock.RLock()
 			recipients := make([]string, 0, len(r.peers))
 			for destID := range r.peers {
@@ -888,7 +890,7 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 				clearTrackErr(destID, "获取AI TTS音轨失败")
 				if err := destTrack.WriteSample(media.Sample{
 					Data:               payload,
-					Duration:           20 * time.Millisecond,
+					Duration:           dur,
 					PrevDroppedPackets: 0,
 				}); err != nil {
 					logTrackErr(destID, "写入AI TTS轨失败", err)
@@ -909,12 +911,14 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 		// 远小于 10s；超时仍未等到真实帧，大概率上游已卡死（TTS WS 挂住、LLM 断流）
 		// 无界补发的代价：CBR 32kbps 下每帧静音是满尺寸 payload，约 44kbps/成员
 		// 的持续带宽随房间人数放大，且包一直流动会掩盖上游故障（无错误、无日志）
-		// 触顶后停止补发、时间戳冻结是无害的：黏连 bug 只在接收端仍在播放流中途时
-		// 成立，此时对端 NetEq 缓冲早已播空、流在接收端视角已结束，后续真实帧
-		// 到达时 NetEq 会按到达时钟重新对齐，不会产生黏连
+		// 触顶后停止补发、时间轴冻结：冻结期间黏连不会发生（接收端早已播空），
+		// 但恢复播放必须先重锚定时间轴，见下方真实帧分支的「恢复重锚定」
 		const maxSilenceFillFrames = 500
 		// silenceRun 连续补发的静音帧计数，发真实帧时清零
 		silenceRun := 0
+		// lastMediaAt 最近一次向时间轴写入帧（真实或静音）的墙钟时刻，
+		// 恢复重锚定时用它计算时间轴落后真实时间的差距
+		var lastMediaAt time.Time
 		for {
 			select {
 			case <-sendTicker.C:
@@ -925,8 +929,24 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 						return
 					}
 					started = true
+					// 恢复重锚定：静音补发触顶停发后，时间轴冻结而真实时间继续流逝。
+					// 此时若直接发真实帧，其时间戳只比上一帧前进 20ms——媒体上「准时」，
+					// 真实时间里却迟到了冻结的整段时长。接收端 NetEq 的播放时钟在
+					// PLC 扩音期间持续推进，会把这种「时间戳连续但到达大幅迟到」的包
+					// 判为过期丢弃，音频无法恢复。
+					// 先补写一帧大 Duration 的静音帧把时间轴前跳到墙上时钟再发真实帧：
+					// 「静默期不发包、恢复时时间戳前跳」正是 DTX 的原生语义，接收端按
+					// 静音间隙处理并立即恢复播放。停发时无法预知冻结时长，因此该动作
+					// 只能放在恢复时刻。gap 封顶 32 位 RTP 时间戳的回绕周期（48kHz 下
+					// 约 24.8h）——正常会话远达不到，超过视为会话已死、不再补救
+					if silenceRun >= maxSilenceFillFrames && !lastMediaAt.IsZero() {
+						if gap := time.Since(lastMediaAt) - 20*time.Millisecond; gap > 0 && gap < 24*time.Hour {
+							writeAllPeers(silencePayload, gap+20*time.Millisecond)
+						}
+					}
 					silenceRun = 0
-					writeAllPeers(qf.payload)
+					lastMediaAt = time.Now()
+					writeAllPeers(qf.payload, 20*time.Millisecond)
 					// 刷新播放态：只要 pacer 还在按 20ms 节拍发帧，AI 就视为「在出声」
 					playback.markSent(qf.turn, qf.sentence)
 				default:
@@ -935,7 +955,8 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 					// 注意：静音帧绝不调用 markSent——播放态必须只反映真实语音，
 					// 否则 speaking() 恒为真，「用户打断 AI」的判定会永久失效
 					if started && len(silencePayload) > 0 && silenceRun < maxSilenceFillFrames {
-						writeAllPeers(silencePayload)
+						writeAllPeers(silencePayload, 20*time.Millisecond)
+						lastMediaAt = time.Now()
 						silenceRun++
 						// 触顶只记一次日志：既是限流也是信号——该会话自上一真实帧起
 						// 已静默 10s 仍无新音频，可据此监控「TTS/LLM 上游疑似卡死」
