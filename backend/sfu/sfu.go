@@ -142,6 +142,14 @@ type SFUPeer struct {
 	// rebuildAITtsTracks 需要先经它 RemoveTrack 旧轨再挂新轨
 	aiTtsSender *webrtc.RTPSender
 
+	// 在途 renegotiation Offer 的 SDP：OnNegotiationNeeded 发出 offer 前登记，
+	// answer 应用成功后清除，AcceptRenegotiationAnswer 据此校验 offer/answer 配对。
+	// pion 对远端 answer 不做与 pending offer 的匹配校验（本地侧 SetLocal 校验
+	// lastOffer，远端侧没有对应物），配对正确性原本完全依赖 per-client FIFO
+	// 信令与浏览器隐式 rollback 这两个隐性约定，信令一旦乱序/重发即静默错配。
+	// 由 r.lock 保护（写点在 ops 链回调与 AcceptRenegotiationAnswer，均为短临界区）
+	pendingOfferSDP string
+
 	// 停止中继转发协程的信号，在客户端离开或断连时关闭
 	stopRelay chan struct{}
 
@@ -361,6 +369,13 @@ func (r *SFURoom) Join(clientID string) error {
 				logger.Warnw("设置 renegotiation Offer 失败",
 					"clientID", clientID[:8], "attempt", attempt, "error", err)
 			} else {
+				// 在途 offer 登记必须先于信令发送：answer 只可能在客户端收到
+				// offer 之后到达，先登记才能保证 AcceptRenegotiationAnswer
+				// 校验时 pendingOfferSDP 必已就位。临界区只写一个字符串字段，
+				// 不触碰 PC，与其他 goroutine 无锁交叉
+				r.lock.Lock()
+				peer.pendingOfferSDP = offer.SDP
+				r.lock.Unlock()
 				logger.Debugw("renegotiation Offer 已创建", "clientID", clientID[:8])
 				observability.IncRenegotiation()
 				r.onRenegotiation(clientID, offer.SDP)
@@ -648,12 +663,38 @@ func (r *SFURoom) SetOnRenegotiation(cb RenegotiationCallback) {
 }
 
 // AcceptRenegotiationAnswer 处理客户端对 renegotiation Offer 的 Answer
+//
+// 配对校验：pion 对远端 answer 不做与 pending offer 的匹配检查（对比本地侧
+// SetLocalDescription(offer) 会严格校验 SDP == lastOffer），只要信令状态是
+// have-local-offer 就静默接受任何 answer，错配的 offer/answer 会被拼成
+// 自相矛盾的 current 描述且无报错。此处以「mid 序列」为配对指纹拦截：
+// W3C 规范保证 answer 的 m= 段顺序与 mid 沿用其所应答 offer 的布局，
+// 两序列不一致即 answer 属于更早/更晚的 offer（信令乱序、重发或客户端
+// 状态机错乱），拒绝应用。局限：若先后两笔 offer 的 mid 序列恰好相同
+// （如仅 ICE restart 类无轨变化的再协商），指纹无法区分——但这类错配
+// 功能上也等价，可安全接受
 func (r *SFURoom) AcceptRenegotiationAnswer(clientID string, answerSDP string) error {
 	r.lock.RLock()
 	peer, ok := r.peers[clientID]
 	r.lock.RUnlock()
 	if !ok {
 		return fmt.Errorf("peer %s not found", clientID)
+	}
+
+	// 读在途 offer 快照。此刻状态必为 have-local-offer（pion 只在该状态接受
+	// answer），状态回 stable 前不可能有新 offer 覆写 pendingOfferSDP，
+	// 因此快照在校验与 SetRemote 期间保持有效
+	r.lock.RLock()
+	pendingOfferSDP := peer.pendingOfferSDP
+	r.lock.RUnlock()
+	if pendingOfferSDP == "" {
+		return fmt.Errorf("renegotiation answer 无对应在途 offer（信令乱序或重复）")
+	}
+	offerMids := midSequenceFromSDP(pendingOfferSDP)
+	answerMids := midSequenceFromSDP(answerSDP)
+	if !equalStringSlices(offerMids, answerMids) {
+		return fmt.Errorf("renegotiation answer 与在途 offer 不匹配: offer mids=%v, answer mids=%v",
+			offerMids, answerMids)
 	}
 
 	answer := webrtc.SessionDescription{
@@ -664,8 +705,45 @@ func (r *SFURoom) AcceptRenegotiationAnswer(clientID string, answerSDP string) e
 		return fmt.Errorf("set remote description: %w", err)
 	}
 
+	// 协商闭环，摘掉在途标记。条件清除：SetRemote 成功到拿到写锁之间，
+	// ops 链上可能已有一笔新 offer（stable 后自动重触发）覆写 pendingOfferSDP，
+	// 此时不能误清新 offer 的在途标记
+	r.lock.Lock()
+	if peer.pendingOfferSDP == pendingOfferSDP {
+		peer.pendingOfferSDP = ""
+	}
+	r.lock.Unlock()
+
 	logger.Infow("renegotiation answer 已处理", "clientID", clientID[:8])
 	return nil
+}
+
+// midSequenceFromSDP 按出现顺序提取 SDP 中的全部 a=mid 值
+//
+// SDP 行分隔符兼容 \r\n 与 \n（逐行 Trim 空白即可）；mid 序列即 answer 的
+// 媒体段布局指纹（详见 AcceptRenegotiationAnswer 注释）
+func midSequenceFromSDP(sdp string) []string {
+	var mids []string
+	for _, line := range strings.Split(sdp, "\n") {
+		line = strings.TrimSpace(line)
+		if rest, ok := strings.CutPrefix(line, "a=mid:"); ok {
+			mids = append(mids, strings.TrimSpace(rest))
+		}
+	}
+	return mids
+}
+
+// equalStringSlices 判断两个字符串切片长度与逐元素是否完全一致
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // PeerCount 返回房间内 SFU 对端数量
