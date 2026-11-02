@@ -193,18 +193,35 @@ jobs:
           fi
           # ACR 在 GitHub 海外 Runner 上不稳定，日志里常见单层 "Retrying in N seconds"。
           # 单次失败不代表镜像有问题，整步重试 3 次，避免一次抖动就丢掉这个 registry。
+          synced=false
           for attempt in 1 2 3; do
             if docker pull "${src}" \
               && docker tag "${src}" "${dst}:${tag}" \
               && docker tag "${src}" "${dst}:latest" \
               && docker push "${dst}:${tag}" \
               && docker push "${dst}:latest"; then
-              exit 0
+              synced=true
+              break
             fi
             echo "WARN: ACR sync attempt ${attempt} failed, retrying in 10s..."
             sleep 10
           done
-          echo "ERROR: ACR sync failed after 3 attempts: ${dst}"
+          if [ "$synced" != "true" ]; then
+            echo "ERROR: ACR sync failed after 3 attempts: ${dst}"
+            exit 1
+          fi
+          # 推送后回读校验：docker push 报成功不代表 tag 在 ACR 侧可解析
+          # 跨境推送曾出现「push 报成功、服务器拉取 not found」的静默失败（2026-10-27 部署事故）
+          # 回读重试 3 次（兼容 ACR 短暂的可见性延迟），仍读不到则判本 registry 同步失败，
+          # acr_ok 落 false，部署走 GHCR 兜底，而不是到服务器上才暴露 not found
+          for attempt in 1 2 3; do
+            if docker manifest inspect "${dst}:${tag}" > /dev/null 2>&1; then
+              exit 0
+            fi
+            echo "WARN: manifest readback attempt ${attempt} failed for ${dst}:${tag}, retrying in 10s..."
+            sleep 10
+          done
+          echo "ERROR: push 完成 ${dst}:${tag} 但 manifest 回读失败，ACR 侧 tag 不可解析"
           exit 1
 
       - name: Track backend results
@@ -245,18 +262,35 @@ jobs:
             echo "SKIP: ACR already has ${dst}:${tag} (idempotent short-circuit), no pull/push needed"
             exit 0
           fi
+          synced=false
           for attempt in 1 2 3; do
             if docker pull "${src}" \
               && docker tag "${src}" "${dst}:${tag}" \
               && docker tag "${src}" "${dst}:latest" \
               && docker push "${dst}:${tag}" \
               && docker push "${dst}:latest"; then
-              exit 0
+              synced=true
+              break
             fi
             echo "WARN: ACR sync attempt ${attempt} failed, retrying in 10s..."
             sleep 10
           done
-          echo "ERROR: ACR sync failed after 3 attempts: ${dst}"
+          if [ "$synced" != "true" ]; then
+            echo "ERROR: ACR sync failed after 3 attempts: ${dst}"
+            exit 1
+          fi
+          # 推送后回读校验：docker push 报成功不代表 tag 在 ACR 侧可解析
+          # 跨境推送曾出现「push 报成功、服务器拉取 not found」的静默失败（2026-10-27 部署事故）
+          # 回读重试 3 次（兼容 ACR 短暂的可见性延迟），仍读不到则判本 registry 同步失败，
+          # acr_ok 落 false，部署走 GHCR 兜底，而不是到服务器上才暴露 not found
+          for attempt in 1 2 3; do
+            if docker manifest inspect "${dst}:${tag}" > /dev/null 2>&1; then
+              exit 0
+            fi
+            echo "WARN: manifest readback attempt ${attempt} failed for ${dst}:${tag}, retrying in 10s..."
+            sleep 10
+          done
+          echo "ERROR: push 完成 ${dst}:${tag} 但 manifest 回读失败，ACR 侧 tag 不可解析"
           exit 1
 
       - name: Track frontend results
@@ -297,18 +331,35 @@ jobs:
             echo "SKIP: ACR already has ${dst}:${tag} (idempotent short-circuit), no pull/push needed"
             exit 0
           fi
+          synced=false
           for attempt in 1 2 3; do
             if docker pull "${src}" \
               && docker tag "${src}" "${dst}:${tag}" \
               && docker tag "${src}" "${dst}:latest" \
               && docker push "${dst}:${tag}" \
               && docker push "${dst}:latest"; then
-              exit 0
+              synced=true
+              break
             fi
             echo "WARN: ACR sync attempt ${attempt} failed, retrying in 10s..."
             sleep 10
           done
-          echo "ERROR: ACR sync failed after 3 attempts: ${dst}"
+          if [ "$synced" != "true" ]; then
+            echo "ERROR: ACR sync failed after 3 attempts: ${dst}"
+            exit 1
+          fi
+          # 推送后回读校验：docker push 报成功不代表 tag 在 ACR 侧可解析
+          # 跨境推送曾出现「push 报成功、服务器拉取 not found」的静默失败（2026-10-27 部署事故）
+          # 回读重试 3 次（兼容 ACR 短暂的可见性延迟），仍读不到则判本 registry 同步失败，
+          # acr_ok 落 false，部署走 GHCR 兜底，而不是到服务器上才暴露 not found
+          for attempt in 1 2 3; do
+            if docker manifest inspect "${dst}:${tag}" > /dev/null 2>&1; then
+              exit 0
+            fi
+            echo "WARN: manifest readback attempt ${attempt} failed for ${dst}:${tag}, retrying in 10s..."
+            sleep 10
+          done
+          echo "ERROR: push 完成 ${dst}:${tag} 但 manifest 回读失败，ACR 侧 tag 不可解析"
           exit 1
 
       - name: Track agent results
