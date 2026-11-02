@@ -441,10 +441,14 @@ jobs:
             set -eu
             # 配置仓 checkout（由 scripts/bootstrap.sh 建立）；deploy.sh 自身会再 git pull --ff-only
             cd "${{ secrets.DEPLOY_CONFIG_PATH || '/srv/echat/config' }}"
+            # 两套镜像名都带通道前缀传，不传 BACKEND_IMAGE/FRONTEND_IMAGE/AGENT_IMAGE：
+            # compose 插值时「进程环境 > --env-file」，无前缀变量一旦进入进程环境，
+            # deploy.sh 写进 .env 的另一个通道镜像名就会被原地覆盖，切通道等于没切
+            # （2026-11-02 部署事故根因）。镜像名统一由 deploy.sh 按通道 export。
             IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}" \
-            BACKEND_IMAGE="${{ needs.build-and-push.outputs.acr_backend_image }}" \
-            FRONTEND_IMAGE="${{ needs.build-and-push.outputs.acr_frontend_image }}" \
-            AGENT_IMAGE="${{ needs.build-and-push.outputs.acr_agent_image }}" \
+            ACR_BACKEND="${{ needs.build-and-push.outputs.acr_backend_image }}" \
+            ACR_FRONTEND="${{ needs.build-and-push.outputs.acr_frontend_image }}" \
+            ACR_AGENT="${{ needs.build-and-push.outputs.acr_agent_image }}" \
             GHCR_BACKEND="${{ needs.build-and-push.outputs.backend_image }}" \
             GHCR_FRONTEND="${{ needs.build-and-push.outputs.frontend_image }}" \
             GHCR_AGENT="${{ needs.build-and-push.outputs.agent_image }}" \
