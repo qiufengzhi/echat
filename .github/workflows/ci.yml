@@ -439,8 +439,12 @@ jobs:
           command_timeout: 20m # 服务器侧拉镜像 + 迁移 + 起栈的耗时上限
           script: |
             set -eu
-            # 配置仓 checkout（由 scripts/bootstrap.sh 建立）；deploy.sh 自身会再 git pull --ff-only
+            # 配置仓 checkout（由服务器侧 scripts/bootstrap.sh 首次建立）。
+            # 必须在调用 deploy.sh 之前由本脚本直接 pull：deploy.sh 自身的 pull 排在
+            # 入参校验之后，一旦某次改动恰好修改了校验逻辑，旧版脚本会在校验处直接
+            # 退出、永远走不到自己的 pull——自更新救不了自己（2026-11-04 部署失败根因）。
             cd "${{ secrets.DEPLOY_CONFIG_PATH || '/srv/echat/config' }}"
+            git pull --ff-only
             # 两套镜像名都带通道前缀传，不传 BACKEND_IMAGE/FRONTEND_IMAGE/AGENT_IMAGE：
             # compose 插值时「进程环境 > --env-file」，无前缀变量一旦进入进程环境，
             # deploy.sh 写进 .env 的另一个通道镜像名就会被原地覆盖，切通道等于没切
