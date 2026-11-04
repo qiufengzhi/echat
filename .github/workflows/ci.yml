@@ -165,6 +165,10 @@ jobs:
           file: ./backend/Dockerfile
           platforms: linux/amd64
           push: true
+          # 关闭 buildx 默认开启的 provenance 证明清单：该清单以 OCI index 形式附带
+          # config 为 application/vnd.oci.empty.v1+json 的空 manifest，阿里云个人版 ACR
+          # 不识别此媒体类型，同步 pull/push 时整包被拒（2026-11-04 ACR 同步全挂根因）
+          provenance: false
           tags: |
             ${{ steps.image-vars.outputs.backend_image }}:${{ steps.image-vars.outputs.image_tag }}
             ${{ steps.image-vars.outputs.backend_image }}:latest
@@ -242,6 +246,7 @@ jobs:
           file: ./frontend/Dockerfile
           platforms: linux/amd64
           push: true
+          provenance: false # 同 backend：ACR 不识别 provenance 空清单，同步会被整包拒收
           tags: |
             ${{ steps.image-vars.outputs.frontend_image }}:${{ steps.image-vars.outputs.image_tag }}
             ${{ steps.image-vars.outputs.frontend_image }}:latest
@@ -311,6 +316,7 @@ jobs:
           file: ./agent/Dockerfile
           platforms: linux/amd64
           push: true
+          provenance: false # 同 backend：ACR 不识别 provenance 空清单，同步会被整包拒收
           tags: |
             ${{ steps.image-vars.outputs.agent_image }}:${{ steps.image-vars.outputs.image_tag }}
             ${{ steps.image-vars.outputs.agent_image }}:latest
@@ -425,8 +431,10 @@ jobs:
     runs-on: ubuntu-latest
     # 本 job 只发一次 SSH，服务器本地完成「拉配置仓 / 解密密钥 / 拉镜像 / 迁移 / 起栈」。
     # 旧链路 7 次跨境建连（每次 3.5~5 分钟，含服务端 sshd 反向 DNS 反查）是超时根因；
-    # 建连降为 1 次后，30 分钟是宽裕兜底（含服务器侧串行拉镜像与迁移）。
-    timeout-minutes: 30
+    # 建连降为 1 次后，主要耗时变成服务器拉镜像：ACR 推送失败被迫走 GHCR 时，
+    # 跨境拉取极慢且各层可能长时间停滞（2026-11-04 第二次事故：20m 在拉镜像阶段超时），
+    # 45m 覆盖「全量层走 GHCR 慢速通道」的最坏情况；ACR 正常时仍会在十几分钟内结束。
+    timeout-minutes: 45
 
     steps:
       - name: Deploy via single SSH # 一次连接执行配置仓内的 deploy.sh，不再 scp 任何文件
@@ -436,7 +444,7 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }} # SSH 登录用户名
           password: ${{ secrets.DEPLOY_PASSWORD }} # SSH 登录密码
           port: ${{ secrets.DEPLOY_PORT || '22' }} # SSH 端口，未配置默认 22
-          command_timeout: 20m # 服务器侧拉镜像 + 迁移 + 起栈的耗时上限
+          command_timeout: 40m # 服务器侧拉镜像 + 迁移 + 起栈的耗时上限（须小于 job 的 timeout-minutes，为 SSH 建连留余量）
           script: |
             set -eu
             # 配置仓 checkout（由服务器侧 scripts/bootstrap.sh 首次建立）。
