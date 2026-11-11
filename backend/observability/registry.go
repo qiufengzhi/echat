@@ -73,6 +73,19 @@ var (
 	// ClientPlaybackDelayMs 客户端 getStats 上报的播放延迟（毫秒）
 	ClientPlaybackDelayMs metric.Int64Histogram
 
+	// PeerDisconnects SFU 对端非正常断开次数，label state 取 disconnected/failed
+	PeerDisconnects metric.Int64Counter
+	// SFURttMs 由 RTCP SR 与 RR 往返算出的 RTT（毫秒）
+	SFURttMs metric.Int64Histogram
+	// SFUTxBytes SFU 下行实际写出的字节数，label kind 取 relay/ai
+	SFUTxBytes metric.Int64Counter
+	// TwccFeedback 收到的 TWCC 反馈包数，恒为 0 说明下行反馈链不通
+	TwccFeedback metric.Int64Counter
+	// BurstLossEvents 连续丢包事件数，label len 取 1/2/3plus 表示连续丢失帧数分桶
+	BurstLossEvents metric.Int64Counter
+	// ProcessCPUPercent 进程 CPU 使用率百分比，仅 Linux 采集，其他平台不上报
+	ProcessCPUPercent metric.Int64Gauge
+
 	// RingBacklog 数据面队列当前积压，label queue=聚合后的队列族
 	RingBacklog metric.Int64Gauge
 	// RingCapacity 数据面队列容量
@@ -125,6 +138,13 @@ func initInstruments() {
 	RTCPJitterUs = mustInt64Histogram(meter, "echat.sfu.rtcp_jitter_us", "us", "RTCP RR 到达间隔抖动")
 	RTCPLossPercent = mustInt64Histogram(meter, "echat.sfu.rtcp_loss_percent", "%", "RTCP RR 丢包率")
 	ClientPlaybackDelayMs = mustInt64Histogram(meter, "echat.client.playback_delay_ms", "ms", "客户端 getStats 播放延迟")
+
+	PeerDisconnects = mustInt64Counter(meter, "echat.sfu.peer_disconnects_total", "SFU 对端非正常断开次数")
+	SFURttMs = mustInt64Histogram(meter, "echat.sfu.rtt_ms", "ms", "RTCP SR/RR 往返时延")
+	SFUTxBytes = mustInt64Counter(meter, "echat.sfu.tx_bytes_total", "SFU 下行写出字节数")
+	TwccFeedback = mustInt64Counter(meter, "echat.sfu.twcc_feedback_total", "收到的 TWCC 反馈包数")
+	BurstLossEvents = mustInt64Counter(meter, "echat.sfu.burst_loss_total", "连续丢包事件数")
+	ProcessCPUPercent = mustInt64Gauge(meter, "echat.process.cpu_percent", "进程 CPU 使用率百分比")
 
 	RingBacklog = mustInt64Gauge(meter, "echat.dataplane.ring_backlog", "数据面队列当前积压")
 	RingCapacity = mustInt64Gauge(meter, "echat.dataplane.ring_capacity", "数据面队列容量")

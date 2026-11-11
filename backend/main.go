@@ -56,6 +56,9 @@ func main() {
 		defer obsShutdown()
 	}
 
+	// 进程 CPU 采样：OTel runtime 埋点不含 OS 层 CPU，这里补上（仅 Linux 生效）
+	observability.StartProcessSampler()
+
 	// 初始化日志系统，必须在 config.Load() 之后；日志的 OTLP 链路按需追加
 	logging.Init(logging.Config{
 		Level:         cfg.Log.Level,

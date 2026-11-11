@@ -153,6 +153,10 @@ type SFUPeer struct {
 	// 停止中继转发协程的信号，在客户端离开或断连时关闭
 	stopRelay chan struct{}
 
+	// srClock 本对端出流 SR 的发送时刻表，用于从 RR 反算 RTT
+	// 与拦截器链共享同一实例，生命周期随 PeerConnection
+	srClock *srClock
+
 	connectedAt time.Time
 }
 
@@ -291,6 +295,16 @@ func (r *SFURoom) Join(clientID string) error {
 	if err := webrtc.ConfigureTWCCSender(mediaEngine, registry); err != nil {
 		return fmt.Errorf("configure twcc sender: %w", err)
 	}
+	// SR 时刻表拦截器：记录出向 SR 的本地发送时刻，使 RR 能反算 RTT
+	// 放在 RTCPReports 之后，BindRTCPWriter 时处于外层，能先看到 SR 再放行
+	clock := newSRClock()
+	registry.Add(newSRClockFactory(clock))
+	// 出向 transport-wide 序号：ConfigureTWCCSender 只注册了「用收到的包生成反馈」，
+	// 不负责给出向包打序号，缺了它浏览器无法回传可用的 TWCC 反馈。
+	// 必须最后注册（链中最外层），保证序号在任何队列化之前写入
+	if err := webrtc.ConfigureTWCCHeaderExtensionSender(mediaEngine, registry); err != nil {
+		return fmt.Errorf("configure twcc header extension: %w", err)
+	}
 
 	api := webrtc.NewAPI(
 		webrtc.WithMediaEngine(mediaEngine),
@@ -315,6 +329,7 @@ func (r *SFURoom) Join(clientID string) error {
 		PC:             pc,
 		outgoingRelays: make(map[string]*relayPipe),
 		stopRelay:      make(chan struct{}),
+		srClock:        clock,
 		connectedAt:    time.Now(),
 	}
 
@@ -404,7 +419,8 @@ func (r *SFURoom) Join(clientID string) error {
 		logger.Infow("PC 状态变化", "clientID", clientID[:8], "state", state.String())
 		if state == webrtc.PeerConnectionStateDisconnected ||
 			state == webrtc.PeerConnectionStateFailed {
-			// 连接意外断开，清理转发资源
+			// 连接意外断开：记一次断连事件后清理转发资源
+			observability.RecordPeerDisconnect(state.String())
 			peer.stopForwarding()
 		}
 	})
@@ -558,10 +574,13 @@ func (r *SFURoom) addExistingRelays(clientID string) {
 			logger.Warnw("晚加入者补建中继轨失败", "clientID", clientID[:8], "source", p.id[:8], "error", err)
 			continue
 		}
-		if _, err = peer.PC.AddTrack(relayTrack); err != nil {
+		snd, err := peer.PC.AddTrack(relayTrack)
+		if err != nil {
 			logger.Warnw("晚加入者补建中继添加失败", "clientID", clientID[:8], "source", p.id[:8], "error", err)
 			continue
 		}
+		// 补建轨同样要读 RTCP：否则晚加入者的这条出流永远没有抖动/丢包/RTT 观测
+		go r.readSenderRTCP(clientID, "relay", peer.srClock, snd)
 
 		// 第三步：写锁内把中继轨注册到发布者的 outgoingRelays。
 		// 注册后 forwardRtp 的每包循环会自动拾取，无需额外通知
@@ -826,7 +845,7 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 			logger.Warnw("添加中继轨失败", "source", sourceID[:8], "subscriber", subscriberID[:8], "error", err)
 			continue
 		}
-		go r.readSenderRTCP(subscriberID, snd)
+		go r.readSenderRTCP(subscriberID, "relay", subscriber.srClock, snd)
 
 		// 将房间内其他人的音轨通过中继轨加入 source
 		sourcePeer.outgoingRelays[subscriberID] = r.newRelayPipe(sourceID, subscriberID, relayTrack)
@@ -861,7 +880,7 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 			logger.Warnw("为新对端添加中继轨失败", "source", sourceID[:8], "other", otherID[:8], "error", err)
 			continue
 		}
-		go r.readSenderRTCP(sourceID, snd)
+		go r.readSenderRTCP(sourceID, "relay", sourcePeer.srClock, snd)
 
 		// 将 other 的音频转发给 source
 		otherPeer.outgoingRelays[sourceID] = r.newRelayPipe(otherID, sourceID, relayTrack)
@@ -925,8 +944,8 @@ func (r *SFURoom) bindAITtsTrack(peer *SFUPeer, clientID string) (*webrtc.TrackL
 	if err != nil {
 		return nil, fmt.Errorf("添加 AI TTS 音轨到 PC 失败: %w", err)
 	}
-	// 读该出流的 RTCP，采集浏览器侧下行抖动与丢包
-	go r.readSenderRTCP(clientID, snd)
+	// 读该出流的 RTCP，采集浏览器侧下行抖动、丢包与 RTT
+	go r.readSenderRTCP(clientID, "ai", peer.srClock, snd)
 
 	peer.aiTtsTrack = track
 	peer.aiTtsSender = snd
@@ -1021,6 +1040,9 @@ func (p *relayPipe) pumpRelay(sourceID, subscriberID string) {
 		if err := p.track.WriteRTP(pkt); err != nil {
 			observability.RelayWriteErrors.Add(context.Background(), 1)
 			logger.Warnw("写入 RTP 失败", "source", sourceID[:8], "dest", subscriberID[:8], "error", err)
+		} else {
+			// 记录实际写出的字节数，用来区分「发少了」和「丢多了」
+			observability.RecordTxBytes("relay", int64(pkt.Header.MarshalSize()+len(pkt.Payload)))
 		}
 	}
 }
@@ -1325,6 +1347,7 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 					logTrackErr(destID, "写入AI TTS轨失败", err)
 				} else {
 					clearTrackErr(destID, "写入AI TTS轨失败")
+					observability.RecordTxBytes("ai", int64(len(payload)))
 				}
 			}
 		}

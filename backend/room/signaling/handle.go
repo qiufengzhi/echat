@@ -100,8 +100,10 @@ func handleClientStats(payload json.RawMessage) {
 	if err := json.Unmarshal(payload, &stats); err != nil {
 		return
 	}
-	if stats.PlaybackDelayMs != nil {
-		observability.RecordClientPlayback(*stats.PlaybackDelayMs)
+	for _, s := range stats.Streams {
+		// 每条入流各记一次样本：直方图因此保留「哪一路最差」的分辨力
+		// 但不上 ssrc attribute，避免活跃流数量把 Prometheus 基数顶爆
+		observability.RecordClientPlayback(s.PlaybackDelayMs)
 	}
 }
 

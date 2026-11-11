@@ -429,32 +429,57 @@ export function useVoiceRoom(options?: { onKicked?: () => void; onAuthExpired?: 
       // 连接断开/失败时，通过 signaling handler 兜底处理
     }
 
-    // 播放侧统计上报：周期性读 getStats 的 jitterBufferDelay 均值，补全「到出声」这一段延迟
+    // 播放侧统计上报：按入流读 getStats，用区间增量算抖动缓冲平均停留时长
+    // 1s 粒度才能算分位数；累计平均会把瞬时尖峰抹平；按 ssrc 分条才能定位哪一路在恶化
     if (statsTimerRef.current) window.clearInterval(statsTimerRef.current)
+    const prevStreamStats = new Map<number, { delay: number; emitted: number }>()
     statsTimerRef.current = window.setInterval(() => {
       void (async () => {
         if (pc.connectionState !== 'connected') return
         try {
           const stats = await pc.getStats()
-          let delaySum = 0
-          let emitted = 0
+          const streams: Array<{
+            ssrc: number
+            playbackDelayMs: number
+            packetsLost: number
+            jitterMs: number
+          }> = []
+          const seen = new Set<number>()
           stats.forEach(report => {
-            if (report.type === 'inbound-rtp') {
-              const inbound = report as RTCInboundRtpStreamStats
-              if (inbound.kind === 'audio') {
-                delaySum += inbound.jitterBufferDelay ?? 0
-                emitted += inbound.jitterBufferEmittedCount ?? 0
-              }
-            }
+            if (report.type !== 'inbound-rtp') return
+            const inbound = report as RTCInboundRtpStreamStats
+            if (inbound.kind !== 'audio') return
+            const ssrc = Number(inbound.ssrc ?? 0)
+            if (!ssrc) return
+            seen.add(ssrc)
+            const delay = inbound.jitterBufferDelay ?? 0
+            const emitted = inbound.jitterBufferEmittedCount ?? 0
+            const prev = prevStreamStats.get(ssrc)
+            prevStreamStats.set(ssrc, { delay, emitted })
+            // 首次见到该 ssrc（含 AI 轨换轨重建）没有基线，跳过本轮，否则会算出巨大值
+            if (!prev) return
+            const deltaEmitted = emitted - prev.emitted
+            // emitted 未增长说明这段时间没有新样本，不能拿 0 当延迟
+            if (deltaEmitted <= 0) return
+            streams.push({
+              ssrc,
+              playbackDelayMs: Math.round(((delay - prev.delay) / deltaEmitted) * 1000),
+              packetsLost: inbound.packetsLost ?? 0,
+              jitterMs: Math.round((inbound.jitter ?? 0) * 1000),
+            })
           })
-          if (emitted > 0) {
-            signalingClientRef.current?.sendClientStats(Math.round((delaySum / emitted) * 1000))
+          // 清理已消失的流，避免换轨后旧基线一直占着内存
+          for (const key of Array.from(prevStreamStats.keys())) {
+            if (!seen.has(key)) prevStreamStats.delete(key)
+          }
+          if (streams.length > 0) {
+            signalingClientRef.current?.sendClientStats(streams)
           }
         } catch {
           // 统计读取失败不影响主流程
         }
       })()
-    }, 3000)
+    }, 1000)
 
     pcRef.current = pc
     return pc
