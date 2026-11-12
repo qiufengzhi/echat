@@ -51,8 +51,9 @@ type Config struct {
 // return: 可直接使用的配置
 func DefaultConfig() Config {
 	return Config{
-		// 2 包 × 25ms（34kbps 下每包放行耗时）= 50ms 排队上限，
-		// 与「pacer 排队延迟 p99 ≤ 60ms」的验收门槛自洽
+		// 2 包 × 25ms（34kbps 下每包放行耗时）≈ 50ms 排队上限
+		// 3 包与 2 包在 N3 下的 burst≥3 实测为 224 与 210，差异落在噪声内，
+		// 说明 burst 对队列深度不敏感、对延迟敏感，因此按延迟取 2 包
 		MaxPackets:     2,
 		MaxBytes:       700,
 		BurstFactor:    1.5,
