@@ -135,12 +135,12 @@ func initInstruments() {
 	AIWriteErrors = mustInt64Counter(meter, "echat.sfu.ai_write_errors_total", "写 AI TTS 轨失败次数")
 	RedisFallback = mustInt64Counter(meter, "echat.redis.fallback_total", "Redis 不可用降级进程内次数")
 
-	RTCPJitterUs = mustInt64Histogram(meter, "echat.sfu.rtcp_jitter_us", "us", "RTCP RR 到达间隔抖动")
+	RTCPJitterUs = mustInt64Histogram(meter, "echat.sfu.rtcp_jitter", "us", "RTCP RR 到达间隔抖动")
 	RTCPLossPercent = mustInt64Histogram(meter, "echat.sfu.rtcp_loss_percent", "%", "RTCP RR 丢包率")
-	ClientPlaybackDelayMs = mustInt64Histogram(meter, "echat.client.playback_delay_ms", "ms", "客户端 getStats 播放延迟")
+	ClientPlaybackDelayMs = mustInt64Histogram(meter, "echat.client.playback_delay", "ms", "客户端 getStats 播放延迟")
 
 	PeerDisconnects = mustInt64Counter(meter, "echat.sfu.peer_disconnects_total", "SFU 对端非正常断开次数")
-	SFURttMs = mustInt64Histogram(meter, "echat.sfu.rtt_ms", "ms", "RTCP SR/RR 往返时延")
+	SFURttMs = mustInt64Histogram(meter, "echat.sfu.rtt", "ms", "RTCP SR/RR 往返时延")
 	SFUTxBytes = mustInt64Counter(meter, "echat.sfu.tx_bytes_total", "SFU 下行写出字节数")
 	TwccFeedback = mustInt64Counter(meter, "echat.sfu.twcc_feedback_total", "收到的 TWCC 反馈包数")
 	BurstLossEvents = mustInt64Counter(meter, "echat.sfu.burst_loss_total", "连续丢包事件数")

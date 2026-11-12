@@ -289,16 +289,17 @@ func (r *SFURoom) Join(clientID string) error {
 	if err := webrtc.ConfigureNack(mediaEngine, registry); err != nil {
 		return fmt.Errorf("configure nack: %w", err)
 	}
+	// SR 时刻表必须注册在 ConfigureRTCPReports 之前（即处于其内层）：
+	// report sender 发 SR 时用的是它自己内层的 writer，注册在它外层永远看不到 SR，
+	// 于是 RR 里的 LSR 无对应记录，RTT 恒为空
+	clock := newSRClock()
+	registry.Add(newSRClockFactory(clock))
 	if err := webrtc.ConfigureRTCPReports(registry); err != nil {
 		return fmt.Errorf("configure rtcp reports: %w", err)
 	}
 	if err := webrtc.ConfigureTWCCSender(mediaEngine, registry); err != nil {
 		return fmt.Errorf("configure twcc sender: %w", err)
 	}
-	// SR 时刻表拦截器：记录出向 SR 的本地发送时刻，使 RR 能反算 RTT
-	// 放在 RTCPReports 之后，BindRTCPWriter 时处于外层，能先看到 SR 再放行
-	clock := newSRClock()
-	registry.Add(newSRClockFactory(clock))
 	// 出向 transport-wide 序号：ConfigureTWCCSender 只注册了「用收到的包生成反馈」，
 	// 不负责给出向包打序号，缺了它浏览器无法回传可用的 TWCC 反馈。
 	// 必须最后注册（链中最外层），保证序号在任何队列化之前写入

@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 
@@ -172,7 +173,26 @@ func runOneSession(
 	}
 
 	// ---------- PeerConnection 与信令 ----------
-	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{ICEServers: toICE(p.StunServers)})
+	// 压测客户端必须协商 transport-cc 并生成 TWCC 反馈：否则服务端的带宽估计与
+	// burst loss 永远没有输入，所有下行实验数据都会是空的
+	mediaEngine := &webrtc.MediaEngine{}
+	if err = mediaEngine.RegisterDefaultCodecs(); err != nil {
+		return fmt.Errorf("register codecs: %w", err)
+	}
+	interceptors := &interceptor.Registry{}
+	if err = webrtc.ConfigureTWCCSender(mediaEngine, interceptors); err != nil {
+		return fmt.Errorf("configure twcc: %w", err)
+	}
+	// 浏览器会自动回 RR，pion 客户端不会：不注册这一项，服务端永远拿不到
+	// jitter/loss/RTT（RTT 依赖 RR 里的 LSR 与 DLSR）
+	if err = webrtc.ConfigureRTCPReports(interceptors); err != nil {
+		return fmt.Errorf("configure rtcp reports: %w", err)
+	}
+	api := webrtc.NewAPI(
+		webrtc.WithMediaEngine(mediaEngine),
+		webrtc.WithInterceptorRegistry(interceptors),
+	)
+	pc, err := api.NewPeerConnection(webrtc.Configuration{ICEServers: toICE(p.StunServers)})
 	if err != nil {
 		return fmt.Errorf("pc: %w", err)
 	}
