@@ -73,6 +73,38 @@ var (
 	// ClientPlaybackDelayMs 客户端 getStats 上报的播放延迟（毫秒）
 	ClientPlaybackDelayMs metric.Int64Histogram
 
+	// PeerDisconnects SFU 对端非正常断开次数，label state 取 disconnected/failed
+	PeerDisconnects metric.Int64Counter
+	// SFURttMs 由 RTCP SR 与 RR 往返算出的 RTT（毫秒）
+	SFURttMs metric.Int64Histogram
+	// SFUTxBytes SFU 下行实际写出的字节数，label kind 取 relay/ai
+	SFUTxBytes metric.Int64Counter
+	// TwccFeedback 收到的 TWCC 反馈包数，恒为 0 说明下行反馈链不通
+	TwccFeedback metric.Int64Counter
+	// BurstLossEvents 连续丢包事件数，label len 取 1/2/3plus 表示连续丢失帧数分桶
+	BurstLossEvents metric.Int64Counter
+	// ProcessCPUPercent 进程 CPU 使用率百分比，仅 Linux 采集，其他平台不上报
+	ProcessCPUPercent metric.Int64Gauge
+
+	// BweTargetBitrate GCC 估计出的目标码率（bit/s）
+	BweTargetBitrate metric.Int64Histogram
+	// PacerQueueDepth 整形器队列深度（包）
+	PacerQueueDepth metric.Int64Histogram
+	// PacerDelayMs 整形器排队延迟（毫秒）
+	PacerDelayMs metric.Int64Histogram
+	// PacerDropped 整形器丢弃包数，label reason 取 queue_full/no_route/closed
+	PacerDropped metric.Int64Counter
+	// PacerWriteErrors 整形器写包失败次数
+	PacerWriteErrors metric.Int64Counter
+	// SubscriberHealth 当前各健康状态的订阅者数量，label state
+	SubscriberHealth metric.Int64UpDownCounter
+	// HealthTransitions 健康状态迁移次数，label state 为迁移后的状态
+	HealthTransitions metric.Int64Counter
+	// OpusEncoderBitrate 房间级 Opus 编码码率（bit/s）
+	OpusEncoderBitrate metric.Int64Histogram
+	// BitrateActions 房间级码率档位调整次数，label action 取 up/down
+	BitrateActions metric.Int64Counter
+
 	// RingBacklog 数据面队列当前积压，label queue=聚合后的队列族
 	RingBacklog metric.Int64Gauge
 	// RingCapacity 数据面队列容量
@@ -122,9 +154,26 @@ func initInstruments() {
 	AIWriteErrors = mustInt64Counter(meter, "echat.sfu.ai_write_errors_total", "写 AI TTS 轨失败次数")
 	RedisFallback = mustInt64Counter(meter, "echat.redis.fallback_total", "Redis 不可用降级进程内次数")
 
-	RTCPJitterUs = mustInt64Histogram(meter, "echat.sfu.rtcp_jitter_us", "us", "RTCP RR 到达间隔抖动")
+	RTCPJitterUs = mustInt64Histogram(meter, "echat.sfu.rtcp_jitter", "us", "RTCP RR 到达间隔抖动")
 	RTCPLossPercent = mustInt64Histogram(meter, "echat.sfu.rtcp_loss_percent", "%", "RTCP RR 丢包率")
-	ClientPlaybackDelayMs = mustInt64Histogram(meter, "echat.client.playback_delay_ms", "ms", "客户端 getStats 播放延迟")
+	ClientPlaybackDelayMs = mustInt64Histogram(meter, "echat.client.playback_delay", "ms", "客户端 getStats 播放延迟")
+
+	PeerDisconnects = mustInt64Counter(meter, "echat.sfu.peer_disconnects_total", "SFU 对端非正常断开次数")
+	SFURttMs = mustInt64Histogram(meter, "echat.sfu.rtt", "ms", "RTCP SR/RR 往返时延")
+	SFUTxBytes = mustInt64Counter(meter, "echat.sfu.tx_bytes_total", "SFU 下行写出字节数")
+	TwccFeedback = mustInt64Counter(meter, "echat.sfu.twcc_feedback_total", "收到的 TWCC 反馈包数")
+	BurstLossEvents = mustInt64Counter(meter, "echat.sfu.burst_loss_total", "连续丢包事件数")
+	ProcessCPUPercent = mustInt64Gauge(meter, "echat.process.cpu_percent", "进程 CPU 使用率百分比")
+
+	BweTargetBitrate = mustInt64Histogram(meter, "echat.sfu.bwe_target_bitrate", "1", "GCC 目标码率 bit/s")
+	PacerQueueDepth = mustInt64Histogram(meter, "echat.sfu.pacer_queue_depth", "1", "整形器队列深度，单位包")
+	PacerDelayMs = mustInt64Histogram(meter, "echat.sfu.pacer_delay", "ms", "整形器排队延迟")
+	PacerDropped = mustInt64Counter(meter, "echat.sfu.pacer_dropped_total", "整形器丢弃包数")
+	PacerWriteErrors = mustInt64Counter(meter, "echat.sfu.pacer_write_errors_total", "整形器写包失败次数")
+	SubscriberHealth = mustInt64UpDownCounter(meter, "echat.sfu.subscriber_health", "当前各健康状态的订阅者数量")
+	HealthTransitions = mustInt64Counter(meter, "echat.sfu.health_transitions_total", "健康状态迁移次数")
+	OpusEncoderBitrate = mustInt64Histogram(meter, "echat.sfu.opus_encoder_bitrate", "1", "房间级 Opus 编码码率 bit/s")
+	BitrateActions = mustInt64Counter(meter, "echat.sfu.bitrate_actions_total", "房间级码率档位调整次数")
 
 	RingBacklog = mustInt64Gauge(meter, "echat.dataplane.ring_backlog", "数据面队列当前积压")
 	RingCapacity = mustInt64Gauge(meter, "echat.dataplane.ring_capacity", "数据面队列容量")
@@ -153,6 +202,14 @@ func mustInt64Gauge(m metric.Meter, name, desc string) metric.Int64Gauge {
 		panic(err)
 	}
 	return g
+}
+
+func mustInt64UpDownCounter(m metric.Meter, name, desc string) metric.Int64UpDownCounter {
+	c, err := m.Int64UpDownCounter(name, metric.WithDescription(desc))
+	if err != nil {
+		panic(err)
+	}
+	return c
 }
 
 // recordContext 记录指标用的 context，桥接协程与热路径统一用它

@@ -201,8 +201,20 @@ type AiToggleReq struct {
 
 // ClientStatsPayload 客户端上报的播放侧统计
 type ClientStatsPayload struct {
-	// PlaybackDelayMs 播放延迟毫秒（getStats 时长差值），负值或缺失表示不带
-	PlaybackDelayMs *int64 `json:"playbackDelayMs,omitempty"`
+	// Streams 按入流分条上报的播放统计，空切片表示本次没有可用样本
+	Streams []ClientStreamStat `json:"streams"`
+}
+
+// ClientStreamStat 单条入流的播放侧统计
+type ClientStreamStat struct {
+	// SSRC 该入流的同步源标识，用于把样本对应到具体那一路音频
+	SSRC uint32 `json:"ssrc"`
+	// PlaybackDelayMs 自上次上报以来该流在抖动缓冲中的平均停留时长（毫秒）
+	PlaybackDelayMs int64 `json:"playbackDelayMs"`
+	// PacketsLost 该流累计丢包数，来自 getStats 的 packetsLost
+	PacketsLost int64 `json:"packetsLost"`
+	// JitterMs 该流的到达间隔抖动（毫秒）
+	JitterMs int64 `json:"jitterMs"`
 }
 
 // AiToggleRes 是服务端回复客户端当前 AI 语音助手状态的载荷

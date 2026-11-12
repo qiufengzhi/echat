@@ -141,12 +141,15 @@ export class SignalingClient {
     })
   }
 
-  // sendClientStats 上报播放侧统计（getStats 时长差值），服务端记客户端播放延迟
-  sendClientStats(playbackDelayMs: number): void {
+  // sendClientStats 上报按流划分的播放侧统计，服务端据此记录抖动缓冲延迟
+  // streams 每条对应一路入流；服务端不按 ssrc 建指标维度，只按流记样本
+  sendClientStats(
+    streams: Array<{ ssrc: number; playbackDelayMs: number; packetsLost: number; jitterMs: number }>,
+  ): void {
     this.send({
       type: 'client_stats',
       roomId: this.roomId,
-      payload: { playbackDelayMs },
+      payload: { streams },
     })
   }
 

@@ -47,10 +47,23 @@ type ServerConfig struct {
 
 // SFUConfig WebRTC SFU 媒体引擎配置
 type SFUConfig struct {
-	MediaMinPort uint16   `yaml:"media_min_port"` // UDP 端口范围下限，需与 Docker 端口映射一致
-	MediaMaxPort uint16   `yaml:"media_max_port"` // UDP 端口范围上限
-	NAT1To1IP    string   `yaml:"nat_1_to_1_ip"`  // NAT 公网 IP，逗号分隔多个
-	STUNServers  []string `yaml:"stun_servers"`   // ICE STUN 服务器列表
+	MediaMinPort uint16    `yaml:"media_min_port"` // UDP 端口范围下限，需与 Docker 端口映射一致
+	MediaMaxPort uint16    `yaml:"media_max_port"` // UDP 端口范围上限
+	NAT1To1IP    string    `yaml:"nat_1_to_1_ip"`  // NAT 公网 IP，逗号分隔多个
+	STUNServers  []string  `yaml:"stun_servers"`   // ICE STUN 服务器列表
+	BWE          BWEConfig `yaml:"bwe"`            // 下行拥塞控制闭环参数
+}
+
+// BWEConfig 下行拥塞控制与整形参数
+type BWEConfig struct {
+	Enabled            bool `yaml:"enabled"`              // 总开关，false 时不注册估计器与整形器，发送路径与升级前一致
+	InitialBitrate     int  `yaml:"initial_bitrate"`      // 估计器初始目标码率 bit/s，必须高于稳态需求否则起步即丢包
+	MinBitrate         int  `yaml:"min_bitrate"`          // 估计下界 bit/s
+	MaxBitrate         int  `yaml:"max_bitrate"`          // 估计上界 bit/s
+	OverheadPermille   int  `yaml:"overhead_permille"`    // RTP 层到线路层的开销补偿，180 表示放大 18%
+	PacerMaxPackets    int  `yaml:"pacer_max_packets"`    // 整形器队列包数上限
+	PacerMaxBytes      int  `yaml:"pacer_max_bytes"`      // 整形器队列字节上限
+	RelayQueueCapacity int  `yaml:"relay_queue_capacity"` // 中继管道队列容量，升级前为编译期常量 50
 }
 
 // ASRConfig 语音识别配置
@@ -318,6 +331,17 @@ func DefaultConfig() *Config {
 			MediaMinPort: 50000,
 			MediaMaxPort: 50100,
 			STUNServers:  []string{"stun:stun.l.google.com:19302"},
+			BWE: BWEConfig{
+				Enabled:          true,
+				InitialBitrate:   64000,
+				MinBitrate:       16000,
+				MaxBitrate:       128000,
+				// 92 字节 RTP 层对应约 130 字节线速（多 SRTP 10、UDP/IP 28），比例 1.41
+				OverheadPermille:   400,
+				PacerMaxPackets:    3,
+				PacerMaxBytes:      1024,
+				RelayQueueCapacity: 8,
+			},
 		},
 		ASR: ASRConfig{
 			Provider: "aliyun",
@@ -481,6 +505,24 @@ func applyEnvOverrides(cfg *Config) {
 	}
 
 	// --- SFU ---
+	if v := os.Getenv("SFU_BWE_ENABLED"); v != "" {
+		cfg.SFU.BWE.Enabled = strings.EqualFold(v, "true")
+	}
+	if v := os.Getenv("SFU_BWE_INITIAL_BITRATE"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil {
+			cfg.SFU.BWE.InitialBitrate = p
+		}
+	}
+	if v := os.Getenv("SFU_BWE_PACER_MAX_PACKETS"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil {
+			cfg.SFU.BWE.PacerMaxPackets = p
+		}
+	}
+	if v := os.Getenv("SFU_BWE_RELAY_QUEUE_CAPACITY"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil {
+			cfg.SFU.BWE.RelayQueueCapacity = p
+		}
+	}
 	if v := os.Getenv("SFU_MEDIA_MIN_PORT"); v != "" {
 		if p, err := strconv.ParseUint(v, 10, 16); err == nil {
 			cfg.SFU.MediaMinPort = uint16(p)

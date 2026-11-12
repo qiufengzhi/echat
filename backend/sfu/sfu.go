@@ -28,6 +28,7 @@ import (
 	"context"
 	"echat-backend/asr_cli"
 	"echat-backend/config"
+	"echat-backend/sfu/bwe"
 	"echat-backend/dataplane"
 	"echat-backend/logging"
 	"echat-backend/observability"
@@ -103,6 +104,11 @@ type SFURoom struct {
 	onICECandidate ICECandidateCallback
 	// 重新协商回调，当 AddTrack 后触发，由信令层向客户端发送 renegotiation Offer
 	onRenegotiation RenegotiationCallback
+
+	// stopHealth 停止健康监控协程的信号，房间移除时关闭
+	stopHealth chan struct{}
+	// healthOnce 保证 stopHealth 只关闭一次
+	healthOnce sync.Once
 }
 
 // SFUPeer 包装单个客户端的 WebRTC PeerConnection，负责收发音频和中继管理
@@ -152,6 +158,17 @@ type SFUPeer struct {
 
 	// 停止中继转发协程的信号，在客户端离开或断连时关闭
 	stopRelay chan struct{}
+
+	// srClock 本对端出流 SR 的发送时刻表，用于从 RR 反算 RTT
+	// 与拦截器链共享同一实例，生命周期随 PeerConnection
+	srClock *srClock
+
+	// bwe 本对端的带宽估计器与整形器，配置关闭时为 nil
+	// 每个 PeerConnection 一份：一条 UDP 链路共用一份带宽预算
+	bwe *bwe.Estimator
+
+	// health 本对端的健康状态机，由房间级协程统一驱动，bwe 关闭时为 nil
+	health *bwe.Tracker
 
 	connectedAt time.Time
 }
@@ -213,10 +230,13 @@ func (s *SFUServer) GetOrCreateRoom(roomID string) *SFURoom {
 	}
 
 	room := &SFURoom{
-		ID:    roomID,
-		peers: make(map[string]*SFUPeer),
+		ID:         roomID,
+		peers:      make(map[string]*SFUPeer),
+		stopHealth: make(chan struct{}),
 	}
 	s.rooms[roomID] = room
+	// 房间级健康监控：统一驱动房间内所有对端的状态机，避免每对端一个定时器
+	go room.healthLoop()
 	// 识别结果按房间分发：订阅随 SFU 房间创建建立，随房间移除关闭
 	GlobalASRDispatcher.subscribe(roomID)
 	observability.RecordRooms(len(s.rooms))
@@ -229,8 +249,14 @@ func (s *SFUServer) RemoveRoom(roomID string) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	if _, ok := s.rooms[roomID]; ok {
+	if room, ok := s.rooms[roomID]; ok {
 		delete(s.rooms, roomID)
+		// 停掉房间级健康监控协程，避免房间删除后仍在轮询
+		room.healthOnce.Do(func() {
+			if room.stopHealth != nil {
+				close(room.stopHealth)
+			}
+		})
 		// 一并移除识别结果订阅，否则订阅者与其队列会随房间数累积
 		GlobalASRDispatcher.unsubscribe(roomID)
 		observability.RecordRooms(len(s.rooms))
@@ -285,11 +311,45 @@ func (r *SFURoom) Join(clientID string) error {
 	if err := webrtc.ConfigureNack(mediaEngine, registry); err != nil {
 		return fmt.Errorf("configure nack: %w", err)
 	}
+	// SR 时刻表必须注册在 ConfigureRTCPReports 之前（即处于其内层）：
+	// report sender 发 SR 时用的是它自己内层的 writer，注册在它外层永远看不到 SR，
+	// 于是 RR 里的 LSR 无对应记录，RTT 恒为空
+	clock := newSRClock()
+	registry.Add(newSRClockFactory(clock))
 	if err := webrtc.ConfigureRTCPReports(registry); err != nil {
 		return fmt.Errorf("configure rtcp reports: %w", err)
 	}
 	if err := webrtc.ConfigureTWCCSender(mediaEngine, registry); err != nil {
 		return fmt.Errorf("configure twcc sender: %w", err)
+	}
+	// 下行拥塞控制：估计器 + 有界整形器，每个 PeerConnection 一份
+	// 必须注册在 transport-wide 序号拦截器之前（内层），保证序号在入队前写好
+	var estimator *bwe.Estimator
+	var healthTracker *bwe.Tracker
+	if sfuCfg.BWE.Enabled {
+		factory := bwe.NewFactory(
+			bwe.Config{
+				MaxPackets:       sfuCfg.BWE.PacerMaxPackets,
+				MaxBytes:         sfuCfg.BWE.PacerMaxBytes,
+				MaxBitrate:       sfuCfg.BWE.MaxBitrate,
+				InitialBitrate:   sfuCfg.BWE.InitialBitrate,
+				OverheadPermille: sfuCfg.BWE.OverheadPermille,
+			},
+			sfuCfg.BWE.InitialBitrate,
+			sfuCfg.BWE.MinBitrate,
+			sfuCfg.BWE.MaxBitrate,
+			func(e *bwe.Estimator) { estimator = e },
+		)
+		registry.Add(factory)
+		// 状态机随对端创建，初始计入 healthy
+		healthTracker = bwe.NewTracker(time.Now())
+		observability.AdjustSubscriberHealth(string(bwe.StateHealthy), 1)
+	}
+	// 出向 transport-wide 序号：ConfigureTWCCSender 只注册了「用收到的包生成反馈」，
+	// 不负责给出向包打序号，缺了它浏览器无法回传可用的 TWCC 反馈。
+	// 必须最后注册（链中最外层），保证序号在任何队列化之前写入
+	if err := webrtc.ConfigureTWCCHeaderExtensionSender(mediaEngine, registry); err != nil {
+		return fmt.Errorf("configure twcc header extension: %w", err)
 	}
 
 	api := webrtc.NewAPI(
@@ -315,6 +375,9 @@ func (r *SFURoom) Join(clientID string) error {
 		PC:             pc,
 		outgoingRelays: make(map[string]*relayPipe),
 		stopRelay:      make(chan struct{}),
+		srClock:        clock,
+		bwe:            estimator,
+		health:         healthTracker,
 		connectedAt:    time.Now(),
 	}
 
@@ -404,7 +467,8 @@ func (r *SFURoom) Join(clientID string) error {
 		logger.Infow("PC 状态变化", "clientID", clientID[:8], "state", state.String())
 		if state == webrtc.PeerConnectionStateDisconnected ||
 			state == webrtc.PeerConnectionStateFailed {
-			// 连接意外断开，清理转发资源
+			// 连接意外断开：记一次断连事件后清理转发资源
+			observability.RecordPeerDisconnect(state.String())
 			peer.stopForwarding()
 		}
 	})
@@ -558,10 +622,13 @@ func (r *SFURoom) addExistingRelays(clientID string) {
 			logger.Warnw("晚加入者补建中继轨失败", "clientID", clientID[:8], "source", p.id[:8], "error", err)
 			continue
 		}
-		if _, err = peer.PC.AddTrack(relayTrack); err != nil {
+		snd, err := peer.PC.AddTrack(relayTrack)
+		if err != nil {
 			logger.Warnw("晚加入者补建中继添加失败", "clientID", clientID[:8], "source", p.id[:8], "error", err)
 			continue
 		}
+		// 补建轨同样要读 RTCP：否则晚加入者的这条出流永远没有抖动/丢包/RTT 观测
+		go r.readSenderRTCP(clientID, "relay", peer.srClock, snd)
 
 		// 第三步：写锁内把中继轨注册到发布者的 outgoingRelays。
 		// 注册后 forwardRtp 的每包循环会自动拾取，无需额外通知
@@ -596,6 +663,10 @@ func (r *SFURoom) Leave(clientID string) {
 		return
 	}
 	delete(r.peers, clientID)
+	// 对端离开时把它从当前健康状态的计数里摘掉，避免计数随进出累积漂移
+	if peer.health != nil {
+		observability.AdjustSubscriberHealth(string(peer.health.State()), -1)
+	}
 	observability.RecordPeers(r.peerCountLocked())
 	// 该客户端作为发布者的转发管道全部关闭，唤醒对应写协程退出；
 	// 写协程只写自己的中继轨、不取房间锁，锁内关闭无死锁风险。
@@ -826,7 +897,7 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 			logger.Warnw("添加中继轨失败", "source", sourceID[:8], "subscriber", subscriberID[:8], "error", err)
 			continue
 		}
-		go r.readSenderRTCP(subscriberID, snd)
+		go r.readSenderRTCP(subscriberID, "relay", subscriber.srClock, snd)
 
 		// 将房间内其他人的音轨通过中继轨加入 source
 		sourcePeer.outgoingRelays[subscriberID] = r.newRelayPipe(sourceID, subscriberID, relayTrack)
@@ -861,7 +932,7 @@ func (r *SFURoom) startForwarding(sourceID string, remoteTrack *webrtc.TrackRemo
 			logger.Warnw("为新对端添加中继轨失败", "source", sourceID[:8], "other", otherID[:8], "error", err)
 			continue
 		}
-		go r.readSenderRTCP(sourceID, snd)
+		go r.readSenderRTCP(sourceID, "relay", sourcePeer.srClock, snd)
 
 		// 将 other 的音频转发给 source
 		otherPeer.outgoingRelays[sourceID] = r.newRelayPipe(otherID, sourceID, relayTrack)
@@ -925,8 +996,8 @@ func (r *SFURoom) bindAITtsTrack(peer *SFUPeer, clientID string) (*webrtc.TrackL
 	if err != nil {
 		return nil, fmt.Errorf("添加 AI TTS 音轨到 PC 失败: %w", err)
 	}
-	// 读该出流的 RTCP，采集浏览器侧下行抖动与丢包
-	go r.readSenderRTCP(clientID, snd)
+	// 读该出流的 RTCP，采集浏览器侧下行抖动、丢包与 RTT
+	go r.readSenderRTCP(clientID, "ai", peer.srClock, snd)
 
 	peer.aiTtsTrack = track
 	peer.aiTtsSender = snd
@@ -987,6 +1058,18 @@ type relayPipe struct {
 	track *webrtc.TrackLocalStaticRTP
 }
 
+// relayQueueSize 返回中继管道队列容量
+//
+// 从配置读取，未配置或非法时回退到编译期默认值
+// return: 队列容量，至少为 1
+func relayQueueSize() int {
+	size := config.Get().SFU.BWE.RelayQueueCapacity
+	if size <= 0 {
+		size = relayQueueCapacity
+	}
+	return size
+}
+
 // newRelayPipe 创建转发管道并启动该订阅者专属的写协程
 //
 // 调用点（startForwarding / addExistingRelays）都持有房间写锁；
@@ -995,7 +1078,7 @@ type relayPipe struct {
 // return: 已挂上写协程的转发管道
 func (r *SFURoom) newRelayPipe(sourceID, subscriberID string, track *webrtc.TrackLocalStaticRTP) *relayPipe {
 	pipe := &relayPipe{
-		queue: dataplane.NewRing[*rtp.Packet]("sfu.relay."+sourceID+"."+subscriberID, relayQueueCapacity),
+		queue: dataplane.NewRing[*rtp.Packet]("sfu.relay."+sourceID+"."+subscriberID, relayQueueSize()),
 		track: track,
 	}
 	go pipe.pumpRelay(sourceID, subscriberID)
@@ -1021,6 +1104,9 @@ func (p *relayPipe) pumpRelay(sourceID, subscriberID string) {
 		if err := p.track.WriteRTP(pkt); err != nil {
 			observability.RelayWriteErrors.Add(context.Background(), 1)
 			logger.Warnw("写入 RTP 失败", "source", sourceID[:8], "dest", subscriberID[:8], "error", err)
+		} else {
+			// 记录实际写出的字节数，用来区分「发少了」和「丢多了」
+			observability.RecordTxBytes("relay", int64(pkt.Header.MarshalSize()+len(pkt.Payload)))
 		}
 	}
 }
@@ -1325,6 +1411,7 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 					logTrackErr(destID, "写入AI TTS轨失败", err)
 				} else {
 					clearTrackErr(destID, "写入AI TTS轨失败")
+					observability.RecordTxBytes("ai", int64(len(payload)))
 				}
 			}
 		}
@@ -1348,9 +1435,19 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 		// lastMediaAt 最近一次向时间轴写入帧（真实或静音）的墙钟时刻，
 		// 恢复重锚定时用它计算时间轴落后真实时间的差距
 		var lastMediaAt time.Time
+		// 房间级码率策略状态：编码器为全房间共享，降码率只能按房间做
+		policy := &roomBitratePolicy{}
+		// framesSinceBitrateCheck 距上次检查码率档位已发送的帧数
+		framesSinceBitrateCheck := 0
 		for {
 			select {
 			case <-sendTicker.C:
+				// 每 5 秒按房间健康状态分布评估一次码率档位
+				framesSinceBitrateCheck++
+				if framesSinceBitrateCheck >= bitrateCheckEvery {
+					framesSinceBitrateCheck = 0
+					r.applyRoomBitrate(enc, policy)
+				}
 				select {
 				case qf, ok := <-frameQueue:
 					if !ok {
@@ -1585,6 +1682,9 @@ func (s *SFUServer) CleanupRoom(roomID string) {
 	r.lock.Lock()
 	for clientID, peer := range r.peers {
 		peer.stopForwarding()
+		if peer.health != nil {
+			observability.AdjustSubscriberHealth(string(peer.health.State()), -1)
+		}
 		if err := peer.PC.Close(); err != nil {
 			logger.Warnw("清理关闭 PC", "clientID", clientID[:8], "error", err)
 		}
