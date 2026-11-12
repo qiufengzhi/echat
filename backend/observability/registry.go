@@ -96,6 +96,14 @@ var (
 	PacerDropped metric.Int64Counter
 	// PacerWriteErrors 整形器写包失败次数
 	PacerWriteErrors metric.Int64Counter
+	// SubscriberHealth 当前各健康状态的订阅者数量，label state
+	SubscriberHealth metric.Int64UpDownCounter
+	// HealthTransitions 健康状态迁移次数，label state 为迁移后的状态
+	HealthTransitions metric.Int64Counter
+	// OpusEncoderBitrate 房间级 Opus 编码码率（bit/s）
+	OpusEncoderBitrate metric.Int64Histogram
+	// BitrateActions 房间级码率档位调整次数，label action 取 up/down
+	BitrateActions metric.Int64Counter
 
 	// RingBacklog 数据面队列当前积压，label queue=聚合后的队列族
 	RingBacklog metric.Int64Gauge
@@ -162,6 +170,10 @@ func initInstruments() {
 	PacerDelayMs = mustInt64Histogram(meter, "echat.sfu.pacer_delay", "ms", "整形器排队延迟")
 	PacerDropped = mustInt64Counter(meter, "echat.sfu.pacer_dropped_total", "整形器丢弃包数")
 	PacerWriteErrors = mustInt64Counter(meter, "echat.sfu.pacer_write_errors_total", "整形器写包失败次数")
+	SubscriberHealth = mustInt64UpDownCounter(meter, "echat.sfu.subscriber_health", "当前各健康状态的订阅者数量")
+	HealthTransitions = mustInt64Counter(meter, "echat.sfu.health_transitions_total", "健康状态迁移次数")
+	OpusEncoderBitrate = mustInt64Histogram(meter, "echat.sfu.opus_encoder_bitrate", "1", "房间级 Opus 编码码率 bit/s")
+	BitrateActions = mustInt64Counter(meter, "echat.sfu.bitrate_actions_total", "房间级码率档位调整次数")
 
 	RingBacklog = mustInt64Gauge(meter, "echat.dataplane.ring_backlog", "数据面队列当前积压")
 	RingCapacity = mustInt64Gauge(meter, "echat.dataplane.ring_capacity", "数据面队列容量")
@@ -190,6 +202,14 @@ func mustInt64Gauge(m metric.Meter, name, desc string) metric.Int64Gauge {
 		panic(err)
 	}
 	return g
+}
+
+func mustInt64UpDownCounter(m metric.Meter, name, desc string) metric.Int64UpDownCounter {
+	c, err := m.Int64UpDownCounter(name, metric.WithDescription(desc))
+	if err != nil {
+		panic(err)
+	}
+	return c
 }
 
 // recordContext 记录指标用的 context，桥接协程与热路径统一用它

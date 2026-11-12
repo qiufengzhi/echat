@@ -104,6 +104,11 @@ type SFURoom struct {
 	onICECandidate ICECandidateCallback
 	// 重新协商回调，当 AddTrack 后触发，由信令层向客户端发送 renegotiation Offer
 	onRenegotiation RenegotiationCallback
+
+	// stopHealth 停止健康监控协程的信号，房间移除时关闭
+	stopHealth chan struct{}
+	// healthOnce 保证 stopHealth 只关闭一次
+	healthOnce sync.Once
 }
 
 // SFUPeer 包装单个客户端的 WebRTC PeerConnection，负责收发音频和中继管理
@@ -161,6 +166,9 @@ type SFUPeer struct {
 	// bwe 本对端的带宽估计器与整形器，配置关闭时为 nil
 	// 每个 PeerConnection 一份：一条 UDP 链路共用一份带宽预算
 	bwe *bwe.Estimator
+
+	// health 本对端的健康状态机，由房间级协程统一驱动，bwe 关闭时为 nil
+	health *bwe.Tracker
 
 	connectedAt time.Time
 }
@@ -222,10 +230,13 @@ func (s *SFUServer) GetOrCreateRoom(roomID string) *SFURoom {
 	}
 
 	room := &SFURoom{
-		ID:    roomID,
-		peers: make(map[string]*SFUPeer),
+		ID:         roomID,
+		peers:      make(map[string]*SFUPeer),
+		stopHealth: make(chan struct{}),
 	}
 	s.rooms[roomID] = room
+	// 房间级健康监控：统一驱动房间内所有对端的状态机，避免每对端一个定时器
+	go room.healthLoop()
 	// 识别结果按房间分发：订阅随 SFU 房间创建建立，随房间移除关闭
 	GlobalASRDispatcher.subscribe(roomID)
 	observability.RecordRooms(len(s.rooms))
@@ -238,8 +249,14 @@ func (s *SFUServer) RemoveRoom(roomID string) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	if _, ok := s.rooms[roomID]; ok {
+	if room, ok := s.rooms[roomID]; ok {
 		delete(s.rooms, roomID)
+		// 停掉房间级健康监控协程，避免房间删除后仍在轮询
+		room.healthOnce.Do(func() {
+			if room.stopHealth != nil {
+				close(room.stopHealth)
+			}
+		})
 		// 一并移除识别结果订阅，否则订阅者与其队列会随房间数累积
 		GlobalASRDispatcher.unsubscribe(roomID)
 		observability.RecordRooms(len(s.rooms))
@@ -308,6 +325,7 @@ func (r *SFURoom) Join(clientID string) error {
 	// 下行拥塞控制：估计器 + 有界整形器，每个 PeerConnection 一份
 	// 必须注册在 transport-wide 序号拦截器之前（内层），保证序号在入队前写好
 	var estimator *bwe.Estimator
+	var healthTracker *bwe.Tracker
 	if sfuCfg.BWE.Enabled {
 		factory := bwe.NewFactory(
 			bwe.Config{
@@ -323,6 +341,9 @@ func (r *SFURoom) Join(clientID string) error {
 			func(e *bwe.Estimator) { estimator = e },
 		)
 		registry.Add(factory)
+		// 状态机随对端创建，初始计入 healthy
+		healthTracker = bwe.NewTracker(time.Now())
+		observability.AdjustSubscriberHealth(string(bwe.StateHealthy), 1)
 	}
 	// 出向 transport-wide 序号：ConfigureTWCCSender 只注册了「用收到的包生成反馈」，
 	// 不负责给出向包打序号，缺了它浏览器无法回传可用的 TWCC 反馈。
@@ -356,6 +377,7 @@ func (r *SFURoom) Join(clientID string) error {
 		stopRelay:      make(chan struct{}),
 		srClock:        clock,
 		bwe:            estimator,
+		health:         healthTracker,
 		connectedAt:    time.Now(),
 	}
 
@@ -641,6 +663,10 @@ func (r *SFURoom) Leave(clientID string) {
 		return
 	}
 	delete(r.peers, clientID)
+	// 对端离开时把它从当前健康状态的计数里摘掉，避免计数随进出累积漂移
+	if peer.health != nil {
+		observability.AdjustSubscriberHealth(string(peer.health.State()), -1)
+	}
 	observability.RecordPeers(r.peerCountLocked())
 	// 该客户端作为发布者的转发管道全部关闭，唤醒对应写协程退出；
 	// 写协程只写自己的中继轨、不取房间锁，锁内关闭无死锁风险。
@@ -1409,9 +1435,19 @@ func (r *SFURoom) runAITTSLoop(acr aiCallReq) {
 		// lastMediaAt 最近一次向时间轴写入帧（真实或静音）的墙钟时刻，
 		// 恢复重锚定时用它计算时间轴落后真实时间的差距
 		var lastMediaAt time.Time
+		// 房间级码率策略状态：编码器为全房间共享，降码率只能按房间做
+		policy := &roomBitratePolicy{}
+		// framesSinceBitrateCheck 距上次检查码率档位已发送的帧数
+		framesSinceBitrateCheck := 0
 		for {
 			select {
 			case <-sendTicker.C:
+				// 每 5 秒按房间健康状态分布评估一次码率档位
+				framesSinceBitrateCheck++
+				if framesSinceBitrateCheck >= bitrateCheckEvery {
+					framesSinceBitrateCheck = 0
+					r.applyRoomBitrate(enc, policy)
+				}
 				select {
 				case qf, ok := <-frameQueue:
 					if !ok {
@@ -1646,6 +1682,9 @@ func (s *SFUServer) CleanupRoom(roomID string) {
 	r.lock.Lock()
 	for clientID, peer := range r.peers {
 		peer.stopForwarding()
+		if peer.health != nil {
+			observability.AdjustSubscriberHealth(string(peer.health.State()), -1)
+		}
 		if err := peer.PC.Close(); err != nil {
 			logger.Warnw("清理关闭 PC", "clientID", clientID[:8], "error", err)
 		}
