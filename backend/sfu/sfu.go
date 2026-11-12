@@ -28,6 +28,7 @@ import (
 	"context"
 	"echat-backend/asr_cli"
 	"echat-backend/config"
+	"echat-backend/sfu/bwe"
 	"echat-backend/dataplane"
 	"echat-backend/logging"
 	"echat-backend/observability"
@@ -156,6 +157,10 @@ type SFUPeer struct {
 	// srClock 本对端出流 SR 的发送时刻表，用于从 RR 反算 RTT
 	// 与拦截器链共享同一实例，生命周期随 PeerConnection
 	srClock *srClock
+
+	// bwe 本对端的带宽估计器与整形器，配置关闭时为 nil
+	// 每个 PeerConnection 一份：一条 UDP 链路共用一份带宽预算
+	bwe *bwe.Estimator
 
 	connectedAt time.Time
 }
@@ -300,6 +305,25 @@ func (r *SFURoom) Join(clientID string) error {
 	if err := webrtc.ConfigureTWCCSender(mediaEngine, registry); err != nil {
 		return fmt.Errorf("configure twcc sender: %w", err)
 	}
+	// 下行拥塞控制：估计器 + 有界整形器，每个 PeerConnection 一份
+	// 必须注册在 transport-wide 序号拦截器之前（内层），保证序号在入队前写好
+	var estimator *bwe.Estimator
+	if sfuCfg.BWE.Enabled {
+		factory := bwe.NewFactory(
+			bwe.Config{
+				MaxPackets:       sfuCfg.BWE.PacerMaxPackets,
+				MaxBytes:         sfuCfg.BWE.PacerMaxBytes,
+				MaxBitrate:       sfuCfg.BWE.MaxBitrate,
+				InitialBitrate:   sfuCfg.BWE.InitialBitrate,
+				OverheadPermille: sfuCfg.BWE.OverheadPermille,
+			},
+			sfuCfg.BWE.InitialBitrate,
+			sfuCfg.BWE.MinBitrate,
+			sfuCfg.BWE.MaxBitrate,
+			func(e *bwe.Estimator) { estimator = e },
+		)
+		registry.Add(factory)
+	}
 	// 出向 transport-wide 序号：ConfigureTWCCSender 只注册了「用收到的包生成反馈」，
 	// 不负责给出向包打序号，缺了它浏览器无法回传可用的 TWCC 反馈。
 	// 必须最后注册（链中最外层），保证序号在任何队列化之前写入
@@ -331,6 +355,7 @@ func (r *SFURoom) Join(clientID string) error {
 		outgoingRelays: make(map[string]*relayPipe),
 		stopRelay:      make(chan struct{}),
 		srClock:        clock,
+		bwe:            estimator,
 		connectedAt:    time.Now(),
 	}
 
@@ -1007,6 +1032,18 @@ type relayPipe struct {
 	track *webrtc.TrackLocalStaticRTP
 }
 
+// relayQueueSize 返回中继管道队列容量
+//
+// 从配置读取，未配置或非法时回退到编译期默认值
+// return: 队列容量，至少为 1
+func relayQueueSize() int {
+	size := config.Get().SFU.BWE.RelayQueueCapacity
+	if size <= 0 {
+		size = relayQueueCapacity
+	}
+	return size
+}
+
 // newRelayPipe 创建转发管道并启动该订阅者专属的写协程
 //
 // 调用点（startForwarding / addExistingRelays）都持有房间写锁；
@@ -1015,7 +1052,7 @@ type relayPipe struct {
 // return: 已挂上写协程的转发管道
 func (r *SFURoom) newRelayPipe(sourceID, subscriberID string, track *webrtc.TrackLocalStaticRTP) *relayPipe {
 	pipe := &relayPipe{
-		queue: dataplane.NewRing[*rtp.Packet]("sfu.relay."+sourceID+"."+subscriberID, relayQueueCapacity),
+		queue: dataplane.NewRing[*rtp.Packet]("sfu.relay."+sourceID+"."+subscriberID, relayQueueSize()),
 		track: track,
 	}
 	go pipe.pumpRelay(sourceID, subscriberID)

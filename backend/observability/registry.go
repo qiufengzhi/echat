@@ -86,6 +86,17 @@ var (
 	// ProcessCPUPercent 进程 CPU 使用率百分比，仅 Linux 采集，其他平台不上报
 	ProcessCPUPercent metric.Int64Gauge
 
+	// BweTargetBitrate GCC 估计出的目标码率（bit/s）
+	BweTargetBitrate metric.Int64Histogram
+	// PacerQueueDepth 整形器队列深度（包）
+	PacerQueueDepth metric.Int64Histogram
+	// PacerDelayMs 整形器排队延迟（毫秒）
+	PacerDelayMs metric.Int64Histogram
+	// PacerDropped 整形器丢弃包数，label reason 取 queue_full/no_route/closed
+	PacerDropped metric.Int64Counter
+	// PacerWriteErrors 整形器写包失败次数
+	PacerWriteErrors metric.Int64Counter
+
 	// RingBacklog 数据面队列当前积压，label queue=聚合后的队列族
 	RingBacklog metric.Int64Gauge
 	// RingCapacity 数据面队列容量
@@ -145,6 +156,12 @@ func initInstruments() {
 	TwccFeedback = mustInt64Counter(meter, "echat.sfu.twcc_feedback_total", "收到的 TWCC 反馈包数")
 	BurstLossEvents = mustInt64Counter(meter, "echat.sfu.burst_loss_total", "连续丢包事件数")
 	ProcessCPUPercent = mustInt64Gauge(meter, "echat.process.cpu_percent", "进程 CPU 使用率百分比")
+
+	BweTargetBitrate = mustInt64Histogram(meter, "echat.sfu.bwe_target_bitrate", "1", "GCC 目标码率 bit/s")
+	PacerQueueDepth = mustInt64Histogram(meter, "echat.sfu.pacer_queue_depth", "1", "整形器队列深度，单位包")
+	PacerDelayMs = mustInt64Histogram(meter, "echat.sfu.pacer_delay", "ms", "整形器排队延迟")
+	PacerDropped = mustInt64Counter(meter, "echat.sfu.pacer_dropped_total", "整形器丢弃包数")
+	PacerWriteErrors = mustInt64Counter(meter, "echat.sfu.pacer_write_errors_total", "整形器写包失败次数")
 
 	RingBacklog = mustInt64Gauge(meter, "echat.dataplane.ring_backlog", "数据面队列当前积压")
 	RingCapacity = mustInt64Gauge(meter, "echat.dataplane.ring_capacity", "数据面队列容量")
