@@ -24,6 +24,7 @@ func main() {
 		pingGap    = flag.Duration("ping-gap", 25*time.Second, "心跳间隔")
 		pingCount  = flag.Int("ping-count", 10, "smoke 场景心跳次数")
 		room       = flag.String("room", "LOADTEST", "smoke 场景房间号 / broadcast 房间号")
+		shareRoom  = flag.String("share-room", "", "session 场景：非空时所有会话进同一房间，用于构造同房多成员以覆盖中继路径")
 		joinGap    = flag.Duration("join-gap", 500*time.Millisecond, "broadcast 场景相邻 join 间隔")
 		asrInterval = flag.Duration("asr-interval", 4*time.Second, "session/interrupt 场景 mock ASR 产出间隔（须与 backend 配置一致）")
 		burstGap   = flag.Duration("burst-gap", 600*time.Millisecond, "burst 判定阈值（须小于轮次间隔−单句播放时长的静音间隙）")
@@ -79,6 +80,7 @@ func main() {
 			Hold:         *hold,
 			ASRInterval:  *asrInterval,
 			GapThreshold: *burstGap,
+			SharedRoom:   *shareRoom,
 		})
 	case "interrupt":
 		rep = scenario.RunInterrupt(scenario.InterruptParams{

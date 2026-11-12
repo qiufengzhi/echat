@@ -37,6 +37,7 @@ type SessionParams struct {
 	ASRInterval  time.Duration // mock ASR 产出间隔（仅记录进报告，须与 backend 配置一致）
 	GapThreshold time.Duration // burst 判定阈值，0 取 DefaultBurstGapThreshold（须小于真实静音间隙）
 	StunServers  []string      // ICE STUN 服务器，本地压测留空（纯 host 候选）
+	SharedRoom   string        // 非空时所有会话进同一房间，用于构造同房多成员以覆盖中继路径
 }
 
 // RunSession 会话层场景：join → 建立 WebRTC 连接 → 发布静音轨 → ai_toggle →
@@ -81,11 +82,17 @@ func RunSession(p SessionParams) *metrics.Report {
 		go func(idx int) {
 			defer wg.Done()
 			username := fmt.Sprintf("%s%04d", p.UserPrefix, idx)
-			room := fmt.Sprintf("LOADS%04d", idx)
+			// 默认每会话独立房间；指定 SharedRoom 时全员同房，此时各成员互相发布的上行
+			// 会被 SFU 转发给其余成员，中继管道（sfu.relay.*）才会真正被创建
+			room := p.SharedRoom
+			if room == "" {
+				room = fmt.Sprintf("LOADS%04d", idx)
+			}
 			if p.Ramp > 0 {
 				time.Sleep(time.Duration(float64(p.Ramp) * float64(idx-1) / float64(p.Sessions)))
 			}
-			if err := runOneSession(p, username, room,
+			// 同房时只有首个成员驱动 AI 会话，其余成员只发布上行音频
+			if err := runOneSession(p, username, room, p.SharedRoom == "" || idx == 1,
 				pcConnectMs, aiOnlineMs, firstAudioMs, burstDurMs, burstGapMs,
 				&burstTotal, &pktTotal); err != nil {
 				recordErr(err.Error())
@@ -152,7 +159,7 @@ func (b *burstCollector) finishAt(now time.Time) {
 // runOneSession 单会话全流程：登录 → join → PC 协商 → 发布静音轨 → ai_toggle →
 // 保持 hold 时长观察下行音频突发 → 收尾
 func runOneSession(
-	p SessionParams, username, room string,
+	p SessionParams, username, room string, enableAI bool,
 	pcConnectMs, aiOnlineMs, firstAudioMs, burstDurMs, burstGapMs *metrics.Histogram,
 	burstTotal, pktTotal *int64,
 ) error {
@@ -398,6 +405,15 @@ func runOneSession(
 		}
 	}()
 	defer close(stopPublish)
+
+	// 共享房间的非首个成员到这里就结束：它只需要持续发布上行音频，
+	// 让 SFU 建立中继管道；不碰房间级 AI 会话，否则会和首个成员互相抢占，
+	// 表现为除一人外全部 aiOnlineTimeout
+	if !enableAI {
+		time.Sleep(p.Hold)
+		collector.finishAt(time.Now())
+		return nil
+	}
 
 	// ai_toggle 开启并等待 online 确认
 	if err = ws.SendAIToggle(room, true); err != nil {
