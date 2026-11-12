@@ -338,8 +338,9 @@ func DefaultConfig() *Config {
 				MaxBitrate:       128000,
 				// 92 字节 RTP 层对应约 130 字节线速（多 SRTP 10、UDP/IP 28），比例 1.41
 				OverheadPermille:   400,
-				PacerMaxPackets:    3,
-				PacerMaxBytes:      1024,
+				// 2 包 × 25ms = 50ms 排队上限，与 p99 ≤ 60ms 的门槛自洽
+				PacerMaxPackets:    2,
+				PacerMaxBytes:      700,
 				RelayQueueCapacity: 8,
 			},
 		},

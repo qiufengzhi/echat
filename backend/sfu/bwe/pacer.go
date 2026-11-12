@@ -51,9 +51,10 @@ type Config struct {
 // return: 可直接使用的配置
 func DefaultConfig() Config {
 	return Config{
-		// 3 包 × 20ms = 60ms 排队上限：语音场景下宁可丢包也不能让延迟超过 100ms
-		MaxPackets:     3,
-		MaxBytes:       1024,
+		// 2 包 × 25ms（34kbps 下每包放行耗时）= 50ms 排队上限，
+		// 与「pacer 排队延迟 p99 ≤ 60ms」的验收门槛自洽
+		MaxPackets:     2,
+		MaxBytes:       700,
 		BurstFactor:    1.5,
 		Tick:           5 * time.Millisecond,
 		InitialBitrate: 64000,
