@@ -44,6 +44,11 @@ type Config struct {
 	MaxBitrate int
 	// OverheadPermille RTP 层到线路层的开销补偿，180 表示放大 18%
 	OverheadPermille int
+	// RateFactorPermille 对估计器输出打的保守系数，900 表示只放行 target 的 90%
+	//
+	// 目的是吸收 gcc 在重度丢包下的高估：它按 RTP 字节估算吞吐，
+	// 而链路容量是线速口径，两者换算后常留下约 10% 的超发余量
+	RateFactorPermille int
 }
 
 // DefaultConfig 返回整形器的默认参数
@@ -217,8 +222,11 @@ func (p *Pacer) SetTargetBitrate(rate int) {
 	}
 	observability.RecordBweTarget(rate)
 	effective := rate
+	if p.cfg.RateFactorPermille > 0 {
+		effective = effective * p.cfg.RateFactorPermille / 1000
+	}
 	if p.cfg.OverheadPermille > 0 {
-		effective = rate * (1000 + p.cfg.OverheadPermille) / 1000
+		effective = effective * (1000 + p.cfg.OverheadPermille) / 1000
 	}
 	p.mu.Lock()
 	p.targetBitrate = effective

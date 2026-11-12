@@ -61,6 +61,7 @@ type BWEConfig struct {
 	MinBitrate         int  `yaml:"min_bitrate"`          // 估计下界 bit/s
 	MaxBitrate         int  `yaml:"max_bitrate"`          // 估计上界 bit/s
 	OverheadPermille   int  `yaml:"overhead_permille"`    // RTP 层到线路层的开销补偿，180 表示放大 18%
+	RateFactorPermille int  `yaml:"rate_factor_permille"` // 对估计器输出打的保守系数，900 表示只放行 90%
 	PacerMaxPackets    int  `yaml:"pacer_max_packets"`    // 整形器队列包数上限
 	PacerMaxBytes      int  `yaml:"pacer_max_bytes"`      // 整形器队列字节上限
 	RelayQueueCapacity int  `yaml:"relay_queue_capacity"` // 中继管道队列容量，升级前为编译期常量 50
@@ -337,7 +338,10 @@ func DefaultConfig() *Config {
 				MinBitrate:       16000,
 				MaxBitrate:       128000,
 				// 92 字节 RTP 层对应约 130 字节线速（多 SRTP 10、UDP/IP 28），比例 1.41
-				OverheadPermille: 400,
+				// 不做开销放大：gcc 的 target 已是 RTP 层吞吐，再乘 1.4 会让
+				// pacer 放行的线速超过链路容量，实测使 burst≥3 从 14% 恶化到 30%
+				OverheadPermille:   0,
+				RateFactorPermille: 1000,
 				// 2 包 × 25ms ≈ 50ms 排队上限；burst 对队列深度不敏感，按延迟取 2 包
 				PacerMaxPackets:    2,
 				PacerMaxBytes:      700,
@@ -517,6 +521,16 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("SFU_BWE_PACER_MAX_PACKETS"); v != "" {
 		if p, err := strconv.Atoi(v); err == nil {
 			cfg.SFU.BWE.PacerMaxPackets = p
+		}
+	}
+	if v := os.Getenv("SFU_BWE_OVERHEAD_PERMILLE"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil {
+			cfg.SFU.BWE.OverheadPermille = p
+		}
+	}
+	if v := os.Getenv("SFU_BWE_RATE_FACTOR_PERMILLE"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil {
+			cfg.SFU.BWE.RateFactorPermille = p
 		}
 	}
 	if v := os.Getenv("SFU_BWE_RELAY_QUEUE_CAPACITY"); v != "" {
