@@ -58,3 +58,12 @@ __pycache__/
 journey.html
 journey.md
 .recall/
+
+# 只在本地保留、不入库的文档
+docs/congestion-control/scratch.md
+docs/congestion-control/extension-report.md
+/README.md
+/AGENTS.md
+/agent/ARCHITECTURE_v1.md
+/docs/ai-voice-interaction.md
+/docs/roadmap.md

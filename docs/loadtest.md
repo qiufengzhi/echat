@@ -1,12 +1,12 @@
 # 压测体系设计（loadtest）
 
-> 任务书：`docs/loadtest-task-prompt.md`。本文档是压测体系的**唯一结论性设计文档**；
-> 容量结果另行输出到 `docs/loadtest-report.md`，原始数据放 `loadtest/results/`（gitignore）。
+> 本文档是压测体系的**唯一结论性设计文档**；容量结论与使用方式见 `loadtest/README.md`，
+> 原始数据放 `loadtest/results/`（gitignore）。
 >
-> 定位声明：本项目是面试导向的实时语音对话系统。压测的目的是产出可防守的容量结论与工程叙事，
+> 定位声明：本文档定义压测体系的设计与论证。压测的目的是产出可防守的容量结论，
 > 不是把系统压挂。所有设计决策都必须能回答「为什么压这个」「为什么这么压」「数据怎么解读」。
 
-状态标记：✅ 已定稿 / 🚧 待补（按任务书步骤逐步填充）。
+状态标记：✅ 已定稿 / 🚧 待补（按阶段逐步填充）。
 
 ---
 
@@ -74,7 +74,7 @@
 | 2 | WebSocket 信令 | WS，JSON 信封 `{type, roomId, userId, traceparent, payload}` | `?token=<JWT>`（JWT HMAC，access TTL 15m） | `backend/handlers/websocket.go` → `room/signaling/wire.go` | ✅ 连接层 + 会话层 + 数据面 |
 | 3 | RTP 音频上行 | WebRTC/Opus over UDP | 信令层已鉴权后 SDP 协商 | `backend/sfu/sfu.go` | ✅ 会话层（模拟说话）/打断层 |
 | 4 | gRPC Generate | protobuf 流（`proto/llm.proto`） | 无鉴权（内网 backend→agent） | `backend/agentcli/client.go`+`pool.go` | 间接压（经 SFU 驱动）；loadgen 不直连 agent |
-| 5 | WebTransport :4433 | QUIC | 同 WS | `backend/wt/` | ❌ 首版不覆盖，与 WS 共用信令入口，压测增益低（见追问预判 5.2） |
+| 5 | WebTransport :4433 | QUIC | 同 WS | `backend/wt/` | ❌ 首版不覆盖，与 WS 共用信令入口，压测增益低（见 5.2 争议点与回应） |
 
 关键事实：**WS 消息是 JSON 信封而非 protobuf**——这对负载工具选型影响重大（k6 原生可发 JSON；
 gRPC 部分只有 backend↔agent 之间，loadgen 不需要直连）。信令消息类型清单以
@@ -129,7 +129,7 @@ gRPC 部分只有 backend↔agent 之间，loadgen 不需要直连）。信令�
 均以本轮基线为参照物拟定（基线 + 预设劣化容忍度），见 §2.3。
 
 基线环境：本机原生开发形态（观测栈容器化 + backend/agent/VAD 本机进程），
-启动方式沿用 `docs/observability-local-guide.md` §2.1：
+启动方式沿用 `docs/observability-local-guide.md`：
 
 ```bash
 docker compose -f deploy/docker-compose.base.yml -f deploy/docker-compose.dev.yml --profile observability up -d
@@ -157,7 +157,7 @@ docker compose -f deploy/docker-compose.base.yml -f deploy/docker-compose.dev.ym
 每个指标四列定位：**指标名 → 采集来源 → threshold 拟定方式 → 报告呈现形式**。
 threshold 列在基线（§1.6）完成后填数值，规则见 §2.3。
 
-**维度一：连接层（WebSocket 建连/断连风暴）——叙事核心**
+**维度一：连接层（WebSocket 建连/断连风暴）——核心路径**
 
 | 指标 | 来源 | threshold 拟定 | 报告呈现 |
 |---|---|---|---|
@@ -168,7 +168,7 @@ threshold 列在基线（§1.6）完成后填数值，规则见 §2.3。
 | 断连后资源回收（压前压后对比） | pprof | 压后回落到基线 ±10% | 表 |
 | 登录限流触发次数 | Redis + backend 日志（Loki） | 观察项（解释建连失败） | 备注 |
 
-**维度二：会话层（并发语音轮次）——叙事核心**
+**维度二：会话层（并发语音轮次）——核心路径**
 
 | 指标 | 来源 | threshold 拟定 | 报告呈现 |
 |---|---|---|---|
@@ -181,7 +181,7 @@ threshold 列在基线（§1.6）完成后填数值，规则见 §2.3。
 | 轮次超时率（`turn_timeout_sec`） | backend 日志/指标 | >0.1% 判定不通过 | 表 |
 | agent 侧队列堆积/会话串行锁等待 | agent trace（`turn_id` span 时长） | 观察项 | 曲线 |
 
-**维度三：打断层（barge-in 风暴）——差异化加分项**
+**维度三：打断层（barge-in 风暴）——差异化能力**
 
 | 指标 | 来源 | threshold 拟定 | 报告呈现 |
 |---|---|---|---|
@@ -209,12 +209,12 @@ threshold 列在基线（§1.6）完成后填数值，规则见 §2.3。
 - **run id 打通**：每次压测 run 生成 `loadtest.run_id`（`日期-场景-序号`，如 `20261021-conn-01`），
   同名写入三处：trace attribute（loadgen 与被压服务间透传，经 WS 信封 `traceparent` 链路）、
   metrics label、Loki 日志字段。报告引用观测数据时一律按 run_id 过滤。
-- **面板引用规范**：报告引用观测数据必须落到 `docs/observability.md` §3.4/§4.4 的具体指标名与
+- **面板引用规范**：报告引用观测数据必须落到 `docs/observability-local-guide.md` 的具体指标名与
   Grafana 面板名（如 `echat_turn_llm_ttft` 面板），禁止「参见面板」式模糊引用。
-- **采样开销声明**：观测栈遵循 `docs/observability.md` §4.5 约定（loadgen 为独立 OTel 进程
+- **采样开销声明**：观测栈遵循 `docs/observability-local-guide.md` 约定（loadgen 为独立 OTel 进程
   `service_name=echat-loadbot`；正式容量采集时 `trace_sample_rate` 降至 0.01）。
   每份结果注明「是否在可观测性开启状态下采集」——采样开销本身是被测对象的一部分。
-- **验证脚本**：复用 `docs/observability.md` §4.5 的综合验证脚本核对 run_id 三处打通。
+- **验证脚本**：复用 `docs/observability-local-guide.md` 的综合验证脚本核对 run_id 三处打通。
 
 ### 2.3 threshold 拟定规则（拒绝拍脑袋）
 
@@ -273,7 +273,7 @@ threshold = 基线值（§1.6 实测） × 劣化容忍度
 2. **报告形态**：逐实例表格 + 总量结论，对齐 §2.1「报告呈现形式」列；
 3. **一条命令一个结论**：参数全在命令行，run 可复现（§验收标准 6）。
 
-**自论证部分**：livekit 压的是「媒体转发容量」，本项目核心叙事是「连接层 + 会话轮次」，
+**自论证部分**：livekit 压的是「媒体转发容量」，本项目核心路径是「连接层 + 会话轮次」，
 负载 profile 与 SLO 完全不同，只能抄报告与角色组织结构，不能抄负载模型。
 
 ### 3.3 对比表
@@ -290,19 +290,19 @@ threshold = 基线值（§1.6 实测） × 劣化容忍度
 
 ## 四、压测场景分层设计
 
-按面试价值排序（优先级口径与任务书一致：连接层 + 会话层是叙事核心，精力按此分配）。
+按影响面排序（优先级口径与任务书一致：连接层 + 会话层是核心路径，精力按此分配）。
 
-### 4.1 连接层（叙事核心，已实现 ✅）
+### 4.1 连接层（核心路径，已实现 ✅）
 
-- **目的**：单机 backend 的 WebSocket 承载上限——Go 后端面试经典考题。
+- **目的**：单机 backend 的 WebSocket 承载上限。
 - **负载模型**：closed-loop 保持型（建连 → 保持心跳 → 断开），ramp 线性铺开到达。
 - **参数**：users 阶梯（100/500/1000…）、ramp 30-90s、hold 5m、ping 25s（低于 WS 空闲超时）。
 - **关键变体**：`per-user`（登录链路一起压，argon2 耗 CPU）vs `shared`（复用 token 纯压 WS 层），
   两者差值即登录链路的开销贡献——这是「你的数据怎么解读」的现成答案。
 - **实现**：`loadtest/internal/scenario/conn.go`，指标输出对齐 §2.1 维度一。
-- **面试价值**：支撑简历「单机 X 并发 WebSocket 连接，瓶颈是 goroutine/内存/FD」的数字结论句。
+- **结论价值**：给出「单机 X 并发 WebSocket 连接，瓶颈在 goroutine/内存/FD」的量化结论。
 
-### 4.2 会话层（叙事核心，实现见 §7 commit C2）
+### 4.2 会话层（核心路径，实现见 §7 commit C2）
 
 - **目的**：N 个并发语音会话下端到端轮次耗时的劣化曲线。
 - **负载模型**：**open-loop 会话到达**（到达率独立于系统状态，见 §5.2 论证），
@@ -310,15 +310,15 @@ threshold = 基线值（§1.6 实测） × 劣化容忍度
 - **链路**：loadgen 以 pion 发布 Opus 音频流（预录语料回放）→ SFU → VAD/ASR（mock）→
   agent（mock provider）→ TTS（mock）→ RTP 下行。
 - **前置依赖**：backend 侧 ASR/TTS mock 钩子（§6.2，commit C2）。
-- **面试价值**：支撑简历「Y 并发语音会话下轮次耗时 P99 保持 Z ms」+ 与 observability 面板交叉印证。
+- **结论价值**：给出「Y 并发语音会话下轮次耗时 P99 保持 Z ms」的量化结论，并与 observability 面板交叉印证。
 
-### 4.3 打断层（差异化加分，commit C3）
+### 4.3 打断层（差异化特性，commit C3）
 
 - **目的**：高压下打断响应延迟与成功率是否劣化。
 - **关键设计**：打断不是客户端消息而是 ASR 结果触发（§1.1）。场景 = 会话层负载 +
   「TTS 出声中 1-3s 注入 ASR 识别结果」的精确时序（config 开关的测试钩子向
   `asr_cli.Results()` 注入，默认关闭）。
-- **面试价值**：通用 IM 压测不覆盖的实时语音差异化叙事。
+- **结论价值**：覆盖通用 IM 压测无法反映的实时语音打断路径。
 
 ### 4.4 数据面 + soak（工程完备性，commit C4/C5）
 
@@ -332,17 +332,17 @@ threshold = 基线值（§1.6 实测） × 劣化容忍度
 | 候选 | 结论 | 理由 |
 |---|---|---|
 | **Go 自研** | ✅ 采用 | 复用 `wire.go`/`SessionResult` 协议事实与 pion 生态；连接→会话→打断一个工具全覆盖；backend 团队语言一致 |
-| k6 | 交叉验证选项 | 连接层可用（§3.1），被 WebRTC 卡死在会话层；保留作面试中「为什么不用 X」的防守答案 |
+| k6 | 交叉验证选项 | 连接层可用（§3.1），被 WebRTC 卡死在会话层；保留作技术选型对照 |
 | vegeta | ❌ | HTTP 压测器，无 WS/WebRTC |
 | ghz | ❌ | gRPC 压测器，loadgen 不直连 gRPC（§1.2） |
 
-**追问预判**：
-1. 「为什么不用 k6？大家压 WebSocket 都用它」→ 答：k6 覆盖连接层没问题，但本项目的会话层
-   必须驱动 WebRTC 音频流（轮次由 ASR 结果触发），k6 无 WebRTC 能力是硬卡点不是成本问题；
-   用两个工具不如一个自研覆盖全链路，且协议事实（JSON 信封）就在自己代码库里。
-2. 「自研 loadgen 的数据可信吗？工具本身验证过吗」→ 答：smoke 场景先跑通全链路
-   （登录/建连/进房/心跳），指标口径有 §2.3 的基线参照；loadgen 自身资源预算见 §5.3，
-   报告必须附 loadgen 余量数据，否则结论无效。
+**争议点与回应**：
+1. 为什么不用 k6：k6 覆盖连接层没问题，但本项目的会话层必须驱动 WebRTC 音频流
+   （轮次由 ASR 结果触发），k6 无 WebRTC 能力是硬卡点不是成本问题；用两个工具不如
+   一个自研覆盖全链路，且协议事实（JSON 信封）就在自己代码库里。
+2. 自研 loadgen 的数据是否可信：smoke 场景先跑通全链路（登录/建连/进房/心跳），
+   指标口径有 §2.3 的基线参照；loadgen 自身资源预算见 §5.3，报告必须附 loadgen
+   余量数据，否则结论无效。
 
 ### 5.2 负载模型：连接层 closed-loop + 会话到达 open-loop
 
@@ -352,11 +352,11 @@ threshold = 基线值（§1.6 实测） × 劣化容忍度
   会话内轮次保持 closed-loop（说完等回完），因为单会话内这是真实行为。
 - **到达模式**：泊松到达（指数间隔）近似随机用户；容量采集用恒定到达率阶梯（更易解读拐点）。
 
-**追问预判**：
-1. 「为什么连接层不用 open-loop？」→ 连接不是请求是长稳资源，恒定到达率会产生指数级
-   在途连接堆积，测的是 ramp 速度不是承载上限；closed-loop 保持型才对应真实用户行为。
-2. 「泊松到达参数哪来的？」→ 每会话轮次间隔取 8-20s（对话自然节奏，语料句子 2-6s +
-   听回复时间），来源为语料清单实测时长 + 自论证；报告注明该假设，敏感性可在 C5 soak 验证。
+**争议点与回应**：
+1. 连接层为何不用 open-loop：连接不是请求而是长稳资源，恒定到达率会产生指数级在途
+   连接堆积，测的是 ramp 速度不是承载上限；closed-loop 保持型才对应真实用户行为。
+2. 泊松到达参数来源：每会话轮次间隔取 8-20s（对话自然节奏，语料句子 2-6s + 听回复
+   时间），来源为语料清单实测时长；报告注明该假设，敏感性可在 C5 soak 验证。
 
 ### 5.3 loadgen 资源规划（证明 loadgen 不是瓶颈的前提）
 
@@ -410,7 +410,7 @@ threshold = 基线值（§1.6 实测） × 劣化容忍度
 
 - `loadtest.run_id`：loadgen 报告 JSON 携带；WS join 帧的 `traceparent` 字段（wire.go 已预留）
   把 loadgen 侧 trace 与轮次 trace 关联；Prometheus/Loki 按 run 时刻窗口过滤。
-- 正式容量采集遵循 `docs/observability.md` §4.5：loadgen 独立进程、`trace_sample_rate` 降 0.01。
+- 正式容量采集遵循 `docs/observability-local-guide.md`：loadgen 独立进程、`trace_sample_rate` 降 0.01。
 
 ## 七、落地架构与引入计划
 
@@ -418,24 +418,32 @@ threshold = 基线值（§1.6 实测） × 劣化容忍度
 
 新建顶层 `loadtest/`（与 backend/agent 平级），结构见 `loadtest/README.md`。
 与现状核对结论：现有 `test/`（natssrv 等）是手工实验目录而非测试体系，**不迁移**；
-一次性辅助脚本沿放 `scripts/`；结论性文档只在本文件与 `docs/loadtest-report.md`。
+一次性辅助脚本沿放 `scripts/`；结论性文档只在本文件与 `loadtest/README.md`。
 
 ### 7.2 引入任务清单（commit 粒度）
 
 | # | 任务 | 改动范围 | 性质标注 | 验收方式 | 状态 |
 |---|---|---|---|---|---|
-| C1 | loadgen 骨架 + smoke/conn 场景 + agent mock provider + LLM 配额机制 | 新增 `loadtest/`；`agent/providers/`、`agent/config/`、`agent/cmd/main.py`、`agent/config.yaml` | 业界公认实践（配额守卫/先记账后调用）| smoke 场景跑通；`python -m pytest agent/test -q` 与 `go build ./...` 通过 | ✅ 代码就绪，smoke 待环境验证 |
-| C2 | 会话层：backend ASR/TTS mock 钩子（默认关）+ loadgen pion 音频回放 + session 场景 | `backend/asr_cli`/`backend/tts_cli`（config 开关）、`loadtest/internal/scenario/session.go` | 对标 livekit 角色化压测（publisher 角色） | N 并发会话轮次耗时表产出 | ⬜ |
-| C3 | 打断层：ASR 注入钩子 + interrupt 场景 + 打断延迟埋点 | `backend/sfu/asrdispatch.go` 周边钩子（config 开关） | 探索性质（无现成同类压测公开实践，自论证） | 打断延迟分位数 + 成功率表 | ⬜ |
-| C4 | 数据面：大房间广播场景 | `loadtest/internal/scenario/broadcast.go` | 业界公认实践 | 放大曲线 + 丢弃计数表 | ⬜ |
-| C5 | soak + 报告模板 + 容量采集（用户执行）+ `docs/loadtest-report.md` | `loadtest/`、`docs/loadtest-report.md` | 业界公认实践（soak + 泄漏对比） | 任务书 6 条验收标准逐条作答 | ⬜ |
+| C1 | loadgen 骨架 + smoke/conn 场景 + agent mock provider + LLM 配额机制 | 新增 `loadtest/`；`agent/providers/`、`agent/config/`、`agent/cmd/main.py`、`agent/config.yaml` | 业界公认实践（配额守卫/先记账后调用）| smoke 场景跑通；`python -m pytest agent/test -q` 与 `go build ./...` 通过 | ✅ 已合入 main（7b53a87/97dda5d），smoke 实测通过 |
+| C2 | 会话层：backend ASR/TTS mock 钩子（默认关）+ loadgen pion 全流程 + session 场景 | `backend/asr_cli`/`backend/tts_cli`（provider=mock 开关）、`backend/sfu/sfu.go`（NotifySession 钩子）、`loadtest/internal/scenario/session.go` | 对标 livekit 角色化压测（publisher 角色） | N 并发会话轮次耗时表产出 | ✅ 已合入 main（c01bf6b/b13fdaf），Docker 环境实测通过（firstAudio P50≈2.2s） |
+| C3 | 打断层：mock ASR 高频产出触发 barge-in + interrupt 场景 | `loadtest/internal/scenario/interrupt.go`（打断延迟埋点复用既有 TurnInterruptDelay） | 探索性质（无现成同类压测公开实践，自论证） | 打断链路日志级验证通过；延迟分位数待观测栈 | ✅ 场景已合入 main（f977dfa），链路实测通过 |
+| C4 | 数据面：大房间广播场景 | `loadtest/internal/scenario/broadcast.go` | 业界公认实践 | 放大曲线 + 丢失计数表 | ✅ 已合入 main（ff0b6cb），8 成员实测通过 |
+| C5 | soak + 报告 + 容量采集（用户执行）+ 观测栈交叉印证 | `loadtest/`、`loadtest/README.md` | 业界公认实践（soak + 泄漏对比） | 任务书 6 条验收标准逐条作答 | 🚧 报告 v0.1（自测数据）已出；正式容量采集与观测面板待用户执行 |
 
 ### 7.3 运行分工与验收（与任务书一致，落地为 README 命令）
 
 - AI 跑 smoke/小并发验证脚本正确性（README §1/§2）；
-- 用户跑正式容量采集（README §2 逐级加压 + Grafana 截图，数字将写进简历）；
-- AI 解读 `results/*.json` + 面板数据，撰写 `docs/loadtest-report.md`（数字结论句 + 面板名交叉印证 + loadgen 余量佐证）。
+- 用户跑正式容量采集（README §2 逐级加压 + Grafana 截图，数字归档到 `loadtest/README.md`）；
+- AI 解读 `results/*.json` + 面板数据，撰写 `loadtest/README.md`（数字结论句 + 面板名交叉印证 + loadgen 余量佐证）。
 
 ### 7.4 backlog（只压不修）
 
-压测暴露的问题一律记入此处、不在本任务内顺手修业务代码：（待压测后填充）
+压测暴露的问题一律记入此处、不在本任务内顺手修业务代码：
+
+1. ~~`ws_check_origin` 语义反直觉~~ 已修：true 走 gorilla 默认同源校验（无 Origin 头放行），false 放行任意来源
+2. 本机 mingw 工具链 CGo 链接产物损坏（新构建 backend exe 无法加载，GoLand 旧产物正常）——
+   环境问题，压测改走 Docker 构建（`loadtest/env/backend/Dockerfile.loadtest`，apk 清华源）；
+3. burst 判定阈值与 mock 时序参数失配（初版 1.5s 高于默认参数下 0.88s 的真实轮间静音间隙，
+   导致 burst 永不闭合，一度误归因为「backend 空闲期发帧」——实际 pacer 队列空时不发包，
+   `sfu.go` pacedSender L870）——已修复：阈值可配置、默认 600ms，取值依据写在
+   `DefaultBurstGapThreshold` 注释与 scenarios/README.md；改 burst 相关参数时须重算该阈值。

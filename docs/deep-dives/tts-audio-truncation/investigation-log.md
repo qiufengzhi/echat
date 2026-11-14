@@ -197,7 +197,7 @@ SFU runAITTSLoop 协程消费：
 
 | 字段 | 内容 |
 |------|------|
-| **假设/方向** | 手写线性插值上采样不够专业，可能引入混叠失真导致"听不清"。AGENTS.md 要求用成熟库 |
+| **假设/方向** | 手写线性插值上采样不够专业，可能引入混叠失真导致"听不清"，应改用成熟的重采样库 |
 | **修改文件** | `backend/sfu/audio.go`，`backend/sfu/sfu.go`，`backend/go.mod` |
 | **改动摘要** | 引入 `gunter-q12/resample`（纯 Go polyphase FIR + Kaiser 窗）替换 `upsample16kTo48k`。`aiCall` 中创建 `resample.New(FormatInt16, 16000, 48000, 1, WithKaiserFastFilter())`，每个 TTS chunk 经 `resampler.Write(rawPCM)` 输出 48kHz PCM。移除 audio.go 中手写 upsampling 函数 |
 | **验证结果** | 无效（用户反馈"还是听不清"，PCM 数据正常但音质未改善） |
